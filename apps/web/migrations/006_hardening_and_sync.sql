@@ -1,3 +1,37 @@
+CREATE TABLE migration_006_preflight (guard INTEGER NOT NULL);
+CREATE TRIGGER migration_006_preflight_binder_layout
+BEFORE INSERT ON migration_006_preflight
+WHEN EXISTS (
+  SELECT 1 FROM binder_versions
+  WHERE NOT (
+    (layout_kind = '2x2' AND rows = 2 AND columns = 2) OR
+    (layout_kind = '3x3' AND rows = 3 AND columns = 3) OR
+    (layout_kind = '4x3' AND rows = 3 AND columns = 4) OR
+    (layout_kind = 'top-loader' AND rows = 2 AND columns = 2) OR
+    (layout_kind = 'custom' AND rows BETWEEN 1 AND 20 AND columns BETWEEN 1 AND 20)
+  )
+)
+BEGIN
+  SELECT RAISE(ABORT, 'migration_006_binder_layout_conflict_repair_layout_before_retry');
+END;
+CREATE TRIGGER migration_006_preflight_binder_slots
+BEFORE INSERT ON migration_006_preflight
+WHEN EXISTS (
+  SELECT 1
+  FROM binder_slots slot
+  JOIN binder_pages page ON page.id = slot.binder_page_id
+  JOIN binder_versions version ON version.id = page.binder_version_id
+  WHERE slot.row_index < 0 OR slot.row_index >= version.rows
+    OR slot.column_index < 0 OR slot.column_index >= version.columns
+)
+BEGIN
+  SELECT RAISE(ABORT, 'migration_006_binder_slot_out_of_bounds_repair_slot_before_retry');
+END;
+INSERT INTO migration_006_preflight VALUES (1);
+DROP TRIGGER migration_006_preflight_binder_slots;
+DROP TRIGGER migration_006_preflight_binder_layout;
+DROP TABLE migration_006_preflight;
+
 ALTER TABLE users ADD COLUMN mutation_epoch INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE web_sessions (
@@ -74,7 +108,7 @@ WITH ranked_active AS (
   SELECT id,
     ROW_NUMBER() OVER (
       PARTITION BY binder_id
-      ORDER BY activated_at DESC, version_number DESC, id
+      ORDER BY COALESCE(activated_at, created_at) DESC, version_number DESC, id DESC
     ) AS active_rank
   FROM binder_versions
   WHERE status = 'active'
@@ -83,21 +117,19 @@ UPDATE binder_versions
 SET status = 'archived'
 WHERE id IN (SELECT id FROM ranked_active WHERE active_rank > 1);
 
-UPDATE binder_versions
-SET rows = CASE layout_kind
-    WHEN '2x2' THEN 2
-    WHEN '3x3' THEN 3
-    WHEN '4x3' THEN 3
-    WHEN 'top-loader' THEN 2
-    ELSE rows
-  END,
-  columns = CASE layout_kind
-    WHEN '2x2' THEN 2
-    WHEN '3x3' THEN 3
-    WHEN '4x3' THEN 4
-    WHEN 'top-loader' THEN 2
-    ELSE columns
-  END;
+UPDATE binders
+SET active_version_id = (
+  SELECT version.id
+  FROM binder_versions version
+  WHERE version.binder_id = binders.id AND version.status = 'active'
+  ORDER BY COALESCE(version.activated_at, version.created_at) DESC,
+    version.version_number DESC, version.id DESC
+  LIMIT 1
+)
+WHERE EXISTS (
+  SELECT 1 FROM binder_versions version
+  WHERE version.binder_id = binders.id AND version.status = 'active'
+);
 
 UPDATE binders
 SET active_version_id = NULL
@@ -108,15 +140,6 @@ WHERE active_version_id IS NOT NULL
       AND version.binder_id = binders.id
       AND version.status = 'active'
   );
-
-DELETE FROM binder_slots
-WHERE NOT EXISTS (
-  SELECT 1
-  FROM binder_pages page JOIN binder_versions version ON version.id = page.binder_version_id
-  WHERE page.id = binder_slots.binder_page_id
-    AND binder_slots.row_index < version.rows
-    AND binder_slots.column_index < version.columns
-);
 
 CREATE UNIQUE INDEX idx_binder_versions_one_active
   ON binder_versions(binder_id) WHERE status = 'active';
@@ -204,6 +227,41 @@ BEGIN
   WHERE user_id = OLD.user_id AND revoked_at IS NULL;
 END;
 
+CREATE TRIGGER collection_cards_epoch_after_insert
+AFTER INSERT ON collection_cards
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = NEW.owner_id;
+END;
+CREATE TRIGGER collection_cards_epoch_after_update
+AFTER UPDATE ON collection_cards
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = NEW.owner_id;
+  UPDATE users SET mutation_epoch = mutation_epoch + 1
+  WHERE id = OLD.owner_id AND OLD.owner_id <> NEW.owner_id;
+END;
+CREATE TRIGGER collection_cards_epoch_after_delete
+AFTER DELETE ON collection_cards
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = OLD.owner_id;
+END;
+CREATE TRIGGER binders_epoch_after_insert
+AFTER INSERT ON binders
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = NEW.owner_id;
+END;
+CREATE TRIGGER binders_epoch_after_update
+AFTER UPDATE ON binders
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = NEW.owner_id;
+  UPDATE users SET mutation_epoch = mutation_epoch + 1
+  WHERE id = OLD.owner_id AND OLD.owner_id <> NEW.owner_id;
+END;
+CREATE TRIGGER binders_epoch_after_delete
+AFTER DELETE ON binders
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = OLD.owner_id;
+END;
+
 ALTER TABLE catalogue_cards ADD COLUMN number_sort INTEGER;
 ALTER TABLE catalogue_stage_cards ADD COLUMN number_sort INTEGER;
 UPDATE catalogue_cards
@@ -221,6 +279,16 @@ CREATE INDEX idx_sync_runs_completed ON sync_runs(status, completed_at);
 CREATE INDEX idx_catalogue_stage_run ON catalogue_stage_cards(run_id);
 CREATE INDEX idx_catalogue_cards_search_order
   ON catalogue_cards(is_active, set_name COLLATE NOCASE, number_sort, number COLLATE NOCASE, name COLLATE NOCASE);
+CREATE INDEX idx_catalogue_cards_keyset
+  ON catalogue_cards(
+    is_active,
+    set_name,
+    (number_sort IS NULL),
+    COALESCE(number_sort, 0),
+    number,
+    name,
+    id
+  );
 CREATE INDEX idx_card_sources_listing
   ON card_sources(provider, active, card_id, language, source_id);
 CREATE INDEX idx_card_sources_language_active
@@ -253,10 +321,42 @@ SET native_amount_micros = CAST(ROUND(native_amount * 1000000) AS INTEGER),
     WHEN amount_aud IS NULL THEN NULL
     ELSE CAST(ROUND(amount_aud * 1000000) AS INTEGER)
   END;
-DELETE FROM price_snapshots
-WHERE rowid NOT IN (
-  SELECT MAX(rowid) FROM price_snapshots GROUP BY card_id, source, source_captured_at
+CREATE TABLE price_snapshot_migration_conflicts (
+  id TEXT PRIMARY KEY NOT NULL,
+  kept_snapshot_id TEXT NOT NULL,
+  card_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  native_amount REAL NOT NULL,
+  native_currency TEXT NOT NULL,
+  price_kind TEXT NOT NULL,
+  source_captured_at INTEGER NOT NULL,
+  fx_date TEXT,
+  amount_aud REAL,
+  created_at INTEGER NOT NULL,
+  native_amount_micros INTEGER NOT NULL,
+  amount_aud_micros INTEGER,
+  archived_at INTEGER NOT NULL
 );
+WITH ranked AS (
+  SELECT snapshot.*,
+    FIRST_VALUE(id) OVER observation AS kept_snapshot_id,
+    ROW_NUMBER() OVER observation AS observation_rank
+  FROM price_snapshots snapshot
+  WINDOW observation AS (
+    PARTITION BY card_id, source, source_captured_at
+    ORDER BY (amount_aud IS NOT NULL) DESC, (fx_date IS NOT NULL) DESC, created_at DESC, id DESC
+  )
+)
+INSERT INTO price_snapshot_migration_conflicts
+  (id, kept_snapshot_id, card_id, source, native_amount, native_currency, price_kind,
+   source_captured_at, fx_date, amount_aud, created_at, native_amount_micros,
+   amount_aud_micros, archived_at)
+SELECT id, kept_snapshot_id, card_id, source, native_amount, native_currency, price_kind,
+  source_captured_at, fx_date, amount_aud, created_at, native_amount_micros,
+  amount_aud_micros, unixepoch()
+FROM ranked WHERE observation_rank > 1;
+DELETE FROM price_snapshots
+WHERE id IN (SELECT id FROM price_snapshot_migration_conflicts);
 CREATE UNIQUE INDEX idx_price_snapshots_observation
   ON price_snapshots(card_id, source, source_captured_at);
 CREATE INDEX idx_price_snapshots_retention ON price_snapshots(created_at);
@@ -298,8 +398,11 @@ CREATE TABLE price_stage_rows (
   created_at INTEGER NOT NULL,
   PRIMARY KEY (run_id, card_id, source, source_captured_at)
 );
-INSERT INTO price_sync_runs (id, started_at, status, row_count, error)
-SELECT DISTINCT run_id, 0, 'running', 0, 'legacy_stage' FROM price_stage_rows_legacy;
+INSERT INTO price_sync_runs (id, started_at, completed_at, status, row_count, error)
+SELECT run_id, MIN(source_captured_at), unixepoch(), 'failed', COUNT(*),
+  'legacy_stage_requires_resubmission'
+FROM price_stage_rows_legacy
+GROUP BY run_id;
 INSERT INTO price_stage_rows
   (run_id, card_id, source, native_amount_micros, native_currency, source_captured_at, created_at)
 SELECT run_id, card_id, source, CAST(ROUND(native_amount * 1000000) AS INTEGER),

@@ -56,6 +56,12 @@ try {
     `INSERT INTO users (id,label,created_at) VALUES ('owner','Owner',1);
      INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,is_custom,is_active,created_at,updated_at)
        VALUES ('custom_fixture','Custom Fixture','en','special','custom','Custom cards','custom',1,1,1,1);
+     WITH RECURSIVE sequence(value) AS (
+       SELECT 1 UNION ALL SELECT value + 1 FROM sequence WHERE value < 300
+     )
+     INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,is_custom,is_active,created_at,updated_at)
+       SELECT printf('custom_bulk_%03d', value), printf('Custom Bulk %03d', value), 'en',
+         'special', 'custom', 'Custom cards', printf('%03d', value), 1, 1, 1, 1 FROM sequence;
      INSERT INTO collection_cards (owner_id,card_id,quantity,notes,revision,updated_at)
        VALUES ('owner','custom_fixture',2,'private fixture',3,2);
      INSERT INTO collection_mutations (owner_id,mutation_id,card_id,response_json,created_at)
@@ -103,6 +109,18 @@ try {
     workerOutput += String(chunk);
   });
   await waitForWorker();
+  const readiness = await fetch(`${base}/api/ready`);
+  const readinessBody = await readiness.json();
+  if (
+    readiness.status !== 503 ||
+    readinessBody.ok !== false ||
+    readinessBody.freshness?.backup?.state !== 'missing' ||
+    readinessBody.freshness?.catalogue?.state !== 'missing' ||
+    readinessBody.freshness?.pricing?.state !== 'missing'
+  )
+    throw new Error(
+      `missing schedule data did not degrade readiness: ${JSON.stringify(readinessBody)}`,
+    );
   const optionResponses = await Promise.all(
     Array.from({ length: 25 }, () =>
       fetch(`${base}/api/auth/passkey/auth/options`, { method: 'POST' }),
@@ -115,18 +133,52 @@ try {
       `atomic option rate limit mismatch: ${allowedOptions} allowed, ${limitedOptions} limited`,
     );
   const login = await json('/api/auth/dev-login', { method: 'POST' });
-  const cookie = login.response.headers.get('set-cookie')?.split(';', 1)[0];
+  let cookie = login.response.headers.get('set-cookie')?.split(';', 1)[0];
   if (!cookie) throw new Error('development login did not return a session cookie');
-  const backup = await json('/api/backups', { method: 'POST', headers: { cookie } });
-  const backupId = backup.body.id;
+  const firstCataloguePage = await json('/api/catalogue/search?limit=100&offset=0', {
+    headers: { cookie },
+  });
+  if (
+    firstCataloguePage.body.cards.length !== 100 ||
+    typeof firstCataloguePage.body.cursor !== 'string'
+  )
+    throw new Error('catalogue search did not return the first keyset page');
+  const secondCataloguePage = await json(
+    `/api/catalogue/search?limit=100&cursor=${encodeURIComponent(firstCataloguePage.body.cursor)}`,
+    { headers: { cookie } },
+  );
+  const firstIds = new Set(firstCataloguePage.body.cards.map((card) => card.id));
+  if (
+    secondCataloguePage.body.cards.length !== 100 ||
+    secondCataloguePage.body.cards.some((card) => firstIds.has(card.id))
+  )
+    throw new Error('catalogue keyset page repeated or omitted the expected page size');
+  const backupResponses = await Promise.all(
+    Array.from({ length: 5 }, () =>
+      fetch(`${base}/api/backups`, { method: 'POST', headers: { cookie } }),
+    ),
+  );
+  const createdBackups = backupResponses.filter((response) => response.status === 201);
+  const limitedBackups = backupResponses.filter((response) => response.status === 429);
+  if (createdBackups.length !== 1 || limitedBackups.length !== 4)
+    throw new Error(
+      `atomic backup rate limit mismatch: ${createdBackups.length} created, ${limitedBackups.length} limited`,
+    );
+  if (limitedBackups.some((response) => !response.headers.has('retry-after')))
+    throw new Error('rate-limited backup response omitted Retry-After');
+  const backup = await createdBackups[0].json();
+  const backupId = backup.id;
   if (typeof backupId !== 'string') throw new Error('backup response did not contain an id');
 
   await d1(
     `DELETE FROM collection_mutations WHERE owner_id='owner';
      DELETE FROM collection_cards WHERE owner_id='owner';
      DELETE FROM binders WHERE owner_id='owner';
-     DELETE FROM catalogue_cards WHERE id='custom_fixture';`,
+     DELETE FROM catalogue_cards WHERE is_custom=1;`,
   );
+  const restoreLogin = await json('/api/auth/dev-login', { method: 'POST' });
+  cookie = restoreLogin.response.headers.get('set-cookie')?.split(';', 1)[0];
+  if (!cookie) throw new Error('restore login did not return a session cookie');
   await json(`/api/backups/${encodeURIComponent(backupId)}/restore`, {
     method: 'POST',
     headers: { cookie },
@@ -135,6 +187,7 @@ try {
   const verified = await d1(
     `SELECT
        (SELECT COUNT(*) FROM catalogue_cards WHERE id='custom_fixture' AND is_custom=1) AS catalogue,
+       (SELECT COUNT(*) FROM catalogue_cards WHERE id LIKE 'custom_bulk_%' AND is_custom=1) AS bulk_catalogue,
        (SELECT quantity FROM collection_cards WHERE owner_id='owner' AND card_id='custom_fixture') AS quantity,
        (SELECT COUNT(*) FROM binders WHERE owner_id='owner' AND id='binder_fixture') AS binders,
        (SELECT COUNT(*) FROM binder_slots WHERE binder_page_id='page_fixture' AND card_id='custom_fixture') AS slots,
@@ -143,9 +196,10 @@ try {
        (SELECT COUNT(*) FROM backup_runs WHERE id='${backupId}' AND owner_id='owner' AND restored_at IS NOT NULL) AS restored;`,
   );
   const match = verified.stdout.match(
-    /"catalogue":\s*1,\s*"quantity":\s*2,\s*"binders":\s*1,\s*"slots":\s*1,\s*"mutations":\s*0,\s*"epoch":\s*1,\s*"restored":\s*1/s,
+    /"catalogue":\s*1,\s*"bulk_catalogue":\s*300,\s*"quantity":\s*2,\s*"binders":\s*1,\s*"slots":\s*1,\s*"mutations":\s*0,\s*"epoch":\s*(\d+),\s*"restored":\s*1/s,
   );
   if (!match) throw new Error(`backup round-trip mismatch: ${verified.stdout}`);
+  if (Number(match[1]) < 1) throw new Error(`restore did not advance mutation epoch: ${match[1]}`);
   const revokedSession = await fetch(`${base}/api/auth/me`, { headers: { cookie } });
   if (revokedSession.status !== 401)
     throw new Error(`restore did not revoke the previous session: ${revokedSession.status}`);

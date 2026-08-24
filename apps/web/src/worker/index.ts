@@ -94,6 +94,31 @@ export class AuthCoordinator extends DurableObject<CloudflareEnv> {
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
 
+const READINESS_MAX_AGE_SECONDS = {
+  backup: 36 * 60 * 60,
+  catalogue: 36 * 60 * 60,
+  pricing: 36 * 60 * 60,
+  fx: 36 * 60 * 60,
+} as const;
+
+type FreshnessState = 'ok' | 'missing' | 'stale' | 'not_required';
+
+function freshnessState(
+  timestamp: number | null | undefined,
+  maximumAgeSeconds: number,
+  now = Math.floor(Date.now() / 1000),
+): Exclude<FreshnessState, 'not_required'> {
+  if (timestamp === null || timestamp === undefined) return 'missing';
+  return timestamp < now - maximumAgeSeconds ? 'stale' : 'ok';
+}
+
+function freshness(timestamp: number | null | undefined, state: FreshnessState) {
+  return {
+    state,
+    lastSuccessAt: timestamp ? new Date(timestamp * 1000).toISOString() : null,
+  };
+}
+
 app.use('*', async (c, next) => {
   const supplied = c.req.header('cf-ray') ?? c.req.header('x-request-id');
   const requestId =
@@ -117,32 +142,70 @@ app.get('/api/live', (c) => c.json({ ok: true, ts: new Date().toISOString() }));
 
 const ready = async (c: Context<{ Bindings: CloudflareEnv; Variables: AuthVars }>) => {
   try {
-    const [database, latestBackup, latestCatalogue, r2, coordinator] = await Promise.all([
+    const [
+      database,
+      latestBackup,
+      latestCatalogue,
+      latestPricing,
+      latestFx,
+      fxRequired,
+      r2,
+      coordinator,
+    ] = await Promise.all([
       c.env.DB.prepare('SELECT 1 AS ok').first<{ ok: number }>(),
-      c.env.DB.prepare('SELECT MAX(created_at) AS created_at FROM backup_runs WHERE owner_id = ?1')
+      c.env.DB.prepare(
+        "SELECT MAX(created_at) AS created_at FROM backup_runs WHERE owner_id = ?1 AND checksum <> 'pending'",
+      )
         .bind('owner')
         .first<{ created_at: number | null }>(),
       c.env.DB.prepare(
         "SELECT MAX(completed_at) AS completed_at FROM sync_runs WHERE status = 'complete'",
       ).first<{ completed_at: number | null }>(),
+      c.env.DB.prepare(
+        "SELECT MAX(completed_at) AS completed_at FROM price_sync_runs WHERE status = 'complete'",
+      ).first<{ completed_at: number | null }>(),
+      c.env.DB.prepare('SELECT MAX(captured_at) AS captured_at FROM fx_rates').first<{
+        captured_at: number | null;
+      }>(),
+      c.env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM card_current_prices WHERE native_currency <> 'AUD'",
+      ).first<{ count: number }>(),
       c.env.ART.head('__pokedex_readiness__'),
       c.env.AUTH_COORDINATOR.getByName('readiness').health(),
     ]);
     void r2;
     if (database?.ok !== 1 || !coordinator) throw new Error('readiness_dependency_failed');
-    return c.json({
-      ok: true,
-      dependencies: { database: 'ok', objectStorage: 'ok', coordinator: 'ok' },
-      freshness: {
-        backup: latestBackup?.created_at
-          ? new Date(latestBackup.created_at * 1000).toISOString()
-          : null,
-        catalogue: latestCatalogue?.completed_at
-          ? new Date(latestCatalogue.completed_at * 1000).toISOString()
-          : null,
+    const backupState = freshnessState(latestBackup?.created_at, READINESS_MAX_AGE_SECONDS.backup);
+    const catalogueState = freshnessState(
+      latestCatalogue?.completed_at,
+      READINESS_MAX_AGE_SECONDS.catalogue,
+    );
+    const pricingState = freshnessState(
+      latestPricing?.completed_at,
+      READINESS_MAX_AGE_SECONDS.pricing,
+    );
+    const fxState: FreshnessState =
+      (fxRequired?.count ?? 0) === 0
+        ? 'not_required'
+        : freshnessState(latestFx?.captured_at, READINESS_MAX_AGE_SECONDS.fx);
+    const scheduleReady = [backupState, catalogueState, pricingState, fxState].every(
+      (state) => state === 'ok' || state === 'not_required',
+    );
+    const status = scheduleReady ? 200 : 503;
+    return c.json(
+      {
+        ok: scheduleReady,
+        dependencies: { database: 'ok', objectStorage: 'ok', coordinator: 'ok' },
+        freshness: {
+          backup: freshness(latestBackup?.created_at, backupState),
+          catalogue: freshness(latestCatalogue?.completed_at, catalogueState),
+          pricing: freshness(latestPricing?.completed_at, pricingState),
+          fx: freshness(latestFx?.captured_at, fxState),
+        },
+        ts: new Date().toISOString(),
       },
-      ts: new Date().toISOString(),
-    });
+      status,
+    );
   } catch (error) {
     logError({
       evt: 'health.readiness_failed',

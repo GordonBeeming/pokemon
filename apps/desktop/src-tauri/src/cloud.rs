@@ -4,6 +4,7 @@ use reqwest::{redirect, Method, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::Path;
+use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 use url::Url;
@@ -218,7 +219,18 @@ struct ApiFailure {
 
 impl CloudClient {
     pub fn new() -> Result<Self> {
+        Self::with_timeouts(
+            Duration::from_secs(5),
+            Duration::from_secs(30),
+            Duration::from_secs(120),
+        )
+    }
+
+    fn with_timeouts(connect: Duration, read: Duration, request: Duration) -> Result<Self> {
         let http = reqwest::Client::builder()
+            .connect_timeout(connect)
+            .read_timeout(read)
+            .timeout(request)
             .https_only(false)
             .redirect(redirect::Policy::custom(|attempt| {
                 let Some(first) = attempt.previous().first() else {
@@ -641,6 +653,8 @@ impl CloudClient {
             let chunk = chunk?;
             written = written.saturating_add(chunk.len() as u64);
             if written > maximum {
+                drop(file);
+                let _ = tokio::fs::remove_file(destination).await;
                 return Err(DesktopError::InvalidCloudResponse(
                     "art response exceeded its manifest size".to_string(),
                 ));
@@ -694,7 +708,7 @@ impl CloudClient {
                 "bulk ticket request must contain 1 to 100 uploads".to_string(),
             ));
         }
-        let response: BulkUploadTicketResponse = self
+        let response: BulkUploadTicketResponse = match self
             .authorized_json(
                 Method::POST,
                 base_url,
@@ -710,7 +724,23 @@ impl CloudClient {
                 })),
                 &[],
             )
-            .await?;
+            .await
+        {
+            Ok(response) => response,
+            Err(DesktopError::Cloud {
+                status: 404 | 405, ..
+            }) => {
+                let mut fallback = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    fallback.push((
+                        entry.clone(),
+                        self.issue_upload_ticket(base_url, token, entry).await?,
+                    ));
+                }
+                return Ok(fallback);
+            }
+            Err(error) => return Err(error),
+        };
         if response.uploads.len() != entries.len() {
             return Err(DesktopError::InvalidCloudResponse(
                 "bulk ticket response count did not match request".to_string(),
@@ -769,12 +799,29 @@ impl CloudClient {
                 Ok(response) if response.status().is_success() => return Ok(()),
                 Ok(response) if should_retry(response.status()) && attempt < 2 => {
                     let delay = retry_delay(&response, attempt);
+                    tracing::warn!(
+                        target: "pokedex.cloud",
+                        operation = "art-upload",
+                        attempt = attempt + 1,
+                        status = response.status().as_u16(),
+                        delay_ms = delay.as_millis(),
+                        "retrying transient cloud response"
+                    );
                     response.bytes().await?;
                     tokio::time::sleep(delay).await;
                 }
                 Ok(response) => return Err(read_cloud_error(response).await),
                 Err(error) if (error.is_timeout() || error.is_connect()) && attempt < 2 => {
-                    tokio::time::sleep(exponential_delay(attempt)).await;
+                    let delay = exponential_delay(attempt);
+                    tracing::warn!(
+                        target: "pokedex.cloud",
+                        operation = "art-upload",
+                        attempt = attempt + 1,
+                        error = %error,
+                        delay_ms = delay.as_millis(),
+                        "retrying failed cloud request"
+                    );
+                    tokio::time::sleep(delay).await;
                 }
                 Err(error) => return Err(error.into()),
             }
@@ -836,12 +883,29 @@ impl CloudClient {
             match cloned.send().await {
                 Ok(response) if should_retry(response.status()) && attempt < 2 => {
                     let delay = retry_delay(&response, attempt);
+                    tracing::warn!(
+                        target: "pokedex.cloud",
+                        operation = "art-download",
+                        attempt = attempt + 1,
+                        status = response.status().as_u16(),
+                        delay_ms = delay.as_millis(),
+                        "retrying transient cloud response"
+                    );
                     response.bytes().await?;
                     tokio::time::sleep(delay).await;
                 }
                 Ok(response) => return Ok(response),
                 Err(error) if (error.is_timeout() || error.is_connect()) && attempt < 2 => {
-                    tokio::time::sleep(exponential_delay(attempt)).await;
+                    let delay = exponential_delay(attempt);
+                    tracing::warn!(
+                        target: "pokedex.cloud",
+                        operation = "art-download",
+                        attempt = attempt + 1,
+                        error = %error,
+                        delay_ms = delay.as_millis(),
+                        "retrying failed cloud request"
+                    );
+                    tokio::time::sleep(delay).await;
                 }
                 Err(error) => return Err(error.into()),
             }
@@ -895,16 +959,29 @@ fn should_retry(status: StatusCode) -> bool {
 }
 
 fn exponential_delay(attempt: u32) -> std::time::Duration {
-    std::time::Duration::from_millis(250 * 2_u64.pow(attempt))
+    let base = 250_u64.saturating_mul(2_u64.saturating_pow(attempt));
+    let mut random = [0_u8; 2];
+    let jitter = if getrandom::fill(&mut random).is_ok() {
+        u64::from(u16::from_le_bytes(random)) % 126
+    } else {
+        0
+    };
+    std::time::Duration::from_millis(base.saturating_add(jitter))
 }
 
 fn retry_delay(response: &reqwest::Response, attempt: u32) -> std::time::Duration {
-    response
-        .headers()
+    retry_delay_from_headers(response.headers(), attempt)
+}
+
+fn retry_delay_from_headers(
+    headers: &reqwest::header::HeaderMap,
+    attempt: u32,
+) -> std::time::Duration {
+    headers
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
-        .map(std::time::Duration::from_secs)
+        .map(|seconds| std::time::Duration::from_secs(seconds.min(30)))
         .unwrap_or_else(|| exponential_delay(attempt))
 }
 
@@ -921,8 +998,15 @@ async fn read_cloud_error(response: reqwest::Response) -> DesktopError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+    use axum::{
+        body::Bytes,
+        extract::{Path as AxumPath, State},
+        http::{HeaderMap, StatusCode},
+        routing::{get, patch, post, put},
+        Json, Router,
+    };
     use std::sync::{Arc, Mutex};
+    use tempfile::tempdir;
 
     #[derive(Clone)]
     struct Reply(Arc<Mutex<(StatusCode, Value)>>);
@@ -945,6 +1029,17 @@ mod tests {
             axum::serve(listener, app).await.expect("test server");
         });
         (format!("http://{address}"), reply)
+    }
+
+    async fn spawn(app: Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("test server");
+        });
+        format!("http://{address}")
     }
 
     #[tokio::test]
@@ -978,6 +1073,376 @@ mod tests {
             .expect_err("replayed code");
         assert!(
             matches!(error, DesktopError::Cloud { status: 409, code } if code == "pair_code_already_consumed")
+        );
+    }
+
+    #[tokio::test]
+    async fn request_timeout_bounds_a_stalled_response() {
+        async fn stalled() -> Json<Value> {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            Json(json!({ "ok": true, "token": "late", "scopes": [] }))
+        }
+        let base = spawn(Router::new().route("/api/desktop/pair/redeem", post(stalled))).await;
+        let client = CloudClient::with_timeouts(
+            Duration::from_millis(20),
+            Duration::from_millis(20),
+            Duration::from_millis(40),
+        )
+        .expect("client");
+        let error = client
+            .redeem_pairing_code(&base, "code", "Scanner")
+            .await
+            .expect_err("request timeout");
+        assert!(matches!(error, DesktopError::Http(ref value) if value.is_timeout()));
+    }
+
+    #[tokio::test]
+    async fn bulk_ticket_404_falls_back_to_single_ticket_contract() {
+        async fn ticket(Json(body): Json<Value>) -> Json<Value> {
+            let card = body["cardId"].as_str().expect("card ID");
+            let variant = body["variant"].as_str().expect("variant");
+            Json(json!({
+                "ok": true,
+                "token": format!("{card}-{variant}"),
+                "uploadPath": format!("/upload/{card}/{variant}")
+            }))
+        }
+        let base = spawn(Router::new().route("/api/desktop/art/upload-tokens", post(ticket))).await;
+        let entries = [ArtManifestEntry {
+            card_id: "card-1".to_string(),
+            variant: ArtVariant::High,
+            sha256: "a".repeat(64),
+            bytes: 128,
+        }];
+        let tickets = CloudClient::new()
+            .expect("client")
+            .issue_upload_tickets(&base, "desktop-token", &entries)
+            .await
+            .expect("fallback tickets");
+        assert_eq!(tickets.len(), 1);
+        assert_eq!(tickets[0].1.token, "card-1-high");
+        assert_eq!(tickets[0].1.upload_path, "/upload/card-1/high");
+    }
+
+    #[tokio::test]
+    async fn collection_and_binder_contracts_are_checked_at_the_request_boundary() {
+        async fn increment(
+            AxumPath(card_id): AxumPath<String>,
+            Json(body): Json<Value>,
+        ) -> Json<Value> {
+            assert_eq!(body["delta"], 2);
+            assert!(body["mutationId"].as_str().is_some());
+            Json(json!({
+                "ok": true,
+                "state": { "cardId": card_id, "quantity": 2, "notes": null, "revision": 4,
+                  "updatedAt": "2026-08-25T00:00:00Z" },
+                "replayed": false
+            }))
+        }
+        async fn shortages() -> Json<Value> {
+            Json(json!({
+                "ok": true,
+                "shortages": [{ "cardId": "card-1", "required": 2, "owned": 1, "missing": 1 }],
+                "nextOffset": null
+            }))
+        }
+        let base = spawn(
+            Router::new()
+                .route(
+                    "/api/desktop/collection/{card_id}/increment",
+                    post(increment),
+                )
+                .route(
+                    "/api/desktop/binders/versions/{version_id}/shortages",
+                    get(shortages),
+                ),
+        )
+        .await;
+        let client = CloudClient::new().expect("client");
+        let collection = client
+            .increment_collection(&base, "token", "card-1", 2, uuid::Uuid::new_v4())
+            .await
+            .expect("collection response");
+        assert_eq!(collection.state.revision, 4);
+        let suggestions = client
+            .binder_suggestions(&base, "token", "version-1")
+            .await
+            .expect("binder suggestions");
+        assert_eq!(suggestions["shortages"][0]["missing"], 1);
+        assert!(suggestions["nextOffset"].is_null());
+    }
+
+    #[tokio::test]
+    async fn collection_revision_and_binder_slot_contracts_are_sent_exactly() {
+        async fn set_collection(
+            AxumPath(card_id): AxumPath<String>,
+            Json(body): Json<Value>,
+        ) -> Json<Value> {
+            assert_eq!(card_id, "card-1");
+            assert_eq!(body["quantity"], 3);
+            assert_eq!(body["notes"], "sleeved");
+            assert_eq!(body["expectedRevision"], 7);
+            assert!(body["mutationId"].as_str().is_some());
+            Json(json!({
+                "ok": true,
+                "state": { "cardId": card_id, "quantity": 3, "notes": "sleeved", "revision": 8,
+                  "updatedAt": "2026-08-25T00:00:00Z" },
+                "replayed": false
+            }))
+        }
+        async fn notes(Json(body): Json<Value>) -> Json<Value> {
+            assert!(body["notes"].is_null());
+            assert_eq!(body["expectedRevision"], 8);
+            assert!(body["mutationId"].as_str().is_some());
+            Json(json!({
+                "ok": true,
+                "state": { "cardId": "card-1", "quantity": 3, "notes": null, "revision": 9,
+                  "updatedAt": "2026-08-25T00:00:00Z" },
+                "replayed": false
+            }))
+        }
+        async fn set_slot(Json(body): Json<Value>) -> Json<Value> {
+            assert_eq!(body["expectedRevision"], 9);
+            assert_eq!(body["page"], 1);
+            assert_eq!(body["row"], 2);
+            assert_eq!(body["column"], 0);
+            assert_eq!(body["cardId"], "card-1");
+            Json(json!({ "ok": true, "revision": 10 }))
+        }
+        async fn swap(Json(body): Json<Value>) -> Json<Value> {
+            assert_eq!(body["expectedRevision"], 10);
+            assert_eq!(body["source"]["column"], 0);
+            assert_eq!(body["target"]["column"], 1);
+            Json(json!({ "ok": true, "revision": 11 }))
+        }
+        let base = spawn(
+            Router::new()
+                .route("/api/desktop/collection/{card_id}", put(set_collection))
+                .route("/api/desktop/collection/{card_id}/notes", patch(notes))
+                .route(
+                    "/api/desktop/binders/versions/{version_id}/slot",
+                    put(set_slot),
+                )
+                .route(
+                    "/api/desktop/binders/versions/{version_id}/swap",
+                    post(swap),
+                ),
+        )
+        .await;
+        let client = CloudClient::new().expect("client");
+        let mutation_id = uuid::Uuid::new_v4();
+        let set = client
+            .set_collection(
+                &base,
+                "token",
+                CollectionSetInput {
+                    card_id: "card-1",
+                    quantity: 3,
+                    notes: Some("sleeved"),
+                    mutation_id,
+                    expected_revision: 7,
+                },
+            )
+            .await
+            .expect("set collection");
+        assert_eq!(set.state.revision, 8);
+        let notes = client
+            .patch_collection_notes(&base, "token", "card-1", None, 8, mutation_id)
+            .await
+            .expect("patch notes");
+        assert_eq!(notes.state.revision, 9);
+        client
+            .set_binder_slot(
+                &base,
+                "token",
+                "version-1",
+                json!({ "page": 1, "row": 2, "column": 0, "cardId": "card-1" }),
+                9,
+            )
+            .await
+            .expect("set slot");
+        client
+            .swap_binder_slots(
+                &base,
+                "token",
+                "version-1",
+                10,
+                json!({ "page": 1, "row": 2, "column": 0 }),
+                json!({ "page": 1, "row": 2, "column": 1 }),
+            )
+            .await
+            .expect("swap slots");
+    }
+
+    #[tokio::test]
+    async fn bulk_tickets_are_mapped_by_card_and_variant_not_response_order() {
+        async fn bulk() -> Json<Value> {
+            Json(json!({
+                "ok": true,
+                "uploads": [
+                    { "cardId": "card-2", "variant": "low", "token": "second", "uploadPath": "/upload/second" },
+                    { "cardId": "card-1", "variant": "high", "token": "first", "uploadPath": "/upload/first" }
+                ]
+            }))
+        }
+        let base =
+            spawn(Router::new().route("/api/desktop/art/upload-tokens/bulk", post(bulk))).await;
+        let entries = [
+            ArtManifestEntry {
+                card_id: "card-1".to_string(),
+                variant: ArtVariant::High,
+                sha256: "a".repeat(64),
+                bytes: 10,
+            },
+            ArtManifestEntry {
+                card_id: "card-2".to_string(),
+                variant: ArtVariant::Low,
+                sha256: "b".repeat(64),
+                bytes: 8,
+            },
+        ];
+        let tickets = CloudClient::new()
+            .expect("client")
+            .issue_upload_tickets(&base, "token", &entries)
+            .await
+            .expect("bulk tickets");
+        assert_eq!(tickets[0].1.token, "first");
+        assert_eq!(tickets[1].1.token, "second");
+    }
+
+    #[tokio::test]
+    async fn streamed_download_checks_content_range_and_removes_oversized_output() {
+        async fn wrong_range(headers: HeaderMap) -> (StatusCode, HeaderMap, Bytes) {
+            assert_eq!(
+                headers
+                    .get(reqwest::header::RANGE)
+                    .and_then(|value| value.to_str().ok()),
+                Some("bytes=4-")
+            );
+            let mut response_headers = HeaderMap::new();
+            response_headers.insert(
+                reqwest::header::CONTENT_RANGE,
+                "bytes 3-6/7".parse().expect("content range"),
+            );
+            (
+                StatusCode::PARTIAL_CONTENT,
+                response_headers,
+                Bytes::from_static(b"data"),
+            )
+        }
+        async fn oversized() -> Bytes {
+            Bytes::from_static(b"12345")
+        }
+        let base = spawn(
+            Router::new()
+                .route("/api/desktop/art/card1/high", get(wrong_range))
+                .route("/api/desktop/art/card2/low", get(oversized)),
+        )
+        .await;
+        let root = tempdir().expect("temp dir");
+        let wrong_path = root.path().join("wrong.part");
+        tokio::fs::write(&wrong_path, b"1234")
+            .await
+            .expect("partial file");
+        let client = CloudClient::new().expect("client");
+        let wrong = client
+            .download_art_to(
+                &base,
+                "token",
+                &ArtManifestEntry {
+                    card_id: "card1".to_string(),
+                    variant: ArtVariant::High,
+                    sha256: "a".repeat(64),
+                    bytes: 7,
+                },
+                4,
+                &wrong_path,
+            )
+            .await
+            .expect_err("wrong range");
+        assert!(
+            wrong.to_string().contains("wrong byte"),
+            "unexpected error: {wrong}"
+        );
+        assert_eq!(
+            tokio::fs::read(&wrong_path).await.expect("partial"),
+            b"1234"
+        );
+
+        let oversized_path = root.path().join("oversized.part");
+        let oversized = client
+            .download_art_to(
+                &base,
+                "token",
+                &ArtManifestEntry {
+                    card_id: "card2".to_string(),
+                    variant: ArtVariant::Low,
+                    sha256: "b".repeat(64),
+                    bytes: 4,
+                },
+                0,
+                &oversized_path,
+            )
+            .await
+            .expect_err("oversized stream");
+        assert!(oversized.to_string().contains("manifest size"));
+        assert!(!oversized_path.exists());
+    }
+
+    #[tokio::test]
+    async fn upload_stream_preserves_same_origin_path_and_declared_length() {
+        async fn upload(headers: HeaderMap, body: Bytes) -> Json<Value> {
+            assert_eq!(
+                headers
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok()),
+                Some("image/webp")
+            );
+            assert_eq!(
+                headers
+                    .get(reqwest::header::CONTENT_LENGTH)
+                    .and_then(|value| value.to_str().ok()),
+                Some("12")
+            );
+            assert_eq!(body.as_ref(), b"RIFFxxxxWEBP");
+            Json(json!({ "ok": true }))
+        }
+        let base = spawn(Router::new().route("/upload/token", put(upload))).await;
+        let root = tempdir().expect("temp dir");
+        let path = root.path().join("art.webp");
+        tokio::fs::write(&path, b"RIFFxxxxWEBP")
+            .await
+            .expect("art file");
+        CloudClient::new()
+            .expect("client")
+            .upload_art_file(
+                &base,
+                &UploadTicket {
+                    token: "secret".to_string(),
+                    upload_path: "/upload/token".to_string(),
+                },
+                &path,
+                12,
+            )
+            .await
+            .expect("stream upload");
+        assert!(upload_url(&base, "https://attacker.example/upload").is_err());
+        assert!(upload_url(&base, "//attacker.example/upload").is_err());
+    }
+
+    #[test]
+    fn retry_delays_are_jittered_and_retry_after_is_capped() {
+        for attempt in 0..3 {
+            let delay = exponential_delay(attempt);
+            let base = 250_u64 * 2_u64.pow(attempt);
+            assert!(delay >= Duration::from_millis(base));
+            assert!(delay <= Duration::from_millis(base + 125));
+        }
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(reqwest::header::RETRY_AFTER, "300".parse().expect("header"));
+        assert_eq!(
+            retry_delay_from_headers(&headers, 0),
+            Duration::from_secs(30)
         );
     }
 

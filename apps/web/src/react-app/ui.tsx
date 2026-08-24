@@ -295,6 +295,7 @@ export function DevicesView({
   pair,
   revoke,
   copied,
+  copyFailed,
 }: {
   tokens: DesktopToken[];
   pairCode: PairingCode | null;
@@ -302,6 +303,7 @@ export function DevicesView({
   pair: () => void;
   revoke: (id: string) => void;
   copied: () => void;
+  copyFailed: () => void;
 }): ReactElement {
   return (
     <>
@@ -334,7 +336,7 @@ export function DevicesView({
               className="quiet-button"
               type="button"
               onClick={() => {
-                void navigator.clipboard.writeText(pairCode.code).then(copied);
+                void navigator.clipboard.writeText(pairCode.code).then(copied, copyFailed);
               }}
             >
               Copy code

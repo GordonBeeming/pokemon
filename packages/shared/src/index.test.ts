@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DESKTOP_SCOPES,
   artUrlSchema,
+  desktopScopeSchema,
   binderLayoutSchema,
   binderMutationResultSchema,
   cardIdSchema,
@@ -20,6 +22,18 @@ describe('shared wire schemas', () => {
   it('limits languages to physical catalogue languages', () => {
     expect(languageSchema.parse('en')).toBe('en');
     expect(() => languageSchema.parse('tcgp')).toThrow();
+  });
+
+  it('keeps desktop authorization scopes in one shared contract', () => {
+    expect(DESKTOP_SCOPES).toEqual([
+      'art:read',
+      'art:write',
+      'catalogue:read',
+      'collection:write',
+      'binders:write',
+    ]);
+    expect(desktopScopeSchema.parse('catalogue:read')).toBe('catalogue:read');
+    expect(desktopScopeSchema.safeParse('admin').success).toBe(false);
   });
 
   it('keeps collection quantities non-negative', () => {

@@ -36,9 +36,66 @@ pub enum ToolPayload {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolName {
+    CatalogueSearch,
+    CardGet,
+    BindersList,
+    BinderGet,
+    BinderSuggest,
+    PendingScansList,
+    PendingScanImage,
+    ConfirmScan,
+    CollectionSet,
+    CollectionNotes,
+    BinderCreateDraft,
+    BinderSlotSet,
+    BinderSlotSwap,
+}
+
+impl ToolName {
+    pub const ALL: [Self; 13] = [
+        Self::CatalogueSearch,
+        Self::CardGet,
+        Self::BindersList,
+        Self::BinderGet,
+        Self::BinderSuggest,
+        Self::PendingScansList,
+        Self::PendingScanImage,
+        Self::ConfirmScan,
+        Self::CollectionSet,
+        Self::CollectionNotes,
+        Self::BinderCreateDraft,
+        Self::BinderSlotSet,
+        Self::BinderSlotSwap,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CatalogueSearch => "pokedex_catalogue_search",
+            Self::CardGet => "pokedex_card_get",
+            Self::BindersList => "pokedex_binders_list",
+            Self::BinderGet => "pokedex_binder_get",
+            Self::BinderSuggest => "pokedex_binder_suggest",
+            Self::PendingScansList => "pokedex_pending_scans_list",
+            Self::PendingScanImage => "pokedex_pending_scan_image",
+            Self::ConfirmScan => "pokedex_confirm_scan",
+            Self::CollectionSet => "pokedex_collection_set",
+            Self::CollectionNotes => "pokedex_collection_notes",
+            Self::BinderCreateDraft => "pokedex_binder_create_draft",
+            Self::BinderSlotSet => "pokedex_binder_slot_set",
+            Self::BinderSlotSwap => "pokedex_binder_slot_swap",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|tool| tool.as_str() == value)
+    }
+}
+
 #[async_trait]
 pub trait McpBackend: Send + Sync {
-    async fn call_tool(&self, name: &str, arguments: Value) -> Result<ToolPayload>;
+    async fn call_tool(&self, name: ToolName, arguments: Value) -> Result<ToolPayload>;
 }
 
 #[derive(Clone)]
@@ -192,14 +249,13 @@ async fn call_tool(state: &McpState, id: Value, params: Option<Value>) -> Value 
     else {
         return rpc_error(Some(id), -32602, "tools/call requires a name".to_string());
     };
-    let name = name.to_string();
-    if !is_known_tool(&name) {
+    let Some(name) = ToolName::parse(name) else {
         return rpc_error(Some(id), -32601, format!("Unknown tool: {name}"));
-    }
+    };
     let arguments = params
         .and_then(|value| value.get("arguments").cloned())
         .unwrap_or_else(|| json!({}));
-    match state.backend.call_tool(&name, arguments).await {
+    match state.backend.call_tool(name, arguments).await {
         Ok(ToolPayload::Structured(value)) => rpc_success(id, structured_tool_result(value)),
         Ok(ToolPayload::Image {
             mime_type,
@@ -376,18 +432,10 @@ fn escape_toml(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-fn is_known_tool(name: &str) -> bool {
-    tool_definitions().as_array().is_some_and(|tools| {
-        tools
-            .iter()
-            .any(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
-    })
-}
-
 fn tool_definitions() -> Value {
     json!([
         read_tool(
-            "pokedex_catalogue_search",
+            ToolName::CatalogueSearch.as_str(),
             "Search the private card catalogue for possible matches.",
             json!({
                 "type": "object",
@@ -401,43 +449,43 @@ fn tool_definitions() -> Value {
             true
         ),
         read_tool(
-            "pokedex_card_get",
+            ToolName::CardGet.as_str(),
             "Read one catalogue card, including ownership and price data.",
             id_schema("cardId"),
             true
         ),
         read_tool(
-            "pokedex_binders_list",
+            ToolName::BindersList.as_str(),
             "List the owner's binder plans.",
             empty_schema(),
             true
         ),
         read_tool(
-            "pokedex_binder_get",
+            ToolName::BinderGet.as_str(),
             "Read one binder version, its slots, and shortages.",
             id_schema("versionId"),
             true
         ),
         read_tool(
-            "pokedex_binder_suggest",
+            ToolName::BinderSuggest.as_str(),
             "Read shortages and empty slots for a binder version.",
             id_schema("versionId"),
             true
         ),
         read_tool(
-            "pokedex_pending_scans_list",
+            ToolName::PendingScansList.as_str(),
             "List local card captures waiting for confirmation.",
             empty_schema(),
             false
         ),
         read_tool(
-            "pokedex_pending_scan_image",
+            ToolName::PendingScanImage.as_str(),
             "Read one pending local capture as image content.",
             id_schema("scanId"),
             false
         ),
         write_tool(
-            "pokedex_confirm_scan",
+            ToolName::ConfirmScan.as_str(),
             "Confirm a card match, increment its quantity, then delete the local capture.",
             json!({
                 "type": "object",
@@ -453,7 +501,7 @@ fn tool_definitions() -> Value {
             false
         ),
         write_tool(
-            "pokedex_collection_set",
+            ToolName::CollectionSet.as_str(),
             "Set a card's owned quantity and notes.",
             json!({
                 "type": "object",
@@ -470,7 +518,7 @@ fn tool_definitions() -> Value {
             true
         ),
         write_tool(
-            "pokedex_collection_notes",
+            ToolName::CollectionNotes.as_str(),
             "Update notes while preserving the card's current quantity.",
             json!({
                 "type": "object",
@@ -486,7 +534,7 @@ fn tool_definitions() -> Value {
             true
         ),
         write_tool(
-            "pokedex_binder_create_draft",
+            ToolName::BinderCreateDraft.as_str(),
             "Create a draft binder with a standard or custom layout.",
             json!({
                 "type": "object",
@@ -510,7 +558,7 @@ fn tool_definitions() -> Value {
             false
         ),
         write_tool(
-            "pokedex_binder_slot_set",
+            ToolName::BinderSlotSet.as_str(),
             "Place or clear a card in one slot of a draft binder version.",
             json!({
                 "type": "object",
@@ -529,7 +577,7 @@ fn tool_definitions() -> Value {
             true
         ),
         write_tool(
-            "pokedex_binder_slot_swap",
+            ToolName::BinderSlotSwap.as_str(),
             "Atomically swap two slots in a draft binder version.",
             json!({
                 "type": "object",
@@ -621,15 +669,15 @@ mod tests {
 
     #[async_trait]
     impl McpBackend for FakeBackend {
-        async fn call_tool(&self, name: &str, arguments: Value) -> Result<ToolPayload> {
-            if name == "pokedex_pending_scan_image" {
+        async fn call_tool(&self, name: ToolName, arguments: Value) -> Result<ToolPayload> {
+            if name == ToolName::PendingScanImage {
                 return Ok(ToolPayload::Image {
                     mime_type: "image/webp".to_string(),
                     base64_data: "UklGRgQAAABXRUJQZGF0YQ==".to_string(),
                     metadata: json!({ "scanId": arguments["scanId"] }),
                 });
             }
-            Ok(ToolPayload::Structured(json!({ "name": name })))
+            Ok(ToolPayload::Structured(json!({ "name": name.as_str() })))
         }
     }
 
@@ -698,6 +746,18 @@ mod tests {
         assert!(tools
             .iter()
             .any(|tool| tool["name"] == "pokedex_binder_suggest"));
+        assert_eq!(tools.len(), ToolName::ALL.len());
+        for tool in ToolName::ALL {
+            assert_eq!(
+                tools
+                    .iter()
+                    .filter(|definition| definition["name"] == tool.as_str())
+                    .count(),
+                1,
+                "tool registry must list {} exactly once",
+                tool.as_str()
+            );
+        }
     }
 
     #[tokio::test]
@@ -842,6 +902,33 @@ mod tests {
                 .status(),
             StatusCode::BAD_REQUEST
         );
+    }
+
+    #[tokio::test]
+    async fn failed_replacement_bind_does_not_replace_the_live_status() {
+        let occupied = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("occupied listener");
+        let port = occupied.local_addr().expect("occupied address").port();
+        let original = McpStatus {
+            endpoint: "http://127.0.0.1:47837/mcp".to_string(),
+            config_snippet: "existing".to_string(),
+            running: true,
+            error: None,
+        };
+        let live_status = Arc::new(RwLock::new(original.clone()));
+
+        let error = start(
+            port,
+            "secret".to_string(),
+            Arc::new(FakeBackend),
+            live_status.clone(),
+        )
+        .await
+        .expect_err("occupied port must fail");
+
+        assert_eq!(*live_status.read().await, original);
+        assert!(error.to_string().contains("Address already in use"));
     }
 
     #[test]

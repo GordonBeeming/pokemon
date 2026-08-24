@@ -26,6 +26,16 @@ export const PHYSICAL_LANGUAGES = [
 export const languageSchema = z.enum(PHYSICAL_LANGUAGES);
 export type LanguageCode = z.infer<typeof languageSchema>;
 
+export const DESKTOP_SCOPES = [
+  'art:read',
+  'art:write',
+  'catalogue:read',
+  'collection:write',
+  'binders:write',
+] as const;
+export const desktopScopeSchema = z.enum(DESKTOP_SCOPES);
+export type DesktopScope = z.infer<typeof desktopScopeSchema>;
+
 export const cardCategorySchema = z.enum(['pokemon', 'trainer', 'energy', 'special']);
 export type CardCategory = z.infer<typeof cardCategorySchema>;
 

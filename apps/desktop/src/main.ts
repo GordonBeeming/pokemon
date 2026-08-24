@@ -59,8 +59,9 @@ app.innerHTML = `
         <div class="capture-actions">
           <button class="primary" id="camera-toggle" type="button">Start camera</button>
           <button id="camera-capture" type="button" disabled>Capture card</button>
-          <label class="file-action" for="file-capture">Choose image</label>
-          <input id="file-capture" type="file" accept="image/jpeg,image/png,image/webp,image/heic,.heic" />
+          <label class="file-action">Choose image
+            <input id="file-capture" type="file" accept="image/jpeg,image/png,image/webp,image/heic,.heic" />
+          </label>
         </div>
 
         <div class="inbox" aria-labelledby="inbox-heading">
@@ -93,7 +94,7 @@ app.innerHTML = `
         <section class="control-section" aria-labelledby="library-heading">
           <div class="control-title">
             <h2 id="library-heading">Art library</h2>
-            <span class="sync-state" id="sync-state">Ready</span>
+            <span class="sync-state" id="sync-state" role="status" aria-live="polite" aria-atomic="true">Ready</span>
           </div>
           <form id="settings-form">
             <label for="library-path">Image library path</label>
@@ -326,6 +327,7 @@ syncArt.addEventListener('click', () => {
   void runAction(async () => {
     syncArt.disabled = true;
     syncProgress.hidden = false;
+    settingsForm.setAttribute('aria-busy', 'true');
     cancelSync.hidden = false;
     syncState.textContent = 'Syncing';
     try {
@@ -343,6 +345,7 @@ syncArt.addEventListener('click', () => {
       syncArt.disabled = false;
       syncProgress.hidden = true;
       cancelSync.hidden = true;
+      settingsForm.removeAttribute('aria-busy');
     }
   });
 });

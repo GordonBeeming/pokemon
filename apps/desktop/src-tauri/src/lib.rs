@@ -10,7 +10,7 @@ use crate::cloud::{ArtVariant, CloudClient, CollectionSetInput};
 use crate::config::{AppConfig, AppPaths};
 use crate::error::{DesktopError, Result};
 use crate::inbox::{CaptureSource, PendingInbox, PendingScan, PendingScanImage, ScanState};
-use crate::mcp::{McpBackend, McpStatus, ToolPayload};
+use crate::mcp::{McpBackend, McpStatus, ToolName, ToolPayload};
 use crate::secrets::{DesktopTokenStore, KeychainTokenStore};
 use crate::sync::{ArtSyncEngine, CloudArtRemote, SyncReport, TcgdexArtSource, UploadOutcome};
 use async_trait::async_trait;
@@ -124,12 +124,8 @@ async fn save_settings(
     let previous = state.services.config.read().await.clone();
     config.validate().map_err(display_error)?;
     sync::validate_library_path(&config.image_library_path).map_err(display_error)?;
-    config::save(&state.services.paths.config_file, &config).map_err(display_error)?;
-    *state.services.config.write().await = config.clone();
-    if previous.mcp_port != config.mcp_port {
-        if let Some(task) = state.mcp_task.lock().await.take() {
-            task.abort();
-        }
+    let previous_status = state.mcp_status.read().await.clone();
+    let replacement = if previous.mcp_port != config.mcp_port {
         let backend: Arc<dyn McpBackend> = state.services.clone();
         match mcp::start(
             config.mcp_port,
@@ -139,14 +135,24 @@ async fn save_settings(
         )
         .await
         {
-            Ok(task) => *state.mcp_task.lock().await = Some(task),
-            Err(error) => {
-                *state.mcp_status.write().await = mcp::unavailable_status(
-                    config.mcp_port,
-                    state.mcp_token.clone(),
-                    error.to_string(),
-                );
-            }
+            Ok(task) => Some(task),
+            Err(error) => return Err(display_error(error)),
+        }
+    } else {
+        None
+    };
+    if let Err(error) = config::save(&state.services.paths.config_file, &config) {
+        if let Some(task) = replacement {
+            task.abort();
+            *state.mcp_status.write().await = previous_status;
+        }
+        return Err(display_error(error));
+    }
+    *state.services.config.write().await = config.clone();
+    if let Some(replacement) = replacement {
+        let previous_task = state.mcp_task.lock().await.replace(replacement);
+        if let Some(task) = previous_task {
+            task.abort();
         }
     }
     Ok(config)
@@ -316,10 +322,10 @@ fn display_error(error: impl std::fmt::Display) -> String {
 
 #[async_trait]
 impl McpBackend for DesktopServices {
-    async fn call_tool(&self, name: &str, arguments: Value) -> Result<ToolPayload> {
+    async fn call_tool(&self, name: ToolName, arguments: Value) -> Result<ToolPayload> {
         let arguments = object(arguments)?;
         match name {
-            "pokedex_catalogue_search" => {
+            ToolName::CatalogueSearch => {
                 let query = required_string(&arguments, "query", 200)?;
                 let limit = optional_u64(&arguments, "limit")?
                     .unwrap_or(20)
@@ -333,7 +339,7 @@ impl McpBackend for DesktopServices {
                     self.handle_cloud(&base, &token, result)?,
                 ))
             }
-            "pokedex_card_get" => {
+            ToolName::CardGet => {
                 let card_id = required_string(&arguments, "cardId", 128)?;
                 let (base, token) = self.cloud_context().await?;
                 let result = self.cloud.card(&base, &token, card_id).await;
@@ -341,14 +347,14 @@ impl McpBackend for DesktopServices {
                     self.handle_cloud(&base, &token, result)?,
                 ))
             }
-            "pokedex_binders_list" => {
+            ToolName::BindersList => {
                 let (base, token) = self.cloud_context().await?;
                 let result = self.cloud.list_binders(&base, &token).await;
                 Ok(ToolPayload::Structured(
                     self.handle_cloud(&base, &token, result)?,
                 ))
             }
-            "pokedex_binder_get" => {
+            ToolName::BinderGet => {
                 let version_id = required_string(&arguments, "versionId", 128)?;
                 let (base, token) = self.cloud_context().await?;
                 let result = self.cloud.binder(&base, &token, version_id).await;
@@ -356,7 +362,7 @@ impl McpBackend for DesktopServices {
                     self.handle_cloud(&base, &token, result)?,
                 ))
             }
-            "pokedex_binder_suggest" => {
+            ToolName::BinderSuggest => {
                 let version_id = required_string(&arguments, "versionId", 128)?;
                 let (base, token) = self.cloud_context().await?;
                 let result = self
@@ -367,10 +373,10 @@ impl McpBackend for DesktopServices {
                     self.handle_cloud(&base, &token, result)?,
                 ))
             }
-            "pokedex_pending_scans_list" => Ok(ToolPayload::Structured(json!({
+            ToolName::PendingScansList => Ok(ToolPayload::Structured(json!({
                 "scans": self.inbox.list()?
             }))),
-            "pokedex_pending_scan_image" => {
+            ToolName::PendingScanImage => {
                 let scan_id = required_uuid(&arguments, "scanId")?;
                 let image = self.inbox.read_image(scan_id)?;
                 Ok(ToolPayload::Image {
@@ -379,10 +385,10 @@ impl McpBackend for DesktopServices {
                     metadata: json!({ "scanId": image.id }),
                 })
             }
-            "pokedex_confirm_scan" => self.confirm_scan(&arguments).await,
-            "pokedex_collection_set" => self.set_collection_tool(&arguments).await,
-            "pokedex_collection_notes" => self.set_notes_tool(&arguments).await,
-            "pokedex_binder_create_draft" => {
+            ToolName::ConfirmScan => self.confirm_scan(&arguments).await,
+            ToolName::CollectionSet => self.set_collection_tool(&arguments).await,
+            ToolName::CollectionNotes => self.set_notes_tool(&arguments).await,
+            ToolName::BinderCreateDraft => {
                 let name = required_string(&arguments, "name", 120)?;
                 let layout = arguments
                     .get("layout")
@@ -394,7 +400,7 @@ impl McpBackend for DesktopServices {
                     self.handle_cloud(&base, &token, result)?,
                 ))
             }
-            "pokedex_binder_slot_set" => {
+            ToolName::BinderSlotSet => {
                 let version_id = required_string(&arguments, "versionId", 128)?;
                 let expected_revision = required_u64(&arguments, "expectedRevision")?;
                 let slot = json!({
@@ -412,7 +418,7 @@ impl McpBackend for DesktopServices {
                     self.handle_cloud(&base, &token, result)?,
                 ))
             }
-            "pokedex_binder_slot_swap" => {
+            ToolName::BinderSlotSwap => {
                 let version_id = required_string(&arguments, "versionId", 128)?;
                 let expected_revision = required_u64(&arguments, "expectedRevision")?;
                 let source = arguments
@@ -432,7 +438,6 @@ impl McpBackend for DesktopServices {
                     self.handle_cloud(&base, &token, result)?,
                 ))
             }
-            _ => Err(DesktopError::Mcp(format!("unknown tool: {name}"))),
         }
     }
 }
@@ -596,7 +601,7 @@ pub fn run() {
             let services = Arc::new(DesktopServices::new(
                 paths,
                 config.clone(),
-                Arc::new(KeychainTokenStore),
+                Arc::new(KeychainTokenStore::default()),
             )?);
             let backend: Arc<dyn McpBackend> = services.clone();
             let status = Arc::new(RwLock::new(mcp::unavailable_status(
@@ -648,8 +653,10 @@ pub fn run() {
 mod tests {
     use super::*;
     use crate::inbox::CaptureSource;
-    use axum::extract::Path as AxumPath;
-    use axum::routing::{get, post};
+    use axum::extract::{Path as AxumPath, State};
+    use axum::http::Method;
+    use axum::response::{IntoResponse, Response};
+    use axum::routing::{get, patch, post, put};
     use axum::{Json, Router};
     use std::sync::Mutex;
     use tempfile::tempdir;
@@ -669,6 +676,15 @@ mod tests {
         fn delete(&self, _origin: &str) -> Result<()> {
             *self.0.lock().expect("token lock") = None;
             Ok(())
+        }
+
+        fn compare_delete(&self, _origin: &str, expected: &str) -> Result<bool> {
+            let mut token = self.0.lock().expect("token lock");
+            if token.as_deref() != Some(expected) {
+                return Ok(false);
+            }
+            *token = None;
+            Ok(true)
         }
     }
 
@@ -702,6 +718,66 @@ mod tests {
         }))
     }
 
+    async fn mock_collection_state(
+        method: Method,
+        AxumPath(card_id): AxumPath<String>,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        if method == Method::PUT {
+            assert_eq!(body["quantity"], 2);
+            assert_eq!(body["expectedRevision"], 1);
+        } else {
+            assert_eq!(body["notes"], "sleeved");
+            assert_eq!(body["expectedRevision"], 2);
+        }
+        Json(json!({
+            "ok": true,
+            "state": {
+                "cardId": card_id,
+                "quantity": 2,
+                "notes": body.get("notes").cloned().unwrap_or(Value::Null),
+                "revision": 3,
+                "updatedAt": "2026-08-25T00:00:00Z"
+            },
+            "replayed": false
+        }))
+    }
+
+    async fn mock_catalogue_search() -> Json<Value> {
+        Json(json!({ "ok": true, "cards": [], "nextCursor": null }))
+    }
+
+    async fn mock_binders() -> Json<Value> {
+        Json(json!({ "ok": true, "binders": [] }))
+    }
+
+    async fn mock_binder() -> Json<Value> {
+        Json(json!({
+            "ok": true,
+            "binder": {
+                "version": {
+                    "id": "version-1",
+                    "binderId": "binder-1",
+                    "versionNumber": 1,
+                    "status": "draft",
+                    "layout": { "kind": "3x3", "rows": 3, "columns": 3 },
+                    "revision": 1,
+                    "pageCount": 0
+                },
+                "pages": [],
+                "nextPage": null
+            }
+        }))
+    }
+
+    async fn mock_shortages() -> Json<Value> {
+        Json(json!({ "ok": true, "shortages": [], "nextOffset": null }))
+    }
+
+    async fn mock_binder_mutation(Json(body): Json<Value>) -> Json<Value> {
+        Json(json!({ "ok": true, "received": body }))
+    }
+
     async fn mock_cloud() -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -717,6 +793,104 @@ mod tests {
             axum::serve(listener, router).await.expect("mock cloud");
         });
         format!("http://{address}")
+    }
+
+    async fn mock_backend_cloud() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("cloud listener");
+        let address = listener.local_addr().expect("cloud address");
+        let router = Router::new()
+            .route("/api/desktop/catalogue/search", get(mock_catalogue_search))
+            .route("/api/desktop/catalogue/{card_id}", get(mock_card))
+            .route(
+                "/api/desktop/binders",
+                get(mock_binders).post(mock_binder_mutation),
+            )
+            .route(
+                "/api/desktop/binders/versions/{version_id}",
+                get(mock_binder),
+            )
+            .route(
+                "/api/desktop/binders/versions/{version_id}/shortages",
+                get(mock_shortages),
+            )
+            .route(
+                "/api/desktop/binders/versions/{version_id}/slot",
+                put(mock_binder_mutation),
+            )
+            .route(
+                "/api/desktop/binders/versions/{version_id}/swap",
+                post(mock_binder_mutation),
+            )
+            .route(
+                "/api/desktop/collection/{card_id}",
+                put(mock_collection_state),
+            )
+            .route(
+                "/api/desktop/collection/{card_id}/notes",
+                patch(mock_collection_state),
+            )
+            .route(
+                "/api/desktop/collection/{card_id}/increment",
+                post(mock_collection),
+            );
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("mock cloud");
+        });
+        format!("http://{address}")
+    }
+
+    #[derive(Clone, Default)]
+    struct AmbiguousMutationState(Arc<Mutex<Vec<String>>>);
+
+    async fn ambiguous_collection(
+        State(state): State<AmbiguousMutationState>,
+        AxumPath(card_id): AxumPath<String>,
+        Json(body): Json<Value>,
+    ) -> Response {
+        let mutation_id = body["mutationId"]
+            .as_str()
+            .expect("mutation ID")
+            .to_string();
+        let request_number = {
+            let mut requests = state.0.lock().expect("mutation requests");
+            requests.push(mutation_id);
+            requests.len()
+        };
+        if request_number == 1 {
+            return (axum::http::StatusCode::OK, "not-json").into_response();
+        }
+        Json(json!({
+            "ok": true,
+            "state": {
+                "cardId": card_id,
+                "quantity": 1,
+                "notes": null,
+                "revision": 1,
+                "updatedAt": "2026-08-25T00:00:00Z"
+            },
+            "replayed": true
+        }))
+        .into_response()
+    }
+
+    async fn ambiguous_cloud() -> (String, AmbiguousMutationState) {
+        let state = AmbiguousMutationState::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("cloud listener");
+        let address = listener.local_addr().expect("cloud address");
+        let router = Router::new()
+            .route(
+                "/api/desktop/collection/{card_id}/increment",
+                post(ambiguous_collection),
+            )
+            .with_state(state.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("mock cloud");
+        });
+        (format!("http://{address}"), state)
     }
 
     #[tokio::test]
@@ -742,7 +916,7 @@ mod tests {
 
         let error = services
             .call_tool(
-                "pokedex_confirm_scan",
+                ToolName::ConfirmScan,
                 json!({ "scanId": scan.id, "cardId": "card-1", "confirmed": false }),
             )
             .await
@@ -775,7 +949,7 @@ mod tests {
 
         let result = services
             .call_tool(
-                "pokedex_confirm_scan",
+                ToolName::ConfirmScan,
                 json!({ "scanId": scan.id, "cardId": "card-1", "confirmed": true }),
             )
             .await
@@ -785,6 +959,165 @@ mod tests {
         assert!(services.inbox.list().expect("pending scans").is_empty());
     }
 
+    #[tokio::test]
+    async fn ambiguous_confirmation_reuses_mutation_and_retries_local_deletion() {
+        let root = tempdir().expect("temp dir");
+        let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
+        let mut config = AppConfig::defaults(&paths);
+        let (cloud, requests) = ambiguous_cloud().await;
+        config.cloud_base_url = cloud;
+        let services = DesktopServices::new(
+            paths,
+            config,
+            Arc::new(MemoryTokenStore(Mutex::new(Some("token".to_string())))),
+        )
+        .expect("services");
+        let scan = services
+            .inbox
+            .save(
+                b"RIFF\x04\x00\x00\x00WEBPdata",
+                "image/webp",
+                CaptureSource::Camera,
+            )
+            .expect("scan");
+        let arguments = json!({ "scanId": scan.id, "cardId": "card-1", "confirmed": true });
+
+        services
+            .call_tool(ToolName::ConfirmScan, arguments.clone())
+            .await
+            .expect_err("ambiguous first response");
+        assert_eq!(
+            services.inbox.list().expect("claimed scan")[0].state,
+            ScanState::Claimed
+        );
+
+        let result = services
+            .call_tool(ToolName::ConfirmScan, arguments)
+            .await
+            .expect("idempotent retry");
+        assert!(matches!(result, ToolPayload::Structured(_)));
+        assert!(services.inbox.list().expect("pending scans").is_empty());
+        let mutation_ids = requests.0.lock().expect("mutation requests");
+        assert_eq!(mutation_ids.len(), 2);
+        assert_eq!(mutation_ids[0], mutation_ids[1]);
+    }
+
+    #[test]
+    fn real_desktop_backend_lists_pending_scans() {
+        let root = tempdir().expect("temp dir");
+        let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
+        let services = DesktopServices::new(
+            paths.clone(),
+            AppConfig::defaults(&paths),
+            Arc::new(MemoryTokenStore(Mutex::new(None))),
+        )
+        .expect("services");
+        services
+            .inbox
+            .save(
+                b"RIFF\x04\x00\x00\x00WEBPdata",
+                "image/webp",
+                CaptureSource::File,
+            )
+            .expect("scan");
+        let result = tauri::async_runtime::block_on(
+            services.call_tool(ToolName::PendingScansList, json!({})),
+        )
+        .expect("pending scan tool");
+        let ToolPayload::Structured(value) = result else {
+            panic!("expected structured scan list");
+        };
+        assert_eq!(value["scans"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[tokio::test]
+    async fn every_registered_tool_dispatches_through_the_real_desktop_backend() {
+        let root = tempdir().expect("temp dir");
+        let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
+        let mut config = AppConfig::defaults(&paths);
+        config.cloud_base_url = mock_backend_cloud().await;
+        let services = DesktopServices::new(
+            paths,
+            config,
+            Arc::new(MemoryTokenStore(Mutex::new(Some("token".to_string())))),
+        )
+        .expect("services");
+        let image_scan = services
+            .inbox
+            .save(
+                b"RIFF\x04\x00\x00\x00WEBPdata",
+                "image/webp",
+                CaptureSource::File,
+            )
+            .expect("image scan");
+        let confirm_scan = services
+            .inbox
+            .save(
+                b"RIFF\x04\x00\x00\x00WEBPdata",
+                "image/webp",
+                CaptureSource::Camera,
+            )
+            .expect("confirmation scan");
+        let cases = [
+            (
+                ToolName::CatalogueSearch,
+                json!({ "query": "Pikachu", "limit": 5 }),
+            ),
+            (ToolName::CardGet, json!({ "cardId": "card-1" })),
+            (ToolName::BindersList, json!({})),
+            (ToolName::BinderGet, json!({ "versionId": "version-1" })),
+            (ToolName::BinderSuggest, json!({ "versionId": "version-1" })),
+            (ToolName::PendingScansList, json!({})),
+            (
+                ToolName::PendingScanImage,
+                json!({ "scanId": image_scan.id }),
+            ),
+            (
+                ToolName::ConfirmScan,
+                json!({ "scanId": confirm_scan.id, "cardId": "card-1", "confirmed": true }),
+            ),
+            (
+                ToolName::CollectionSet,
+                json!({ "cardId": "card-1", "quantity": 2, "notes": null, "expectedRevision": 1 }),
+            ),
+            (
+                ToolName::CollectionNotes,
+                json!({ "cardId": "card-1", "notes": "sleeved", "expectedRevision": 2 }),
+            ),
+            (
+                ToolName::BinderCreateDraft,
+                json!({ "name": "Trade binder", "layout": { "kind": "3x3", "rows": 3, "columns": 3 } }),
+            ),
+            (
+                ToolName::BinderSlotSet,
+                json!({ "versionId": "version-1", "expectedRevision": 1, "page": 0, "row": 0, "column": 0, "cardId": "card-1" }),
+            ),
+            (
+                ToolName::BinderSlotSwap,
+                json!({
+                    "versionId": "version-1",
+                    "expectedRevision": 1,
+                    "source": { "page": 0, "row": 0, "column": 0 },
+                    "target": { "page": 0, "row": 0, "column": 1 }
+                }),
+            ),
+        ];
+
+        assert_eq!(cases.len(), ToolName::ALL.len());
+        for (tool, arguments) in cases {
+            services
+                .call_tool(tool, arguments)
+                .await
+                .unwrap_or_else(|error| panic!("{} failed: {error}", tool.as_str()));
+        }
+
+        let validation = services
+            .call_tool(ToolName::CatalogueSearch, json!({}))
+            .await
+            .expect_err("missing query must fail");
+        assert!(validation.to_string().contains("query must contain"));
+    }
+
     #[test]
     fn cloud_token_is_not_part_of_serialized_configuration() {
         let root = tempdir().expect("temp dir");
@@ -792,6 +1125,30 @@ mod tests {
         let serialized = serde_json::to_string(&AppConfig::defaults(&paths)).expect("config JSON");
         assert!(!serialized.contains("token"));
         assert!(!serialized.contains("secret"));
+    }
+
+    #[test]
+    fn rust_required_scopes_match_the_shared_typescript_contract() {
+        let shared = include_str!("../../../../packages/shared/src/index.ts");
+        let declaration = shared
+            .split_once("export const DESKTOP_SCOPES = [")
+            .and_then(|(_, remainder)| remainder.split_once("] as const;"))
+            .map(|(declaration, _)| declaration)
+            .expect("shared desktop scope declaration");
+        let shared_scopes = declaration
+            .lines()
+            .filter_map(|line| {
+                line.trim()
+                    .strip_prefix('\'')
+                    .and_then(|line| line.split_once('\''))
+            })
+            .map(|(scope, _)| scope)
+            .collect::<std::collections::BTreeSet<_>>();
+        let rust_scopes = REQUIRED_SCOPES
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(rust_scopes, shared_scopes);
     }
 
     #[tokio::test]
@@ -819,5 +1176,38 @@ mod tests {
             .get("https://pokedex.example")
             .expect("stored token")
             .is_none());
+    }
+
+    #[test]
+    fn compare_delete_cannot_remove_a_concurrently_replaced_token() {
+        use std::sync::Barrier;
+
+        for _ in 0..200 {
+            let store = Arc::new(MemoryTokenStore(Mutex::new(Some("old".to_string()))));
+            let barrier = Arc::new(Barrier::new(3));
+            let deleting_store = Arc::clone(&store);
+            let deleting_barrier = Arc::clone(&barrier);
+            let deleting = std::thread::spawn(move || {
+                deleting_barrier.wait();
+                deleting_store
+                    .compare_delete("https://pokedex.example", "old")
+                    .expect("compare delete");
+            });
+            let setting_store = Arc::clone(&store);
+            let setting_barrier = Arc::clone(&barrier);
+            let setting = std::thread::spawn(move || {
+                setting_barrier.wait();
+                setting_store
+                    .set("https://pokedex.example", "new")
+                    .expect("replacement token");
+            });
+            barrier.wait();
+            deleting.join().expect("delete thread");
+            setting.join().expect("set thread");
+            assert_eq!(
+                store.get("https://pokedex.example").expect("stored token"),
+                Some("new".to_string())
+            );
+        }
     }
 }

@@ -1,5 +1,6 @@
 import {
   binderLayoutSchema,
+  binderRevisionRequestSchema,
   binderSlotSetRequestSchema,
   binderSlotSwapRequestSchema,
   cardCategorySchema,
@@ -8,10 +9,12 @@ import {
   collectionSetRequestSchema,
   languageSchema,
   mutationRequestSchema,
+  desktopScopeSchema,
+  type DesktopScope,
 } from '@pokedex/shared';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { getArtResponse, createArtUploadToken, listArtManifest, uploadArt } from '../../lib/art';
+import { createArtUploadToken, uploadArt } from '../../lib/art';
 import {
   createBackup,
   createPairCode,
@@ -21,47 +24,26 @@ import {
   revokeDesktopToken,
   restoreBackup,
 } from '../../lib/backup';
-import {
-  activeBinderShortages,
-  addBinderPage,
-  arrangeBinderVersion,
-  activateBinderVersion,
-  cloneBinderVersion,
-  createBinder,
-  deleteBinderPage,
-  getBinderVersion,
-  listBinders,
-  reorderBinderPages,
-  setBinderSlot,
-  swapBinderSlots,
-  getBinderVersionShortages,
-  BinderDomainError,
-} from '../../lib/binders';
+import { activeBinderShortages } from '../../lib/binders';
 import {
   createCustomCard,
   beginStagedCatalogueRun,
   stageCatalogueCards,
   applyStagedCatalogueRun,
-  getCardDetail,
   importCatalogueLanguage,
   listSetFacets,
   listSpeciesFacets,
   listCatalogueSources,
-  searchCards,
 } from '../../lib/catalogue';
-import {
-  collectionSummary,
-  incrementCollectionQuantity,
-  patchCollectionNotes,
-  setCollectionState,
-  CollectionDomainError,
-} from '../../lib/collection';
+import { collectionSummary } from '../../lib/collection';
 import { asPositiveInt } from '../../lib/db';
 import { clientIp, enforceRateLimit, requireSession } from '../../lib/guards';
 import { logAudit } from '../../lib/auth';
-import { ApplicationError, describeError, logError } from '../../lib/log';
+import { ApplicationError } from '../../lib/log';
 import { priceCoverage } from '../../lib/pricing';
 import type { AuthVars } from '../../lib/types';
+import { apiFailure, parsedJson } from './errors';
+import { ownerOperations } from './operations';
 
 const api = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
 const desktopPublic = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
@@ -81,32 +63,17 @@ const collectionNotesBody = collectionNotesPatchRequestSchema;
 const createBinderBody = z
   .object({ name: z.string().trim().min(1).max(120), layout: binderLayoutSchema })
   .strict();
-const slotBody = z
-  .object({
-    page: z.number().int().nonnegative(),
-    row: z.number().int().nonnegative(),
-    column: z.number().int().nonnegative(),
-    cardId: z.string().trim().min(1).max(128).nullable(),
-    expectedRevision: z.number().int().positive().optional(),
-  })
+export const pageOrderBody = binderRevisionRequestSchema
+  .extend({ pageIds: z.array(z.string().trim().min(1).max(128)).min(1) })
   .strict();
-const compatibleSlotBody = z.union([binderSlotSetRequestSchema, slotBody]);
-const pageOrderBody = z
-  .object({ pageIds: z.array(z.string().trim().min(1).max(128)).min(1) })
-  .strict();
-const arrangementBody = z
-  .object({
+export const arrangementBody = binderRevisionRequestSchema
+  .extend({
     mode: z.enum(['set-number', 'release-date', 'pokedex-number', 'language']),
-    expectedRevision: z.number().int().positive().optional(),
   })
   .strict();
 const pairBody = z
   .object({
-    scopes: z
-      .array(
-        z.enum(['art:read', 'art:write', 'catalogue:read', 'collection:write', 'binders:write']),
-      )
-      .min(1),
+    scopes: z.array(desktopScopeSchema).min(1),
   })
   .strict();
 const redeemBody = z
@@ -166,19 +133,23 @@ const customCardBody = syncBody.shape.cards.element
 const syncPageBody = z.object({ cards: syncBody.shape.cards }).strict();
 const syncRunBody = z.object({ language: languageSchema }).strict();
 const syncFinalizeBody = z.object({ allowDestructiveDrop: z.boolean().optional() }).strict();
+const BACKUP_CREATE_WINDOW_SECONDS = 15 * 60;
+
+export async function mapConcurrent<T, U>(
+  values: readonly T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<U>,
+): Promise<U[]> {
+  const mapped: U[] = [];
+  for (let offset = 0; offset < values.length; offset += concurrency)
+    mapped.push(...(await Promise.all(values.slice(offset, offset + concurrency).map(mapper))));
+  return mapped;
+}
 
 function sessionOwner(c: { get: (key: 'session') => AuthVars['session'] }): string {
   const session = c.get('session');
-  if (!session) throw new Error('unauthorized');
+  if (!session) throw new ApplicationError('unauthorized', 401);
   return session.sub;
-}
-
-async function parsedJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json();
-  } catch (error) {
-    throw new Error(`invalid_json: ${describeError(error)}`);
-  }
 }
 
 export function parseDesktopBearer(header: string | undefined): string | null {
@@ -188,82 +159,11 @@ export function parseDesktopBearer(header: string | undefined): string | null {
 
 async function desktopOwner(
   c: { env: CloudflareEnv; get: (key: 'desktopBearer') => string | undefined },
-  scope: 'catalogue:read' | 'art:read' | 'art:write' | 'collection:write' | 'binders:write',
+  scope: DesktopScope,
 ): Promise<string> {
   const bearer = c.get('desktopBearer');
-  if (!bearer) throw new Error('desktop_token_invalid');
+  if (!bearer) throw new ApplicationError('desktop_token_invalid', 401);
   return requireDesktopToken(c.env.DB, bearer, scope);
-}
-
-function apiFailure(
-  c: import('hono').Context<{ Bindings: CloudflareEnv; Variables: AuthVars }>,
-  error: unknown,
-): Response {
-  const code =
-    (error instanceof ApplicationError
-      ? error.code
-      : error instanceof BinderDomainError || error instanceof CollectionDomainError
-        ? error.code
-        : error instanceof Error
-          ? error.message.split(':', 1)[0]
-          : 'internal_error') ?? 'internal_error';
-  const conflict = new Set([
-    'binder_version_not_draft',
-    'binder_revision_conflict',
-    'binder_last_page',
-    'binder_page_order_invalid',
-    'binder_page_limit_reached',
-    'collection_revision_conflict',
-    'collection_mutation_conflict',
-    'collection_quantity_out_of_bounds',
-    'pair_code_already_consumed',
-    'art_upload_version_conflict',
-  ]);
-  const invalid = new Set([
-    'invalid_body',
-    'invalid_filter',
-    'invalid_json',
-    'invalid_catalogue_source_cursor',
-    'binder_page_window_invalid',
-    'binder_slot_out_of_bounds',
-    'art_upload_not_webp',
-    'art_upload_checksum_mismatch',
-    'pair_code_invalid',
-    'backup_invalid',
-    'invalid_variant',
-    'language_mismatch',
-    'invalid_desktop_scopes',
-    'staged_sync_empty',
-    'binder_arrangement_card_missing',
-    'collection_not_found',
-  ]);
-  const status =
-    code === 'unauthorized' ||
-    code === 'desktop_token_invalid' ||
-    code === 'desktop_token_scope_missing'
-      ? 401
-      : error instanceof ApplicationError
-        ? error.status
-        : code.endsWith('_not_found') || code === 'card_not_found' || code === 'art_not_found'
-          ? 404
-          : conflict.has(code)
-            ? 409
-            : invalid.has(code)
-              ? 400
-              : 500;
-  const requestId = c.get('requestId');
-  if (status >= 500)
-    logError({
-      evt: 'api.request_failed',
-      requestId,
-      method: c.req.method,
-      path: new URL(c.req.url).pathname,
-      status,
-      code,
-      err: describeError(error),
-      stack: error instanceof Error ? error.stack : undefined,
-    });
-  return c.json({ ok: false, error: status === 500 ? 'internal_error' : code, requestId }, status);
 }
 
 desktopPublic.post('/desktop/pair/redeem', async (c) => {
@@ -319,8 +219,7 @@ desktop.post('/desktop/art/upload-tokens/bulk', async (c) => {
     const ownerId = await desktopOwner(c, 'art:write');
     const parsed = bulkUploadRequestBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
-    const uploads = [];
-    for (const item of parsed.data.uploads) {
+    const uploads = await mapConcurrent(parsed.data.uploads, 8, async (item) => {
       const token = await createArtUploadToken(
         c.env.DB,
         ownerId,
@@ -329,13 +228,13 @@ desktop.post('/desktop/art/upload-tokens/bulk', async (c) => {
         item.sha256,
         item.maxBytes,
       );
-      uploads.push({
+      return {
         cardId: item.cardId,
         variant: item.variant,
         token,
         uploadPath: `/api/desktop/art/uploads/${token}`,
-      });
-    }
+      };
+    });
     return c.json({ ok: true, uploads }, 201);
   } catch (error) {
     return apiFailure(c, error);
@@ -363,7 +262,7 @@ desktop.get('/desktop/catalogue/search', async (c) => {
       return c.json({ ok: false, error: 'invalid_filter' }, 400);
     return c.json({
       ok: true,
-      ...(await searchCards(c.env.DB, ownerId, {
+      ...(await ownerOperations(c.env, ownerId).searchCatalogue({
         query: query.q,
         language: language?.success ? language.data : undefined,
         category: category?.success ? category.data : undefined,
@@ -371,6 +270,7 @@ desktop.get('/desktop/catalogue/search', async (c) => {
         species: query.species,
         limit: asPositiveInt(query.limit, 50, 100),
         offset: Math.max(0, Number.parseInt(query.offset ?? '0', 10) || 0),
+        cursor: query.cursor ?? null,
       })),
     });
   } catch (error) {
@@ -392,23 +292,18 @@ desktop.get('/desktop/catalogue/sources', async (c) => {
 });
 desktop.get('/desktop/catalogue/:id', async (c) => {
   try {
-    const card = await getCardDetail(
-      c.env.DB,
-      await desktopOwner(c, 'catalogue:read'),
-      c.req.param('id'),
-    );
-    return card ? c.json({ ok: true, card }) : c.json({ ok: false, error: 'card_not_found' }, 404);
+    const operations = ownerOperations(c.env, await desktopOwner(c, 'catalogue:read'));
+    return c.json({ ok: true, card: await operations.cardDetail(c.req.param('id')) });
   } catch (error) {
     return apiFailure(c, error);
   }
 });
 desktop.get('/desktop/art/manifest', async (c) => {
   try {
-    await desktopOwner(c, 'art:read');
+    const operations = ownerOperations(c.env, await desktopOwner(c, 'art:read'));
     return c.json({
       ok: true,
-      ...(await listArtManifest(
-        c.env.DB,
+      ...(await operations.artManifest(
         c.req.query('cursor') ?? null,
         asPositiveInt(c.req.query('limit'), 100, 500),
       )),
@@ -419,17 +314,11 @@ desktop.get('/desktop/art/manifest', async (c) => {
 });
 desktop.get('/desktop/art/:cardId/:variant', async (c) => {
   try {
-    await desktopOwner(c, 'art:read');
+    const operations = ownerOperations(c.env, await desktopOwner(c, 'art:read'));
     const variant = c.req.param('variant');
     if (variant !== 'high' && variant !== 'low')
       return c.json({ ok: false, error: 'invalid_variant' }, 400);
-    const response = await getArtResponse(
-      c.env.DB,
-      c.env.ART,
-      c.req.param('cardId'),
-      variant,
-      c.req.raw,
-    );
+    const response = await operations.art(c.req.param('cardId'), variant, c.req.raw);
     return response ?? c.json({ ok: false, error: 'art_not_found' }, 404);
   } catch (error) {
     return apiFailure(c, error);
@@ -442,10 +331,7 @@ desktop.put('/desktop/collection/:cardId', async (c) => {
     const ownerId = await desktopOwner(c, 'collection:write');
     return c.json({
       ok: true,
-      ...(await setCollectionState(c.env.DB, ownerId, {
-        ...parsed.data,
-        cardId: c.req.param('cardId'),
-      })),
+      ...(await ownerOperations(c.env, ownerId).setCollection(c.req.param('cardId'), parsed.data)),
     });
   } catch (error) {
     return apiFailure(c, error);
@@ -455,14 +341,10 @@ desktop.post('/desktop/collection/:cardId/increment', async (c) => {
   try {
     const parsed = collectionIncrementBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
-    const result = await incrementCollectionQuantity(
-      c.env.DB,
+    const result = await ownerOperations(
+      c.env,
       await desktopOwner(c, 'collection:write'),
-      {
-        ...parsed.data,
-        cardId: c.req.param('cardId'),
-      },
-    );
+    ).incrementCollection(c.req.param('cardId'), parsed.data);
     return c.json({ ok: true, ...result });
   } catch (error) {
     return apiFailure(c, error);
@@ -472,10 +354,10 @@ desktop.patch('/desktop/collection/:cardId/notes', async (c) => {
   try {
     const parsed = collectionNotesBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
-    const result = await patchCollectionNotes(c.env.DB, await desktopOwner(c, 'collection:write'), {
-      ...parsed.data,
-      cardId: c.req.param('cardId'),
-    });
+    const result = await ownerOperations(
+      c.env,
+      await desktopOwner(c, 'collection:write'),
+    ).patchCollectionNotes(c.req.param('cardId'), parsed.data);
     return c.json({ ok: true, ...result });
   } catch (error) {
     return apiFailure(c, error);
@@ -485,7 +367,7 @@ desktop.get('/desktop/binders', async (c) => {
   try {
     return c.json({
       ok: true,
-      binders: await listBinders(c.env.DB, await desktopOwner(c, 'binders:write')),
+      binders: await ownerOperations(c.env, await desktopOwner(c, 'binders:write')).listBinders(),
     });
   } catch (error) {
     return apiFailure(c, error);
@@ -495,13 +377,10 @@ desktop.get('/desktop/binders/versions/:id', async (c) => {
   try {
     const page = Math.max(0, Number.parseInt(c.req.query('page') ?? '0', 10) || 0);
     const limit = asPositiveInt(c.req.query('limit'), 1, 4);
-    const binder = await getBinderVersion(
-      c.env.DB,
+    const binder = await ownerOperations(
+      c.env,
       await desktopOwner(c, 'binders:write'),
-      c.req.param('id'),
-      page,
-      limit,
-    );
+    ).binderVersion(c.req.param('id'), page, limit);
     return c.json({
       ok: true,
       binder,
@@ -514,13 +393,10 @@ desktop.get('/desktop/binders/versions/:id', async (c) => {
 desktop.get('/desktop/binders/versions/:id/shortages', async (c) => {
   try {
     const offset = Math.max(0, Number.parseInt(c.req.query('offset') ?? '0', 10) || 0);
-    const result = await getBinderVersionShortages(
-      c.env.DB,
+    const result = await ownerOperations(
+      c.env,
       await desktopOwner(c, 'binders:write'),
-      c.req.param('id'),
-      offset,
-      asPositiveInt(c.req.query('limit'), 100, 100),
-    );
+    ).binderShortages(c.req.param('id'), offset, asPositiveInt(c.req.query('limit'), 100, 100));
     return c.json({ ok: true, ...result });
   } catch (error) {
     return apiFailure(c, error);
@@ -533,9 +409,7 @@ desktop.post('/desktop/binders', async (c) => {
     return c.json(
       {
         ok: true,
-        binder: await createBinder(
-          c.env.DB,
-          await desktopOwner(c, 'binders:write'),
+        binder: await ownerOperations(c.env, await desktopOwner(c, 'binders:write')).createBinder(
           parsed.data.name,
           parsed.data.layout,
         ),
@@ -548,17 +422,13 @@ desktop.post('/desktop/binders', async (c) => {
 });
 desktop.put('/desktop/binders/versions/:id/slot', async (c) => {
   try {
-    const parsed = compatibleSlotBody.safeParse(await parsedJson(c.req.raw));
+    const parsed = binderSlotSetRequestSchema.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json({
       ok: true,
-      binder: await setBinderSlot(
-        c.env.DB,
-        await desktopOwner(c, 'binders:write'),
+      binder: await ownerOperations(c.env, await desktopOwner(c, 'binders:write')).setBinderSlot(
         c.req.param('id'),
-        parsed.data.page,
-        parsed.data.row,
-        parsed.data.column,
+        parsed.data,
         parsed.data.cardId,
         parsed.data.expectedRevision,
       ),
@@ -573,9 +443,7 @@ desktop.post('/desktop/binders/versions/:id/swap', async (c) => {
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json({
       ok: true,
-      binder: await swapBinderSlots(
-        c.env.DB,
-        await desktopOwner(c, 'binders:write'),
+      binder: await ownerOperations(c.env, await desktopOwner(c, 'binders:write')).swapBinderSlots(
         c.req.param('id'),
         parsed.data.source,
         parsed.data.target,
@@ -588,16 +456,11 @@ desktop.post('/desktop/binders/versions/:id/swap', async (c) => {
 });
 desktop.get('/desktop/binders/versions/:id/suggest', async (c) => {
   try {
-    const binder = await getBinderVersion(
-      c.env.DB,
-      await desktopOwner(c, 'binders:write'),
-      c.req.param('id'),
-    );
-    const shortagePage = await getBinderVersionShortages(
-      c.env.DB,
-      await desktopOwner(c, 'binders:write'),
-      c.req.param('id'),
-    );
+    const operations = ownerOperations(c.env, await desktopOwner(c, 'binders:write'));
+    const [binder, shortagePage] = await Promise.all([
+      operations.binderVersion(c.req.param('id')),
+      operations.binderShortages(c.req.param('id')),
+    ]);
     return c.json({
       ok: true,
       shortages: shortagePage.shortages,
@@ -624,7 +487,7 @@ browser.get('/dashboard', async (c) => {
     const [collection, pricing, binders, activeShortages] = await Promise.all([
       collectionSummary(c.env.DB, ownerId),
       priceCoverage(c.env.DB, ownerId),
-      listBinders(c.env.DB, ownerId),
+      ownerOperations(c.env, ownerId).listBinders(),
       activeBinderShortages(c.env.DB, ownerId),
     ]);
     return c.json({ ok: true, collection, pricing, binderCount: binders.length, activeShortages });
@@ -650,7 +513,7 @@ browser.get('/catalogue/search', async (c) => {
             : undefined;
     if (query.owned !== undefined && owned === undefined)
       return c.json({ ok: false, error: 'invalid_filter' }, 400);
-    const result = await searchCards(c.env.DB, sessionOwner(c), {
+    const result = await ownerOperations(c.env, sessionOwner(c)).searchCatalogue({
       query: query.q,
       language: language?.success ? language.data : undefined,
       category: category?.success ? category.data : undefined,
@@ -659,6 +522,7 @@ browser.get('/catalogue/search', async (c) => {
       owned,
       limit: asPositiveInt(query.limit, 50, 100),
       offset: Math.max(0, Number.parseInt(query.offset ?? '0', 10) || 0),
+      cursor: query.cursor ?? null,
     });
     return c.json({ ok: true, ...result });
   } catch (error) {
@@ -668,8 +532,8 @@ browser.get('/catalogue/search', async (c) => {
 
 browser.get('/catalogue/:id', async (c) => {
   try {
-    const card = await getCardDetail(c.env.DB, sessionOwner(c), c.req.param('id'));
-    return card ? c.json({ ok: true, card }) : c.json({ ok: false, error: 'card_not_found' }, 404);
+    const operations = ownerOperations(c.env, sessionOwner(c));
+    return c.json({ ok: true, card: await operations.cardDetail(c.req.param('id')) });
   } catch (error) {
     return apiFailure(c, error);
   }
@@ -793,10 +657,10 @@ browser.put('/collection/:cardId', async (c) => {
     const parsed = compatibleCollectionSetBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     const ownerId = sessionOwner(c);
-    const result = await setCollectionState(c.env.DB, ownerId, {
-      ...parsed.data,
-      cardId: c.req.param('cardId'),
-    });
+    const result = await ownerOperations(c.env, ownerId).setCollection(
+      c.req.param('cardId'),
+      parsed.data,
+    );
     await logAudit(c.env.DB, {
       actor: ownerId,
       action: 'collection.set',
@@ -812,10 +676,10 @@ browser.post('/collection/:cardId/increment', async (c) => {
   try {
     const parsed = collectionIncrementBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
-    const result = await incrementCollectionQuantity(c.env.DB, sessionOwner(c), {
-      ...parsed.data,
-      cardId: c.req.param('cardId'),
-    });
+    const result = await ownerOperations(c.env, sessionOwner(c)).incrementCollection(
+      c.req.param('cardId'),
+      parsed.data,
+    );
     return c.json({ ok: true, ...result });
   } catch (error) {
     return apiFailure(c, error);
@@ -825,10 +689,10 @@ browser.patch('/collection/:cardId/notes', async (c) => {
   try {
     const parsed = collectionNotesBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
-    const result = await patchCollectionNotes(c.env.DB, sessionOwner(c), {
-      ...parsed.data,
-      cardId: c.req.param('cardId'),
-    });
+    const result = await ownerOperations(c.env, sessionOwner(c)).patchCollectionNotes(
+      c.req.param('cardId'),
+      parsed.data,
+    );
     return c.json({ ok: true, ...result });
   } catch (error) {
     return apiFailure(c, error);
@@ -837,7 +701,10 @@ browser.patch('/collection/:cardId/notes', async (c) => {
 
 browser.get('/binders', async (c) => {
   try {
-    return c.json({ ok: true, binders: await listBinders(c.env.DB, sessionOwner(c)) });
+    return c.json({
+      ok: true,
+      binders: await ownerOperations(c.env, sessionOwner(c)).listBinders(),
+    });
   } catch (error) {
     return apiFailure(c, error);
   }
@@ -849,7 +716,10 @@ browser.post('/binders', async (c) => {
     return c.json(
       {
         ok: true,
-        binder: await createBinder(c.env.DB, sessionOwner(c), parsed.data.name, parsed.data.layout),
+        binder: await ownerOperations(c.env, sessionOwner(c)).createBinder(
+          parsed.data.name,
+          parsed.data.layout,
+        ),
       },
       201,
     );
@@ -859,9 +729,7 @@ browser.post('/binders', async (c) => {
 });
 browser.get('/binders/versions/:id', async (c) => {
   try {
-    const result = await getBinderVersion(
-      c.env.DB,
-      sessionOwner(c),
+    const result = await ownerOperations(c.env, sessionOwner(c)).binderVersion(
       c.req.param('id'),
       Math.max(0, Number.parseInt(c.req.query('page') ?? '0', 10) || 0),
       asPositiveInt(c.req.query('limit'), 1, 4),
@@ -879,9 +747,7 @@ browser.get('/binders/versions/:id/shortages', async (c) => {
   try {
     return c.json({
       ok: true,
-      ...(await getBinderVersionShortages(
-        c.env.DB,
-        sessionOwner(c),
+      ...(await ownerOperations(c.env, sessionOwner(c)).binderShortages(
         c.req.param('id'),
         Math.max(0, Number.parseInt(c.req.query('offset') ?? '0', 10) || 0),
         asPositiveInt(c.req.query('limit'), 100, 100),
@@ -893,8 +759,16 @@ browser.get('/binders/versions/:id/shortages', async (c) => {
 });
 browser.post('/binders/versions/:id/clone', async (c) => {
   try {
+    const parsed = binderRevisionRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json(
-      { ok: true, binder: await cloneBinderVersion(c.env.DB, sessionOwner(c), c.req.param('id')) },
+      {
+        ok: true,
+        binder: await ownerOperations(c.env, sessionOwner(c)).cloneBinderVersion(
+          c.req.param('id'),
+          parsed.data.expectedRevision,
+        ),
+      },
       201,
     );
   } catch (error) {
@@ -903,9 +777,14 @@ browser.post('/binders/versions/:id/clone', async (c) => {
 });
 browser.post('/binders/versions/:id/activate', async (c) => {
   try {
+    const parsed = binderRevisionRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json({
       ok: true,
-      binder: await activateBinderVersion(c.env.DB, sessionOwner(c), c.req.param('id')),
+      binder: await ownerOperations(c.env, sessionOwner(c)).activateBinderVersion(
+        c.req.param('id'),
+        parsed.data.expectedRevision,
+      ),
     });
   } catch (error) {
     return apiFailure(c, error);
@@ -913,17 +792,13 @@ browser.post('/binders/versions/:id/activate', async (c) => {
 });
 browser.put('/binders/versions/:id/slot', async (c) => {
   try {
-    const parsed = compatibleSlotBody.safeParse(await parsedJson(c.req.raw));
+    const parsed = binderSlotSetRequestSchema.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json({
       ok: true,
-      binder: await setBinderSlot(
-        c.env.DB,
-        sessionOwner(c),
+      binder: await ownerOperations(c.env, sessionOwner(c)).setBinderSlot(
         c.req.param('id'),
-        parsed.data.page,
-        parsed.data.row,
-        parsed.data.column,
+        parsed.data,
         parsed.data.cardId,
         parsed.data.expectedRevision,
       ),
@@ -938,9 +813,7 @@ browser.post('/binders/versions/:id/swap', async (c) => {
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json({
       ok: true,
-      binder: await swapBinderSlots(
-        c.env.DB,
-        sessionOwner(c),
+      binder: await ownerOperations(c.env, sessionOwner(c)).swapBinderSlots(
         c.req.param('id'),
         parsed.data.source,
         parsed.data.target,
@@ -957,11 +830,10 @@ browser.post('/binders/versions/:id/arrange', async (c) => {
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json({
       ok: true,
-      binder: await arrangeBinderVersion(
-        c.env.DB,
-        sessionOwner(c),
+      binder: await ownerOperations(c.env, sessionOwner(c)).arrangeBinderVersion(
         c.req.param('id'),
         parsed.data.mode,
+        parsed.data.expectedRevision,
       ),
     });
   } catch (error) {
@@ -970,8 +842,16 @@ browser.post('/binders/versions/:id/arrange', async (c) => {
 });
 browser.post('/binders/versions/:id/pages', async (c) => {
   try {
+    const parsed = binderRevisionRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json(
-      { ok: true, binder: await addBinderPage(c.env.DB, sessionOwner(c), c.req.param('id')) },
+      {
+        ok: true,
+        binder: await ownerOperations(c.env, sessionOwner(c)).addBinderPage(
+          c.req.param('id'),
+          parsed.data.expectedRevision,
+        ),
+      },
       201,
     );
   } catch (error) {
@@ -980,13 +860,14 @@ browser.post('/binders/versions/:id/pages', async (c) => {
 });
 browser.delete('/binders/versions/:id/pages/:pageId', async (c) => {
   try {
+    const parsed = binderRevisionRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json({
       ok: true,
-      binder: await deleteBinderPage(
-        c.env.DB,
-        sessionOwner(c),
+      binder: await ownerOperations(c.env, sessionOwner(c)).deleteBinderPage(
         c.req.param('id'),
         c.req.param('pageId'),
+        parsed.data.expectedRevision,
       ),
     });
   } catch (error) {
@@ -999,11 +880,10 @@ browser.put('/binders/versions/:id/pages/order', async (c) => {
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json({
       ok: true,
-      binder: await reorderBinderPages(
-        c.env.DB,
-        sessionOwner(c),
+      binder: await ownerOperations(c.env, sessionOwner(c)).reorderBinderPages(
         c.req.param('id'),
         parsed.data.pageIds,
+        parsed.data.expectedRevision,
       ),
     });
   } catch (error) {
@@ -1013,7 +893,18 @@ browser.put('/binders/versions/:id/pages/order', async (c) => {
 
 browser.post('/backups', async (c) => {
   try {
-    return c.json({ ok: true, ...(await createBackup(c.env.DB, c.env.ART, sessionOwner(c))) }, 201);
+    const ownerId = sessionOwner(c);
+    const rate = await c.env.AUTH_COORDINATOR.getByName(`backup:${ownerId}`).rateLimit(
+      'create',
+      1,
+      BACKUP_CREATE_WINDOW_SECONDS,
+      Math.floor(Date.now() / 1000),
+    );
+    if (!rate.allowed) {
+      c.header('retry-after', String(rate.retryAfter));
+      return c.json({ ok: false, error: 'rate_limited', requestId: c.get('requestId') }, 429);
+    }
+    return c.json({ ok: true, ...(await createBackup(c.env.DB, c.env.ART, ownerId)) }, 201);
   } catch (error) {
     return apiFailure(c, error);
   }
@@ -1057,10 +948,10 @@ browser.delete('/desktop/tokens/:id', async (c) => {
 });
 browser.get('/art/manifest', async (c) => {
   try {
+    const operations = ownerOperations(c.env, sessionOwner(c));
     return c.json({
       ok: true,
-      ...(await listArtManifest(
-        c.env.DB,
+      ...(await operations.artManifest(
         c.req.query('cursor') ?? null,
         asPositiveInt(c.req.query('limit'), 100, 500),
       )),
@@ -1071,16 +962,11 @@ browser.get('/art/manifest', async (c) => {
 });
 browser.get('/art/:cardId/:variant', async (c) => {
   try {
+    const operations = ownerOperations(c.env, sessionOwner(c));
     const variant = c.req.param('variant');
     if (variant !== 'high' && variant !== 'low')
       return c.json({ ok: false, error: 'invalid_variant' }, 400);
-    const response = await getArtResponse(
-      c.env.DB,
-      c.env.ART,
-      c.req.param('cardId'),
-      variant,
-      c.req.raw,
-    );
+    const response = await operations.art(c.req.param('cardId'), variant, c.req.raw);
     return response ?? c.json({ ok: false, error: 'art_not_found' }, 404);
   } catch (error) {
     return apiFailure(c, error);

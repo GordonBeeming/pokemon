@@ -10,12 +10,16 @@ import {
   type ImportedCard,
 } from '../lib/catalogue';
 import { nowSeconds } from '../lib/db';
-import { describeError, logInfo, logWarn } from '../lib/log';
+import { describeError, logError, logInfo } from '../lib/log';
 
 const LIST_MAX_BYTES = 25 * 1024 * 1024;
 const DETAIL_MAX_BYTES = 2 * 1024 * 1024;
 const DETAIL_CHUNK_SIZE = 250;
 const OUTBOUND_CONCURRENCY = 5;
+const FETCH_STEP_CONFIG = {
+  retries: { limit: 4, delay: 1_000, backoff: 'exponential' },
+  timeout: '5 minutes',
+} as const;
 
 const cardBriefsSchema = z
   .array(z.object({ id: z.string().trim().min(1).max(256) }).passthrough())
@@ -120,7 +124,7 @@ async function fetchLanguageCards(
   language: LanguageCode,
   step: WorkflowStep,
 ): Promise<ImportedCard[]> {
-  const briefs = await step.do(`list-${language}-cards`, async () => {
+  const briefs = await step.do(`list-${language}-cards`, FETCH_STEP_CONFIG, async () => {
     const parsed = cardBriefsSchema.safeParse(
       await fetchTcgdex(`${encodeURIComponent(language)}/cards`, LIST_MAX_BYTES),
     );
@@ -131,7 +135,7 @@ async function fetchLanguageCards(
   for (let offset = 0; offset < briefs.length; offset += DETAIL_CHUNK_SIZE) {
     const ids = briefs.slice(offset, offset + DETAIL_CHUNK_SIZE);
     const page = Math.floor(offset / DETAIL_CHUNK_SIZE);
-    const transformed = await step.do(`detail-${language}-${page}`, async () => {
+    const transformed = await step.do(`detail-${language}-${page}`, FETCH_STEP_CONFIG, async () => {
       const values = await mapConcurrent(ids, OUTBOUND_CONCURRENCY, (id) =>
         fetchTcgdex(
           `${encodeURIComponent(language)}/cards/${encodeURIComponent(id)}`,
@@ -151,7 +155,7 @@ async function fetchLanguageCards(
   for (let offset = 0; offset < setIds.length; offset += DETAIL_CHUNK_SIZE) {
     const ids = setIds.slice(offset, offset + DETAIL_CHUNK_SIZE);
     const page = Math.floor(offset / DETAIL_CHUNK_SIZE);
-    const setDates = await step.do(`sets-${language}-${page}`, async () =>
+    const setDates = await step.do(`sets-${language}-${page}`, FETCH_STEP_CONFIG, async () =>
       mapConcurrent(ids, OUTBOUND_CONCURRENCY, async (id) => {
         const parsed = setSchema.safeParse(
           await fetchTcgdex(
@@ -186,14 +190,17 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
   ): Promise<void> {
     const language = scheduledLanguage(event);
     const runId = `sync_${event.instanceId}`;
-    await step.do('begin-catalogue-run', async () =>
-      beginStagedCatalogueRun(this.env.DB, language, {
-        runId,
-        complete: true,
-        objectKey: event.payload.objectKey ?? null,
-      }),
-    );
+    const startedAt = Date.now();
+    let currentStep = 'begin-catalogue-run';
     try {
+      await step.do('begin-catalogue-run', async () =>
+        beginStagedCatalogueRun(this.env.DB, language, {
+          runId,
+          complete: true,
+          objectKey: event.payload.objectKey ?? null,
+        }),
+      );
+      currentStep = event.payload.objectKey ? 'read-catalogue-object' : 'fetch-language-cards';
       const cards = event.payload.objectKey
         ? await step.do('read-catalogue-object', async () => {
             const object = await this.env.ART.get(event.payload.objectKey ?? '');
@@ -209,14 +216,17 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
       for (let offset = 0; offset < cards.length; offset += DETAIL_CHUNK_SIZE) {
         const page = Math.floor(offset / DETAIL_CHUNK_SIZE);
         const chunk = cards.slice(offset, offset + DETAIL_CHUNK_SIZE);
+        currentStep = `stage-${language}-${page}`;
         await step.do(`stage-${language}-${page}`, async () => {
           await stageCatalogueCards(this.env.DB, runId, chunk);
           return chunk.length;
         });
       }
+      currentStep = 'apply-catalogue-run';
       const applied = await step.do('apply-catalogue-run', async () =>
         applyStagedCatalogueRun(this.env.DB, runId, event.payload.allowDestructiveDrop ?? false),
       );
+      currentStep = 'cleanup-catalogue-run';
       await step.do('cleanup-catalogue-run', async () => {
         if (event.payload.objectKey?.startsWith('staged/tcgdex/'))
           await this.env.ART.delete(event.payload.objectKey);
@@ -234,6 +244,7 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
         language,
         imported: applied.imported,
         inactive: applied.inactive,
+        durationMs: Date.now() - startedAt,
       });
     } catch (error) {
       const message = describeError(error);
@@ -243,7 +254,16 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
       )
         .bind(nowSeconds(), message, runId)
         .run();
-      logWarn({ evt: 'workflow.catalogue.failed', runId, language, err: message });
+      logError({
+        evt: 'workflow.catalogue.failed',
+        workflowInstanceId: event.instanceId,
+        runId,
+        language,
+        step: currentStep,
+        durationMs: Date.now() - startedAt,
+        err: message,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
       throw error;
     }
   }

@@ -37,6 +37,7 @@ const request = async (path, authorization) => {
   return { status: response.status, body: await response.json() };
 };
 let worker;
+let workerOutput = '';
 
 try {
   await run(['d1', 'migrations', 'apply', 'pokedex-local', '--local', '--persist-to', persist]);
@@ -58,13 +59,32 @@ try {
     '--command',
     sql,
   ]);
-  worker = spawn(wrangler, ['dev', '--local', '--persist-to', persist, '--port', String(port)], {
-    cwd: app,
-    stdio: 'ignore',
+  worker = spawn(
+    wrangler,
+    [
+      'dev',
+      '--config',
+      'wrangler.jsonc',
+      '--local',
+      '--persist-to',
+      persist,
+      '--port',
+      String(port),
+    ],
+    {
+      cwd: app,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  worker.stdout?.on('data', (chunk) => {
+    workerOutput += String(chunk);
+  });
+  worker.stderr?.on('data', (chunk) => {
+    workerOutput += String(chunk);
   });
   for (let attempt = 0; attempt < 40; attempt += 1) {
     try {
-      if ((await fetch(`${base}/api/health`)).status === 200) break;
+      if ((await fetch(`${base}/api/live`)).status === 200) break;
     } catch (error) {
       if (attempt === 39) throw error;
     }
@@ -103,10 +123,12 @@ try {
     invalidCursor.status !== 400
   )
     throw new Error(
-      `catalogue source contract failed: ${JSON.stringify({ sources, invalidCursor })}`,
+      `catalogue source contract failed: ${JSON.stringify({ sources, invalidCursor })}\n${workerOutput}`,
     );
-  if (wrong.status !== 401 || revoked.status !== 401 || raw.status !== 401)
-    throw new Error('desktop token rejection failed');
+  if (wrong.status !== 403 || revoked.status !== 401 || raw.status !== 401)
+    throw new Error(
+      `desktop token rejection failed: ${JSON.stringify({ wrong, revoked, raw })}\n${workerOutput}`,
+    );
   if (ownerA.body.binders.length !== 1 || ownerB.body.binders.length !== 0)
     throw new Error('owner isolation failed');
   process.stdout.write('desktop bearer route verification passed\n');

@@ -1,18 +1,18 @@
+import { DESKTOP_SCOPES, type DesktopScope } from '@pokedex/shared';
 import { z } from 'zod';
 import { newId, nowSeconds } from './db';
 import { ApplicationError } from './log';
 
-export const DESKTOP_SCOPES = [
-  'art:read',
-  'art:write',
-  'catalogue:read',
-  'collection:write',
-  'binders:write',
-] as const;
-export type DesktopScope = (typeof DESKTOP_SCOPES)[number];
+export { DESKTOP_SCOPES, type DesktopScope } from '@pokedex/shared';
 
-const BACKUP_VERSION = 2 as const;
+const LEGACY_BACKUP_VERSION = 2 as const;
+const BACKUP_VERSION = 3 as const;
 const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
+const MAX_BACKUP_CHUNK_BYTES = 1_500_000;
+const MAX_BACKUP_MANIFEST_BYTES = 1_000_000;
+const MAX_LEGACY_BACKUP_BYTES = 2_000_000;
+const BACKUP_QUERY_ROWS = 250;
+const BACKUP_RETENTION_COUNT = 10;
 const RESTORE_CHUNK_ROWS = 250;
 const DESKTOP_TOKEN_MAX_AGE = 60 * 60 * 24 * 90;
 const DESKTOP_ACTIVITY_INTERVAL = 60 * 60;
@@ -115,7 +115,7 @@ const artRow = z
 
 const backupBundleSchema = z
   .object({
-    version: z.literal(BACKUP_VERSION),
+    version: z.literal(LEGACY_BACKUP_VERSION),
     ownerId: z.string().min(1),
     mutationEpoch: z.number().int().nonnegative(),
     createdAt: z.string().datetime(),
@@ -131,6 +131,126 @@ const backupBundleSchema = z
   .strict();
 
 export type BackupBundle = z.infer<typeof backupBundleSchema>;
+
+const backupKindSchema = z.enum([
+  'catalogue',
+  'sources',
+  'collection',
+  'binders',
+  'versions',
+  'pages',
+  'slots',
+  'art_manifest',
+]);
+type BackupKind = z.infer<typeof backupKindSchema>;
+
+const backupChunkSchema = z
+  .object({
+    kind: backupKindSchema,
+    index: z.number().int().nonnegative(),
+    objectKey: z.string().min(1),
+    checksum: z.string().regex(/^[a-f0-9]{64}$/u),
+    bytes: z.number().int().positive().max(MAX_BACKUP_CHUNK_BYTES),
+    rows: z.number().int().nonnegative().max(BACKUP_QUERY_ROWS),
+  })
+  .strict();
+
+const backupManifestSchema = z
+  .object({
+    version: z.literal(BACKUP_VERSION),
+    ownerId: z.string().min(1),
+    mutationEpoch: z.number().int().nonnegative(),
+    createdAt: z.string().datetime(),
+    chunks: z.array(backupChunkSchema).max(100_000),
+  })
+  .strict();
+type BackupManifest = z.infer<typeof backupManifestSchema>;
+
+const backupRowSchemas = {
+  catalogue: catalogueRow,
+  sources: sourceRow,
+  collection: collectionRow,
+  binders: binderRow,
+  versions: versionRow,
+  pages: pageRow,
+  slots: slotRow,
+  art_manifest: artRow,
+} as const satisfies Record<BackupKind, z.ZodType>;
+
+interface BackupQuery {
+  kind: BackupKind;
+  sql: string;
+}
+
+const backupQueries: readonly BackupQuery[] = [
+  {
+    kind: 'catalogue',
+    sql: `SELECT c.rowid AS backup_cursor, c.id, c.name, c.language, c.category, c.set_id,
+      c.set_name, c.number, c.supertype, c.subtype, c.species, c.rarity, c.artist,
+      c.release_date, c.pokedex_number, c.number_sort, c.is_custom, c.is_active,
+      c.created_at, c.updated_at
+     FROM catalogue_cards c WHERE c.rowid > ?2 AND (c.is_custom = 1
+       OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
+       OR EXISTS (SELECT 1 FROM binder_slots s JOIN binder_pages p ON p.id = s.binder_page_id
+         JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
+         WHERE b.owner_id = ?1 AND s.card_id = c.id))
+     ORDER BY c.rowid LIMIT ?3`,
+  },
+  {
+    kind: 'sources',
+    sql: `SELECT s.rowid AS backup_cursor, s.provider, s.source_id, s.card_id, s.language,
+      s.source_updated_at, s.checksum, s.active, s.imported_at
+     FROM card_sources s WHERE s.rowid > ?2 AND EXISTS (
+       SELECT 1 FROM catalogue_cards c WHERE c.id = s.card_id AND (c.is_custom = 1
+         OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
+         OR EXISTS (SELECT 1 FROM binder_slots bs JOIN binder_pages p ON p.id = bs.binder_page_id
+           JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
+           WHERE b.owner_id = ?1 AND bs.card_id = c.id)))
+     ORDER BY s.rowid LIMIT ?3`,
+  },
+  {
+    kind: 'collection',
+    sql: `SELECT cc.rowid AS backup_cursor, cc.card_id, cc.quantity, cc.notes, cc.revision,
+      cc.updated_at FROM collection_cards cc
+     WHERE cc.owner_id = ?1 AND cc.rowid > ?2 ORDER BY cc.rowid LIMIT ?3`,
+  },
+  {
+    kind: 'binders',
+    sql: `SELECT b.rowid AS backup_cursor, b.id, b.owner_id, b.name, b.active_version_id,
+      b.created_at, b.updated_at FROM binders b
+     WHERE b.owner_id = ?1 AND b.rowid > ?2 ORDER BY b.rowid LIMIT ?3`,
+  },
+  {
+    kind: 'versions',
+    sql: `SELECT v.rowid AS backup_cursor, v.id, v.binder_id, v.version_number, v.status,
+      v.layout_kind, v.rows, v.columns, v.created_at, v.activated_at, v.revision
+     FROM binder_versions v JOIN binders b ON b.id = v.binder_id
+     WHERE b.owner_id = ?1 AND v.rowid > ?2 ORDER BY v.rowid LIMIT ?3`,
+  },
+  {
+    kind: 'pages',
+    sql: `SELECT p.rowid AS backup_cursor, p.id, p.binder_version_id, p.position
+     FROM binder_pages p JOIN binder_versions v ON v.id = p.binder_version_id
+     JOIN binders b ON b.id = v.binder_id
+     WHERE b.owner_id = ?1 AND p.rowid > ?2 ORDER BY p.rowid LIMIT ?3`,
+  },
+  {
+    kind: 'slots',
+    sql: `SELECT s.rowid AS backup_cursor, s.binder_page_id, s.row_index, s.column_index, s.card_id
+     FROM binder_slots s JOIN binder_pages p ON p.id = s.binder_page_id
+     JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
+     WHERE b.owner_id = ?1 AND s.rowid > ?2 ORDER BY s.rowid LIMIT ?3`,
+  },
+  {
+    kind: 'art_manifest',
+    sql: `SELECT m.rowid AS backup_cursor, m.card_id, m.variant, m.object_key, NULL AS backup_object_key,
+      m.sha256, m.bytes, m.version, m.updated_at, c.is_custom AS backup_is_custom
+     FROM art_manifest m JOIN catalogue_cards c ON c.id = m.card_id
+     WHERE m.rowid > ?2 AND (c.is_custom = 1
+       OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id))
+     ORDER BY m.rowid LIMIT ?3`,
+  },
+];
 
 function toHex(bytes: ArrayBuffer): string {
   return Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -150,40 +270,101 @@ function validScopes(value: unknown): value is DesktopScope[] {
   );
 }
 
-function parseRows<T>(schema: z.ZodType<T>, value: unknown): T[] {
-  return z.array(schema).parse(value);
+interface BackupRawRow {
+  backup_cursor: number;
+  backup_is_custom?: number;
+  [key: string]: unknown;
 }
 
-async function copyCustomArt(
+async function deleteBackupPrefix(art: R2Bucket, prefix: string): Promise<void> {
+  let cursor: string | undefined;
+  do {
+    const listed = await art.list({ prefix, cursor, limit: 1_000 });
+    const keys = listed.objects.map((object) => object.key);
+    if (keys.length > 0) await art.delete(keys);
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor);
+}
+
+async function pruneBackups(db: D1Database, art: R2Bucket, ownerId: string): Promise<void> {
+  while (true) {
+    const expired = await db
+      .prepare(
+        `SELECT id FROM backup_runs WHERE owner_id = ?1 AND checksum <> 'pending'
+         ORDER BY created_at DESC, id DESC LIMIT 25 OFFSET ?2`,
+      )
+      .bind(ownerId, BACKUP_RETENTION_COUNT)
+      .all<{ id: string }>();
+    if (expired.results.length === 0) return;
+    for (const run of expired.results) {
+      await deleteBackupPrefix(art, `backups/${ownerId}/${run.id}/`);
+      await db
+        .prepare('DELETE FROM backup_runs WHERE id = ?1 AND owner_id = ?2')
+        .bind(run.id, ownerId)
+        .run();
+    }
+  }
+}
+
+async function writeBackupRows(
   art: R2Bucket,
   ownerId: string,
   backupId: string,
-  rows: Array<Omit<BackupBundle['artManifest'][number], 'backup_object_key'>>,
-  customCardIds: ReadonlySet<string>,
-): Promise<{ rows: BackupBundle['artManifest']; copiedKeys: string[] }> {
-  const copied: BackupBundle['artManifest'] = [];
-  const copiedKeys: string[] = [];
-  try {
-    for (const row of rows) {
-      let backupObjectKey: string | null = null;
-      if (customCardIds.has(row.card_id)) {
-        const object = await art.get(row.object_key);
-        if (!object) throw new ApplicationError('backup_custom_art_missing', 500);
-        backupObjectKey = `backups/${ownerId}/${backupId}/art/${encodeURIComponent(row.card_id)}/${row.variant}.webp`;
-        await art.put(backupObjectKey, object.body, {
-          httpMetadata: object.httpMetadata,
-          customMetadata: object.customMetadata,
-          sha256: row.sha256,
-        });
-        copiedKeys.push(backupObjectKey);
-      }
-      copied.push({ ...row, backup_object_key: backupObjectKey });
-    }
-  } catch (error) {
-    await Promise.all(copiedKeys.map((key) => art.delete(key)));
-    throw error;
+  kind: BackupKind,
+  rows: unknown[],
+  chunks: BackupManifest['chunks'],
+): Promise<number> {
+  const payload = JSON.stringify(rows);
+  const bytes = new TextEncoder().encode(payload).byteLength;
+  if (bytes > MAX_BACKUP_CHUNK_BYTES && rows.length > 1) {
+    const midpoint = Math.ceil(rows.length / 2);
+    return (
+      (await writeBackupRows(art, ownerId, backupId, kind, rows.slice(0, midpoint), chunks)) +
+      (await writeBackupRows(art, ownerId, backupId, kind, rows.slice(midpoint), chunks))
+    );
   }
-  return { rows: copied, copiedKeys };
+  if (bytes > MAX_BACKUP_CHUNK_BYTES) throw new ApplicationError('backup_row_too_large', 413);
+  const index = chunks.filter((chunk) => chunk.kind === kind).length;
+  const objectKey = `backups/${ownerId}/${backupId}/chunks/${kind}/${index}.json`;
+  const checksum = await hashText(payload);
+  await art.put(objectKey, payload, {
+    httpMetadata: { contentType: 'application/json' },
+    customMetadata: { ownerId, backupId, kind, checksum },
+    sha256: checksum,
+  });
+  chunks.push({ kind, index, objectKey, checksum, bytes, rows: rows.length });
+  return bytes;
+}
+
+async function backupArtRows(
+  art: R2Bucket,
+  ownerId: string,
+  backupId: string,
+  rawRows: BackupRawRow[],
+): Promise<BackupBundle['artManifest']> {
+  const rows: BackupBundle['artManifest'] = [];
+  for (const raw of rawRows) {
+    const { backup_cursor: _cursor, backup_is_custom: isCustom, ...value } = raw;
+    void _cursor;
+    const row = artRow.parse(value);
+    let backupObjectKey: string | null = null;
+    if (isCustom === 1) {
+      const object = await art.get(row.object_key);
+      if (!object) throw new ApplicationError('backup_custom_art_missing', 500);
+      backupObjectKey = `backups/${ownerId}/${backupId}/art/${encodeURIComponent(row.card_id)}/${row.variant}.webp`;
+      await art.put(backupObjectKey, object.body, {
+        httpMetadata: object.httpMetadata,
+        customMetadata: object.customMetadata,
+        sha256: row.sha256,
+      });
+    }
+    rows.push({ ...row, backup_object_key: backupObjectKey });
+  }
+  return rows;
+}
+
+function parseBackupRows(kind: Exclude<BackupKind, 'art_manifest'>, rows: unknown[]): unknown[] {
+  return z.array(backupRowSchemas[kind]).parse(rows);
 }
 
 export async function createBackup(
@@ -191,103 +372,13 @@ export async function createBackup(
   art: R2Bucket,
   ownerId: string,
 ): Promise<{ id: string; checksum: string }> {
-  const statements = [
-    db.prepare('SELECT mutation_epoch FROM users WHERE id = ?1').bind(ownerId),
-    db
-      .prepare(
-        `SELECT c.id, c.name, c.language, c.category, c.set_id, c.set_name, c.number,
-          c.supertype, c.subtype, c.species, c.rarity, c.artist, c.release_date,
-          c.pokedex_number, c.number_sort, c.is_custom, c.is_active, c.created_at, c.updated_at
-         FROM catalogue_cards c WHERE c.is_custom = 1
-           OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
-           OR EXISTS (SELECT 1 FROM binder_slots s JOIN binder_pages p ON p.id = s.binder_page_id
-             JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
-             WHERE b.owner_id = ?1 AND s.card_id = c.id)`,
-      )
-      .bind(ownerId),
-    db
-      .prepare(
-        `SELECT s.provider, s.source_id, s.card_id, s.language, s.source_updated_at, s.checksum, s.active, s.imported_at
-         FROM card_sources s WHERE EXISTS (
-           SELECT 1 FROM catalogue_cards c WHERE c.id = s.card_id AND (c.is_custom = 1
-             OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
-             OR EXISTS (SELECT 1 FROM binder_slots bs JOIN binder_pages p ON p.id = bs.binder_page_id
-               JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
-               WHERE b.owner_id = ?1 AND bs.card_id = c.id)))`,
-      )
-      .bind(ownerId),
-    db
-      .prepare(
-        'SELECT card_id, quantity, notes, revision, updated_at FROM collection_cards WHERE owner_id = ?1',
-      )
-      .bind(ownerId),
-    db
-      .prepare(
-        'SELECT id, owner_id, name, active_version_id, created_at, updated_at FROM binders WHERE owner_id = ?1',
-      )
-      .bind(ownerId),
-    db
-      .prepare(
-        'SELECT v.id, v.binder_id, v.version_number, v.status, v.layout_kind, v.rows, v.columns, v.created_at, v.activated_at, v.revision FROM binder_versions v JOIN binders b ON b.id = v.binder_id WHERE b.owner_id = ?1',
-      )
-      .bind(ownerId),
-    db
-      .prepare(
-        'SELECT p.id, p.binder_version_id, p.position FROM binder_pages p JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id WHERE b.owner_id = ?1',
-      )
-      .bind(ownerId),
-    db
-      .prepare(
-        'SELECT s.binder_page_id, s.row_index, s.column_index, s.card_id FROM binder_slots s JOIN binder_pages p ON p.id = s.binder_page_id JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id WHERE b.owner_id = ?1',
-      )
-      .bind(ownerId),
-    db
-      .prepare(
-        `SELECT m.card_id, m.variant, m.object_key, m.sha256, m.bytes, m.version, m.updated_at
-         FROM art_manifest m WHERE EXISTS (SELECT 1 FROM catalogue_cards c WHERE c.id = m.card_id AND
-           (c.is_custom = 1 OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)))`,
-      )
-      .bind(ownerId),
-  ];
-  const snapshot = await db.batch(statements);
-  const epoch = z
-    .array(z.object({ mutation_epoch: z.number().int().nonnegative() }))
-    .min(1)
-    .parse(snapshot[0]?.results)[0]?.mutation_epoch;
-  if (epoch === undefined) throw new ApplicationError('backup_owner_not_found', 404);
-  const catalogue = parseRows(catalogueRow, snapshot[1]?.results);
-  const sources = parseRows(sourceRow, snapshot[2]?.results);
-  const collection = parseRows(collectionRow, snapshot[3]?.results);
-  const binders = parseRows(binderRow, snapshot[4]?.results);
-  const versions = parseRows(versionRow, snapshot[5]?.results);
-  const pages = parseRows(pageRow, snapshot[6]?.results);
-  const slots = parseRows(slotRow, snapshot[7]?.results);
-  const manifestRows = parseRows(artRow.omit({ backup_object_key: true }), snapshot[8]?.results);
-
   const id = newId('backup');
   const objectKey = `backups/${ownerId}/${id}/manifest.json`;
-  const customIds = new Set(catalogue.filter((row) => row.is_custom === 1).map((row) => row.id));
-  const copiedArt = await copyCustomArt(art, ownerId, id, manifestRows, customIds);
-  const bundle: BackupBundle = {
-    version: BACKUP_VERSION,
-    ownerId,
-    mutationEpoch: epoch,
-    createdAt: new Date().toISOString(),
-    catalogue,
-    sources,
-    collection,
-    binders,
-    versions,
-    pages,
-    slots,
-    artManifest: copiedArt.rows,
-  };
-  const payload = JSON.stringify(bundle);
-  if (new TextEncoder().encode(payload).byteLength > MAX_BACKUP_BYTES) {
-    await Promise.all(copiedArt.copiedKeys.map((key) => art.delete(key)));
-    throw new ApplicationError('backup_too_large', 413);
-  }
-  const checksum = await hashText(payload);
+  const owner = await db
+    .prepare('SELECT mutation_epoch FROM users WHERE id = ?1')
+    .bind(ownerId)
+    .first<{ mutation_epoch: number }>();
+  if (!owner) throw new ApplicationError('backup_owner_not_found', 404);
   await db
     .prepare(
       'INSERT INTO backup_runs (id, owner_id, object_key, checksum, created_at) VALUES (?1, ?2, ?3, ?4, ?5)',
@@ -295,6 +386,52 @@ export async function createBackup(
     .bind(id, ownerId, objectKey, 'pending', nowSeconds())
     .run();
   try {
+    const chunks: BackupManifest['chunks'] = [];
+    let totalBytes = 0;
+    for (const query of backupQueries) {
+      let cursor = 0;
+      while (true) {
+        const result = await db
+          .prepare(query.sql)
+          .bind(ownerId, cursor, BACKUP_QUERY_ROWS)
+          .all<BackupRawRow>();
+        if (result.results.length === 0) break;
+        const last = result.results.at(-1);
+        if (!last || !Number.isInteger(last.backup_cursor) || last.backup_cursor <= cursor)
+          throw new ApplicationError('backup_cursor_invalid', 500);
+        cursor = last.backup_cursor;
+        const rows =
+          query.kind === 'art_manifest'
+            ? await backupArtRows(art, ownerId, id, result.results)
+            : parseBackupRows(
+                query.kind,
+                result.results.map(({ backup_cursor: ignored, ...row }) => {
+                  void ignored;
+                  return row;
+                }),
+              );
+        totalBytes += await writeBackupRows(art, ownerId, id, query.kind, rows, chunks);
+        if (totalBytes > MAX_BACKUP_BYTES) throw new ApplicationError('backup_too_large', 413);
+        if (result.results.length < BACKUP_QUERY_ROWS) break;
+      }
+    }
+    const currentOwner = await db
+      .prepare('SELECT mutation_epoch FROM users WHERE id = ?1')
+      .bind(ownerId)
+      .first<{ mutation_epoch: number }>();
+    if (!currentOwner || currentOwner.mutation_epoch !== owner.mutation_epoch)
+      throw new ApplicationError('backup_changed_during_creation', 409);
+    const manifest: BackupManifest = {
+      version: BACKUP_VERSION,
+      ownerId,
+      mutationEpoch: owner.mutation_epoch,
+      createdAt: new Date().toISOString(),
+      chunks,
+    };
+    const payload = JSON.stringify(manifest);
+    if (new TextEncoder().encode(payload).byteLength > MAX_BACKUP_MANIFEST_BYTES)
+      throw new ApplicationError('backup_too_large', 413);
+    const checksum = await hashText(payload);
     await art.put(objectKey, payload, {
       httpMetadata: { contentType: 'application/json' },
       customMetadata: { ownerId, checksum, version: String(BACKUP_VERSION) },
@@ -304,22 +441,20 @@ export async function createBackup(
       .prepare('UPDATE backup_runs SET checksum = ?1 WHERE id = ?2 AND owner_id = ?3')
       .bind(checksum, id, ownerId)
       .run();
+    await pruneBackups(db, art, ownerId);
+    return { id, checksum };
   } catch (error) {
-    await Promise.all([
-      art.delete(objectKey),
-      ...copiedArt.copiedKeys.map((key) => art.delete(key)),
-    ]);
+    await deleteBackupPrefix(art, `backups/${ownerId}/${id}/`);
     await db
       .prepare('DELETE FROM backup_runs WHERE id = ?1 AND checksum = ?2')
       .bind(id, 'pending')
       .run();
     throw error;
   }
-  return { id, checksum };
 }
 
-async function readBackupText(object: R2ObjectBody): Promise<string> {
-  if (object.size > MAX_BACKUP_BYTES) throw new ApplicationError('backup_too_large', 413);
+async function readBackupText(object: R2ObjectBody, maximumBytes: number): Promise<string> {
+  if (object.size > maximumBytes) throw new ApplicationError('backup_too_large', 413);
   const reader = (object.body as ReadableStream<Uint8Array>).getReader();
   const decoder = new TextDecoder();
   let text = '';
@@ -328,7 +463,7 @@ async function readBackupText(object: R2ObjectBody): Promise<string> {
     const next = await reader.read();
     if (next.done) break;
     bytes += next.value.byteLength;
-    if (bytes > MAX_BACKUP_BYTES) {
+    if (bytes > maximumBytes) {
       await reader.cancel('backup exceeded maximum size');
       throw new ApplicationError('backup_too_large', 413);
     }
@@ -370,6 +505,78 @@ async function stageRestore(db: D1Database, runId: string, ownerId: string, bund
     await db.batch(statements.slice(offset, offset + 50));
 }
 
+async function restoreCustomArt(
+  art: R2Bucket,
+  ownerId: string,
+  backupId: string,
+  rows: BackupBundle['artManifest'],
+): Promise<void> {
+  for (const row of rows) {
+    if (!row.backup_object_key) continue;
+    if (!row.backup_object_key.startsWith(`backups/${ownerId}/${backupId}/art/`))
+      throw new ApplicationError('backup_invalid', 400);
+    const backedUp = await art.get(row.backup_object_key);
+    if (!backedUp) throw new ApplicationError('backup_custom_art_missing', 400);
+    await art.put(row.object_key, backedUp.body, {
+      httpMetadata: backedUp.httpMetadata,
+      customMetadata: backedUp.customMetadata,
+      sha256: row.sha256,
+    });
+  }
+}
+
+async function stageManifestRestore(
+  db: D1Database,
+  art: R2Bucket,
+  runId: string,
+  ownerId: string,
+  backupId: string,
+  manifest: BackupManifest,
+): Promise<void> {
+  let totalBytes = 0;
+  const identities = new Set<string>();
+  for (const chunk of manifest.chunks) {
+    const identity = `${chunk.kind}:${chunk.index}`;
+    if (identities.has(identity)) throw new ApplicationError('backup_invalid', 400);
+    identities.add(identity);
+    if (!chunk.objectKey.startsWith(`backups/${ownerId}/${backupId}/chunks/`))
+      throw new ApplicationError('backup_invalid', 400);
+    totalBytes += chunk.bytes;
+    if (totalBytes > MAX_BACKUP_BYTES) throw new ApplicationError('backup_too_large', 413);
+    const object = await art.get(chunk.objectKey);
+    if (!object) throw new ApplicationError('backup_object_missing', 404);
+    if (object.size !== chunk.bytes) throw new ApplicationError('backup_checksum_mismatch', 400);
+    const payload = await readBackupText(object, MAX_BACKUP_CHUNK_BYTES);
+    if ((await hashText(payload)) !== chunk.checksum)
+      throw new ApplicationError('backup_checksum_mismatch', 400);
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(payload);
+    } catch {
+      throw new ApplicationError('backup_invalid', 400);
+    }
+    const rows = z.array(backupRowSchemas[chunk.kind]).safeParse(decoded);
+    if (!rows.success || rows.data.length !== chunk.rows)
+      throw new ApplicationError('backup_invalid', 400);
+    if (
+      chunk.kind === 'binders' &&
+      z
+        .array(binderRow)
+        .parse(rows.data)
+        .some((binder) => binder.owner_id !== ownerId)
+    )
+      throw new ApplicationError('backup_owner_mismatch', 403);
+    if (chunk.kind === 'art_manifest')
+      await restoreCustomArt(art, ownerId, backupId, z.array(artRow).parse(rows.data));
+    await db
+      .prepare(
+        'INSERT INTO backup_restore_chunks (run_id, owner_id, kind, chunk_index, payload_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
+      )
+      .bind(runId, ownerId, chunk.kind, chunk.index, payload, nowSeconds())
+      .run();
+  }
+}
+
 const jsonRows =
   'backup_restore_chunks c, json_each(c.payload_json) j WHERE c.run_id = ?1 AND c.owner_id = ?2';
 
@@ -386,7 +593,7 @@ export async function restoreBackup(
   if (!run || run.checksum === 'pending') throw new ApplicationError('backup_not_found', 404);
   const object = await art.get(run.object_key);
   if (!object) throw new ApplicationError('backup_object_missing', 404);
-  const text = await readBackupText(object);
+  const text = await readBackupText(object, MAX_LEGACY_BACKUP_BYTES);
   if ((await hashText(text)) !== run.checksum)
     throw new ApplicationError('backup_checksum_mismatch', 400);
   let json: unknown;
@@ -395,27 +602,24 @@ export async function restoreBackup(
   } catch {
     throw new ApplicationError('backup_invalid', 400);
   }
-  const parsed = backupBundleSchema.safeParse(json);
-  if (!parsed.success || parsed.data.ownerId !== ownerId)
-    throw new ApplicationError('backup_owner_mismatch', 403);
-  const bundle = parsed.data;
-  if (bundle.binders.some((binder) => binder.owner_id !== ownerId))
-    throw new ApplicationError('backup_owner_mismatch', 403);
-
-  for (const row of bundle.artManifest) {
-    if (!row.backup_object_key) continue;
-    const backedUp = await art.get(row.backup_object_key);
-    if (!backedUp) throw new ApplicationError('backup_custom_art_missing', 400);
-    await art.put(row.object_key, backedUp.body, {
-      httpMetadata: backedUp.httpMetadata,
-      customMetadata: backedUp.customMetadata,
-      sha256: row.sha256,
-    });
-  }
-
   const restoreRunId = newId('restore');
   try {
-    await stageRestore(db, restoreRunId, ownerId, bundle);
+    const manifest = backupManifestSchema.safeParse(json);
+    if (manifest.success) {
+      if (manifest.data.ownerId !== ownerId)
+        throw new ApplicationError('backup_owner_mismatch', 403);
+      await stageManifestRestore(db, art, restoreRunId, ownerId, backupId, manifest.data);
+    } else {
+      const legacy = backupBundleSchema.safeParse(json);
+      if (!legacy.success) throw new ApplicationError('backup_invalid', 400);
+      if (
+        legacy.data.ownerId !== ownerId ||
+        legacy.data.binders.some((binder) => binder.owner_id !== ownerId)
+      )
+        throw new ApplicationError('backup_owner_mismatch', 403);
+      await restoreCustomArt(art, ownerId, backupId, legacy.data.artManifest);
+      await stageRestore(db, restoreRunId, ownerId, legacy.data);
+    }
     await db.batch([
       db.prepare('DELETE FROM collection_mutations WHERE owner_id = ?1').bind(ownerId),
       db.prepare('DELETE FROM collection_cards WHERE owner_id = ?1').bind(ownerId),

@@ -9,6 +9,7 @@ import {
 import { z } from 'zod';
 import { base64UrlDecode, base64UrlEncode } from './crypto';
 import { escapedFtsQuery, isoFromSeconds, newId, nowSeconds, scalarCount } from './db';
+import { ApplicationError } from './log';
 
 interface CardRow {
   id: string;
@@ -18,6 +19,7 @@ interface CardRow {
   set_id: string;
   set_name: string;
   number: string;
+  number_sort: number | null;
   supertype: string | null;
   subtype: string | null;
   species: string | null;
@@ -52,6 +54,51 @@ export interface CatalogueFilters {
   offset: number;
   setId?: string;
   species?: string;
+  cursor?: string | null;
+}
+
+const catalogueCursorSchema = z
+  .object({
+    setName: z.string(),
+    numberSortMissing: z.union([z.literal(0), z.literal(1)]),
+    numberSort: z.number().int(),
+    number: z.string(),
+    name: z.string(),
+    id: z.string().min(1).max(128),
+    filterKey: z.string(),
+    total: z.number().int().nonnegative(),
+  })
+  .strict();
+type CatalogueCursor = z.infer<typeof catalogueCursorSchema>;
+
+function encodeCatalogueCursor(row: CardRow, filterKey: string, total: number): string {
+  return base64UrlEncode(
+    new TextEncoder().encode(
+      JSON.stringify({
+        setName: row.set_name,
+        numberSortMissing: row.number_sort === null ? 1 : 0,
+        numberSort: row.number_sort ?? 0,
+        number: row.number,
+        name: row.name,
+        id: row.id,
+        filterKey,
+        total,
+      } satisfies CatalogueCursor),
+    ),
+  );
+}
+
+function decodeCatalogueCursor(value: string | null | undefined): CatalogueCursor | null {
+  if (!value) return null;
+  try {
+    const decoded: unknown = JSON.parse(new TextDecoder().decode(base64UrlDecode(value)));
+    const parsed = catalogueCursorSchema.safeParse(decoded);
+    if (!parsed.success) throw new ApplicationError('invalid_catalogue_cursor', 400);
+    return parsed.data;
+  } catch (error) {
+    if (error instanceof ApplicationError) throw error;
+    throw new ApplicationError('invalid_catalogue_cursor', 400);
+  }
 }
 
 export interface ImportedCard {
@@ -211,10 +258,11 @@ function decodeSourceCursor(cursor: string | null): SourceCursor | null {
   try {
     const parsed: unknown = JSON.parse(new TextDecoder().decode(base64UrlDecode(cursor)));
     const result = sourceCursorSchema.safeParse(parsed);
-    if (!result.success) throw new Error('invalid_catalogue_source_cursor');
+    if (!result.success) throw new ApplicationError('invalid_catalogue_source_cursor', 400);
     return result.data;
-  } catch {
-    throw new Error('invalid_catalogue_source_cursor');
+  } catch (error) {
+    if (error instanceof ApplicationError) throw error;
+    throw new ApplicationError('invalid_catalogue_source_cursor', 400);
   }
 }
 
@@ -318,7 +366,8 @@ function stageChunks(rows: StagedCard[]): StagedCard[][] {
   let currentBytes = 2;
   for (const row of rows) {
     const rowBytes = new TextEncoder().encode(JSON.stringify(row)).byteLength + 1;
-    if (rowBytes > MAX_STAGE_JSON_BYTES) throw new Error('catalogue_stage_row_too_large');
+    if (rowBytes > MAX_STAGE_JSON_BYTES)
+      throw new ApplicationError('catalogue_stage_row_too_large', 413);
     if (
       current.length > 0 &&
       (current.length >= MAX_STAGE_ROWS || currentBytes + rowBytes > MAX_STAGE_JSON_BYTES)
@@ -342,7 +391,7 @@ export async function stageCatalogueCards(
   const sourceIds = new Set<string>();
   for (const card of cards) {
     const key = `${card.language}\u0000${card.sourceId}`;
-    if (sourceIds.has(key)) throw new Error('invalid_or_duplicate_source_id');
+    if (sourceIds.has(key)) throw new ApplicationError('invalid_or_duplicate_source_id', 400);
     sourceIds.add(key);
   }
   const noExistingIds = new Map<string, string>();
@@ -403,13 +452,14 @@ export async function applyStagedCatalogueRun(
     )
     .bind(runId, 'running')
     .first<{ provider: string; language: LanguageCode; complete_source: number }>();
-  if (!run || run.provider !== 'tcgdex') throw new Error('staged_sync_not_running');
+  if (!run || run.provider !== 'tcgdex') throw new ApplicationError('staged_sync_not_running', 409);
   try {
     const staged = await scalarCount(
       db,
       'SELECT COUNT(*) AS count FROM catalogue_stage_cards WHERE run_id = ?1',
       runId,
     );
+    if (staged === 0) throw new ApplicationError('staged_sync_empty', 400);
     const existing = await scalarCount(
       db,
       'SELECT COUNT(*) AS count FROM card_sources WHERE provider = ?1 AND language = ?2 AND active = 1',
@@ -422,7 +472,7 @@ export async function applyStagedCatalogueRun(
       staged * 5 < existing * 4 &&
       !allowDestructiveDrop
     )
-      throw new Error('sync_count_drop_rejected');
+      throw new ApplicationError('sync_count_drop_rejected', 409);
     const inactive =
       run.complete_source === 1
         ? await scalarCount(
@@ -536,11 +586,11 @@ export async function applyStagedCatalogueRun(
         .bind(runId)
         .first<{ status: 'complete' }>();
       if (completed) return { imported: staged, inactive };
-      throw new Error('staged_sync_already_applied');
+      throw new ApplicationError('staged_sync_already_applied', 409);
     }
     return { imported: staged, inactive };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = error instanceof ApplicationError ? error.code : String(error);
     const status =
       message === 'sync_count_drop_rejected' || message === 'staged_sync_empty'
         ? 'rejected'
@@ -647,7 +697,7 @@ function view(row: CardRow): CatalogueCardView {
 }
 
 const cardSelect = `
-  SELECT c.id, c.name, c.language, c.category, c.set_id, c.set_name, c.number,
+  SELECT c.id, c.name, c.language, c.category, c.set_id, c.set_name, c.number, c.number_sort,
     c.supertype, c.subtype, c.species, c.rarity, c.artist, c.is_active, c.is_custom, c.updated_at,
     s.provider AS source_provider, s.source_id, s.source_updated_at,
     cc.notes, cc.quantity, cc.updated_at AS collection_updated_at,
@@ -668,7 +718,7 @@ export async function searchCards(
   db: D1Database,
   ownerId: string,
   filters: CatalogueFilters,
-): Promise<{ total: number; cards: CatalogueCardView[] }> {
+): Promise<{ total: number; cards: CatalogueCardView[]; cursor: string | null }> {
   const where = ['c.is_active = 1'];
   const values: unknown[] = [ownerId];
   const fts = filters.query ? escapedFtsQuery(filters.query) : null;
@@ -696,24 +746,63 @@ export async function searchCards(
     where.push(filters.owned ? 'COALESCE(cc.quantity, 0) > 0' : 'COALESCE(cc.quantity, 0) = 0');
   }
   const predicate = where.join(' AND ');
-  const total = await scalarCount(
-    db,
-    `SELECT COUNT(*) AS count FROM catalogue_cards c
-      LEFT JOIN collection_cards cc ON cc.card_id = c.id AND cc.owner_id = ?1
-      WHERE ${predicate.replaceAll('?1', '?1')}`,
-    ...values,
-  );
+  const cursor = decodeCatalogueCursor(filters.cursor);
+  if (cursor && filters.offset !== 0) throw new ApplicationError('invalid_catalogue_cursor', 400);
+  const filterKey = JSON.stringify({
+    query: fts,
+    language: filters.language ?? null,
+    category: filters.category ?? null,
+    setId: filters.setId ?? null,
+    species: filters.species ?? null,
+    owned: filters.owned ?? null,
+  });
+  if (cursor && cursor.filterKey !== filterKey)
+    throw new ApplicationError('invalid_catalogue_cursor', 400);
+  const total = cursor
+    ? cursor.total
+    : await scalarCount(
+        db,
+        `SELECT COUNT(*) AS count FROM catalogue_cards c
+          LEFT JOIN collection_cards cc ON cc.card_id = c.id AND cc.owner_id = ?1
+          WHERE ${predicate}`,
+        ...values,
+      );
+  const pageWhere = [...where];
+  if (cursor) {
+    const cursorIndex = values.length + 1;
+    pageWhere.push(
+      `(c.set_name, c.number_sort IS NULL, COALESCE(c.number_sort, 0), c.number, c.name, c.id) >
+       (?${cursorIndex}, ?${cursorIndex + 1}, ?${cursorIndex + 2}, ?${cursorIndex + 3}, ?${cursorIndex + 4}, ?${cursorIndex + 5})`,
+    );
+    values.push(
+      cursor.setName,
+      cursor.numberSortMissing,
+      cursor.numberSort,
+      cursor.number,
+      cursor.name,
+      cursor.id,
+    );
+  }
   const limitIndex = values.length + 1;
   const offsetIndex = values.length + 2;
   const result = await db
     .prepare(
-      `${cardSelect} WHERE ${predicate}
-       ORDER BY c.set_name COLLATE NOCASE, c.number_sort IS NULL, c.number_sort, c.number COLLATE NOCASE, c.name COLLATE NOCASE
+      `${cardSelect} WHERE ${pageWhere.join(' AND ')}
+       ORDER BY c.set_name, c.number_sort IS NULL, COALESCE(c.number_sort, 0), c.number, c.name, c.id
        LIMIT ?${limitIndex} OFFSET ?${offsetIndex}`,
     )
-    .bind(...values, filters.limit, filters.offset)
+    .bind(...values, filters.limit + 1, cursor ? 0 : filters.offset)
     .all<CardRow>();
-  return { total, cards: result.results.map(view) };
+  const page = result.results.slice(0, filters.limit);
+  const last = page.at(-1);
+  return {
+    total,
+    cards: page.map(view),
+    cursor:
+      result.results.length > filters.limit && last
+        ? encodeCatalogueCursor(last, filterKey, total)
+        : null,
+  };
 }
 
 export async function getCardDetail(
@@ -860,7 +949,7 @@ export async function importCatalogueLanguage(
   const sourceIds = new Set<string>();
   for (const card of input.cards) {
     if (!card.sourceId || sourceIds.has(card.sourceId))
-      throw new Error('invalid_or_duplicate_source_id');
+      throw new ApplicationError('invalid_or_duplicate_source_id', 400);
     sourceIds.add(card.sourceId);
   }
   const runId = await beginStagedCatalogueRun(db, input.language, {

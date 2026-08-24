@@ -41,6 +41,7 @@ describe('accessible frontend structure', () => {
         pair={() => undefined}
         revoke={() => undefined}
         copied={() => undefined}
+        copyFailed={() => undefined}
       />,
     );
     expect(html).toContain('aria-label="Revoke Scanner one"');

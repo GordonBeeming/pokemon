@@ -34,6 +34,14 @@ function LoadingPage({ message }: { message: string }): ReactElement {
   );
 }
 
+function LoadingRoute({ message }: { message: string }): ReactElement {
+  return (
+    <section className="empty-state">
+      <h1>{message}</h1>
+    </section>
+  );
+}
+
 export function App(): ReactElement {
   const [auth, setAuth] = useState<AuthState>('checking');
   const [route, setRoute] = useState<Route>(
@@ -41,11 +49,12 @@ export function App(): ReactElement {
   );
   const [notice, setNotice] = useState<Notice>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
-  const [sets, setSets] = useState<SetFacet[]>([]);
-  const [species, setSpecies] = useState<SpeciesFacet[]>([]);
-  const [tokens, setTokens] = useState<DesktopToken[]>([]);
+  const [sets, setSets] = useState<SetFacet[] | null>(null);
+  const [species, setSpecies] = useState<SpeciesFacet[] | null>(null);
+  const [tokens, setTokens] = useState<DesktopToken[] | null>(null);
   const [pairCode, setPairCode] = useState<PairingCode | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
+  const [routeStatus, setRouteStatus] = useState('');
   const [pairPending, setPairPending] = useState(false);
   const [catalogueParams, setCatalogueParams] = useState(new URLSearchParams());
   const loadGeneration = useRef(0);
@@ -81,17 +90,34 @@ export function App(): ReactElement {
     const controller = new AbortController();
     loadController.current = controller;
     setRouteLoading(true);
+    const routeLabel = routes.find(([key]) => key === route)?.[1] ?? 'Page';
+    setRouteStatus(`Loading ${routeLabel}.`);
     const load =
       route === 'dashboard'
-        ? api.dashboard(controller.signal).then(setDashboard)
+        ? api.dashboard(controller.signal).then((value) => {
+            setDashboard(value);
+            return 'Dashboard loaded.';
+          })
         : route === 'sets'
-          ? api.sets(controller.signal).then(setSets)
+          ? api.sets(controller.signal).then((value) => {
+              setSets(value);
+              return `${value.length} set checklists loaded.`;
+            })
           : route === 'species'
-            ? api.species(controller.signal).then(setSpecies)
+            ? api.species(controller.signal).then((value) => {
+                setSpecies(value);
+                return `${value.length} National Pokédex entries loaded.`;
+              })
             : route === 'devices'
-              ? api.tokens(controller.signal).then(setTokens)
-              : Promise.resolve();
+              ? api.tokens(controller.signal).then((value) => {
+                  setTokens(value);
+                  return `${value.length} paired devices loaded.`;
+                })
+              : Promise.resolve(`${routeLabel} loaded.`);
     void load
+      .then((message) => {
+        if (generation === loadGeneration.current) setRouteStatus(message);
+      })
       .catch((error: unknown) => {
         const message = userMessage(error);
         if (message && generation === loadGeneration.current) setNotice({ kind: 'error', message });
@@ -130,7 +156,7 @@ export function App(): ReactElement {
     content = <CatalogueView initialParams={catalogueParams} onNotice={setNotice} />;
   else if (route === 'binders') content = <BinderView onNotice={setNotice} />;
   else if (route === 'sets')
-    content = (
+    content = sets ? (
       <FacetsView
         title="Set checklists"
         items={sets.map((item) => ({
@@ -145,9 +171,11 @@ export function App(): ReactElement {
           navigate('catalogue');
         }}
       />
+    ) : (
+      <LoadingRoute message="Loading set checklists…" />
     );
   else if (route === 'species')
-    content = (
+    content = species ? (
       <FacetsView
         title="National Pokédex"
         items={species.map((item) => ({
@@ -160,9 +188,11 @@ export function App(): ReactElement {
           navigate('catalogue');
         }}
       />
+    ) : (
+      <LoadingRoute message="Loading National Pokédex…" />
     );
   else if (route === 'devices')
-    content = (
+    content = tokens ? (
       <DevicesView
         tokens={tokens}
         pairCode={pairCode}
@@ -185,7 +215,7 @@ export function App(): ReactElement {
           void api
             .revokeToken(id)
             .then(() => {
-              setTokens((current) => current.filter((token) => token.id !== id));
+              setTokens((current) => current?.filter((token) => token.id !== id) ?? []);
               setNotice({ kind: 'success', message: 'Device revoked.' });
             })
             .catch((error: unknown) => {
@@ -194,7 +224,16 @@ export function App(): ReactElement {
             });
         }}
         copied={() => setNotice({ kind: 'success', message: 'Pairing code copied.' })}
+        copyFailed={() =>
+          setNotice({
+            kind: 'error',
+            message:
+              'Copying the pairing code failed. Select the visible code and copy it manually.',
+          })
+        }
       />
+    ) : (
+      <LoadingRoute message="Loading paired devices…" />
     );
   else
     content = dashboard ? (
@@ -207,7 +246,10 @@ export function App(): ReactElement {
 
   return (
     <Shell route={route} navigate={navigate} notice={notice}>
-      {content}
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {routeStatus}
+      </p>
+      <div aria-busy={routeLoading}>{content}</div>
     </Shell>
   );
 }
