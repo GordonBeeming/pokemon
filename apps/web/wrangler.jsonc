@@ -4,7 +4,11 @@
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-08-24",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.1 },
+  },
   "vars": {
     "OWNER_LABEL": "Owner",
     "PUBLIC_ORIGIN": "http://localhost:5173",
@@ -17,10 +21,12 @@
       "migrations_dir": "./migrations",
     },
   ],
-  "kv_namespaces": [
-    { "binding": "SESSIONS", "id": "00000000000000000000000000000000" },
-    { "binding": "RATE_LIMIT", "id": "11111111111111111111111111111111" },
-  ],
+  "durable_objects": {
+    "bindings": [{ "name": "AUTH_COORDINATOR", "class_name": "AuthCoordinator" }],
+  },
+  "exports": {
+    "AuthCoordinator": { "type": "durable-object", "storage": "sqlite" },
+  },
   "r2_buckets": [{ "binding": "ART", "bucket_name": "pokedex-art-local" }],
   "workflows": [
     {

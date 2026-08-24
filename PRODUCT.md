@@ -4,47 +4,40 @@
 
 ## Platform
 
-web
+Pokédex has a desktop-first web app and a macOS Tauri companion.
 
 ## Stack
 
-delegated: pnpm workspace with Turborepo, a Hono Cloudflare Worker, a React 19 and Vite SPA, D1, KV, R2, and a later Tauri companion.
+The pnpm workspace uses Turborepo, React 19, Vite, a Hono Cloudflare Worker, D1, private R2 storage, SQLite Durable Objects, and Workflows. The desktop app uses Rust, Tauri, Keychain, and a loopback MCP server.
 
 ## Users
 
-One private owner uses the catalogue at a desk to understand a physical Pokémon card collection, check sets and the National Pokédex, and plan binders. A named passkey identifies each of the owner's trusted devices. A later home-scanning companion handles one locally captured card at a time.
+One private owner uses Pokédex to understand a physical Pokémon card collection, check set and National Pokédex coverage, plan binders, and process local scans. Named passkeys identify trusted browser devices. Scoped desktop tokens connect the scanner without exposing the browser session.
 
-## Product Purpose
+## Purpose
 
-Pokédex records card ownership as quantities and notes, keeps catalogue data searchable, and turns binder layouts into plans that can be compared with the physical collection. Success means the owner can find a card, update its quantity, and see what a binder plan still needs without maintaining a second spreadsheet.
+Pokédex records quantities and notes, keeps the card catalogue searchable, and compares binder plans with the physical collection. A useful workflow starts with finding or scanning a card, confirms the match, updates the collection once, and shows any remaining binder shortage.
 
-## Positioning
+## Catalogue and pricing
 
-Binder plans are digital twins of physical layouts. Draft plans may reuse a card target, while active plans report shortages without refusing an incomplete layout. TCGdex supplies source data, but the app keeps stable internal records and supports manual cards and overrides.
+TCGdex supplies physical card metadata and source art. Pokédex excludes TCG Pocket and keeps stable internal card IDs when source data changes. Prices retain source currency, source time, and FX date. The displayed A$ estimate uses the lowest current positive market value available for a card.
 
-## Operating Context
+## Binders
 
-The main web product is a desktop-first data workbench. Card art is private R2 content in high and low WebP forms. The Tauri companion later synchronises that art to a configurable local library and exposes a loopback Codex bridge for a one-card-at-a-time confirmation workflow.
+Binder plans are digital copies of physical layouts. Drafts can repeat card targets. Active versions report shortages instead of rejecting an incomplete plan. Layouts include 2x2, 3x3, 4x3, top-loader, and custom rows and columns.
 
-## Capabilities and Constraints
+## Desktop companion
 
-The product covers physical Pokémon card types and physical languages available from TCGdex, excluding TCG Pocket. Ownership is quantity plus notes. Finish, condition, acquisition history, grading, finish detection, multi-card recognition, cloud inference, Workers AI, Vectorize, and queue-backed jobs are out of scope for v1. Binder layouts include 2x2, 3x3, 4x3, top-loader, and custom rows and columns. Prices are conservative A$ estimates based on positive ordinary market data, retaining source currency, source timestamp, and FX date.
+The Tauri app captures or imports one card image at a time, stores pending scans locally, synchronises high- and low-resolution WebP art, and keeps its cloud token in Keychain. Its authenticated MCP tools can inspect pending scans, search the catalogue, confirm a match, update collection notes and quantities, and work with binder drafts.
 
-## Brand Commitments
+## Boundaries
 
-Use Personal/Xylem brand tokens. The interface is calm, precise, and built for operating a private collection rather than presenting a public marketplace. Do not invent public claims, social proof, or a second audience.
+Condition, finish, acquisition history, grading, finish detection, multi-card recognition, cloud inference, Workers AI, and Vectorize are outside the current product. Card art, credentials, collection data, and local scans remain private to the owner.
 
-## Evidence on Hand
+## Visual direction
 
-The source corpus is TCGdex data and private card art. The current measured art corpus is 98,803 physical-language images, approximately 7.36 GB high and 1.79 GB low. No public catalogue, testimonials, or commercial pricing promise is part of the product brief.
+Use the Personal/Xylem visual language. The interface is a calm working catalogue rather than a public marketplace. Pokémon artwork supplies most of the colour; navigation and data surfaces stay restrained and readable.
 
-## Product Principles
+## Accessibility
 
-1. Keep the owner's physical collection and the digital record in step.
-2. Preserve source provenance without making the source part of the browser runtime.
-3. Make incomplete binder plans useful instead of treating missing cards as an error.
-4. Keep private art, credentials, and local scan captures scoped to the owner.
-
-## Accessibility & Inclusion
-
-All web workflows must be keyboard usable, have visible focus, preserve readable contrast, label form controls, and expose error and loading states without relying on colour alone. The narrow layout is reserved for login, pairing, and scan status; the catalogue and planner retain their desktop information density.
+Web workflows must be keyboard usable, show visible focus, meet WCAG AA contrast for normal text, label controls, and announce loading and error states without relying on colour alone. Login and pairing work at 390 by 844 pixels. Catalogue and binder screens keep their denser desktop layout at wider sizes.

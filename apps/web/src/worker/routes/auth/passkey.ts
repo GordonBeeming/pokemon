@@ -8,19 +8,29 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { base64UrlDecode } from '../../lib/crypto';
 import {
+  clearSessionCookie,
+  createSession,
   deletePasskey,
   getOrCreateOwner,
   getPasskey,
   getPasskeys,
   insertPasskey,
+  insertFirstPasskey,
   logAudit,
   renamePasskey,
   setSessionCookie,
-  signSession,
   updatePasskeyUsage,
 } from '../../lib/auth';
-import { requireEnrolAuth, requireSession } from '../../lib/guards';
-import { logWarn } from '../../lib/log';
+import {
+  claimChallenge,
+  clientIp,
+  enforceRateLimit,
+  requireEnrolAuth,
+  requireSession,
+  storeChallenge,
+} from '../../lib/guards';
+import type { RateLimitResult } from '../../lib/guards';
+import { describeError, logWarn } from '../../lib/log';
 import type {
   AuthVars,
   AuthenticationResponseShape,
@@ -87,6 +97,26 @@ function origin(c: { req: { raw: Request }; env: CloudflareEnv }): string {
   return c.env.PUBLIC_ORIGIN || new URL(c.req.raw.url).origin;
 }
 
+function responseChallenge(clientDataJSON: string): string | null {
+  try {
+    const decoded = new TextDecoder().decode(base64UrlDecode(clientDataJSON));
+    const parsed = z
+      .object({ challenge: z.string().min(1).max(512) })
+      .safeParse(JSON.parse(decoded));
+    return parsed.success ? parsed.data.challenge : null;
+  } catch {
+    return null;
+  }
+}
+
+async function limitOptions(c: {
+  env: CloudflareEnv;
+  req: { raw: Request };
+}): Promise<RateLimitResult | null> {
+  const rate = await enforceRateLimit(c.env, `passkey-options:${clientIp(c.req.raw)}`, 20, 5 * 60);
+  return rate.allowed ? null : rate;
+}
+
 export const passkeyRoutes = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
 passkeyRoutes.get('/', requireSession, async (c) => {
   const session = c.get('session');
@@ -101,6 +131,11 @@ passkeyRoutes.get('/', requireSession, async (c) => {
   });
 });
 passkeyRoutes.post('/register/options', requireEnrolAuth, async (c) => {
+  const limited = await limitOptions(c);
+  if (limited) {
+    c.header('retry-after', String(limited.retryAfter));
+    return c.json({ ok: false, error: 'rate_limited' }, 429);
+  }
   const owner = await getOrCreateOwner(c.env.DB, c.env.OWNER_LABEL);
   const existing = await getPasskeys(c.env.DB, owner.id);
   const options = await generateRegistrationOptions({
@@ -109,13 +144,13 @@ passkeyRoutes.post('/register/options', requireEnrolAuth, async (c) => {
     userID: new TextEncoder().encode(owner.id),
     userName: `owner@${owner.label.toLowerCase()}`,
     attestationType: 'none',
-    authenticatorSelection: { residentKey: 'required', userVerification: 'preferred' },
+    authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
     excludeCredentials: existing.map((passkey) => ({
       id: passkey.id,
       transports: transports(passkey.transports),
     })),
   });
-  await c.env.SESSIONS.put(`pk:reg:${owner.id}`, options.challenge, { expirationTtl: 300 });
+  await storeChallenge(c.env, 'registration', owner.id, options.challenge);
   return c.json(options);
 });
 passkeyRoutes.post('/register/verify', requireEnrolAuth, async (c) => {
@@ -123,8 +158,9 @@ passkeyRoutes.post('/register/verify', requireEnrolAuth, async (c) => {
   if (!parsed.success || !registrationResponse(parsed.data.response))
     return c.json({ ok: false, error: 'invalid_body' }, 400);
   const owner = await getOrCreateOwner(c.env.DB, c.env.OWNER_LABEL);
-  const challenge = await c.env.SESSIONS.get(`pk:reg:${owner.id}`);
-  if (!challenge) return c.json({ ok: false, error: 'challenge_expired' }, 400);
+  const challenge = responseChallenge(parsed.data.response.response.clientDataJSON);
+  if (!challenge || !(await claimChallenge(c.env, 'registration', owner.id, challenge)))
+    return c.json({ ok: false, error: 'challenge_expired' }, 400);
   let verification;
   try {
     verification = await verifyRegistrationResponse({
@@ -132,16 +168,20 @@ passkeyRoutes.post('/register/verify', requireEnrolAuth, async (c) => {
       expectedChallenge: challenge,
       expectedOrigin: origin(c),
       expectedRPID: new URL(origin(c)).hostname,
-      requireUserVerification: false,
+      requireUserVerification: true,
     });
   } catch (error) {
-    logWarn({ evt: 'auth.register.verify_failed', err: String(error) });
+    logWarn({
+      evt: 'auth.register.verify_failed',
+      requestId: c.get('requestId'),
+      err: describeError(error),
+    });
     return c.json({ ok: false, error: 'verification_failed' }, 400);
   }
   if (!verification.verified || !verification.registrationInfo)
     return c.json({ ok: false, error: 'not_verified' }, 400);
   const credential = verification.registrationInfo.credential;
-  await insertPasskey(c.env.DB, {
+  const passkey = {
     id: credential.id,
     userId: owner.id,
     publicKey: credential.publicKey,
@@ -150,26 +190,29 @@ passkeyRoutes.post('/register/verify', requireEnrolAuth, async (c) => {
     deviceLabel: null,
     name: parsed.data.name ?? null,
     createdAt: Math.floor(Date.now() / 1000),
-  });
-  await c.env.SESSIONS.delete(`pk:reg:${owner.id}`);
+  };
+  if (c.get('enrolMethod') === 'bootstrap') {
+    if (!(await insertFirstPasskey(c.env.DB, passkey)))
+      return c.json({ ok: false, error: 'bootstrap_closed' }, 409);
+  } else {
+    await insertPasskey(c.env.DB, passkey);
+  }
   await logAudit(c.env.DB, { actor: owner.id, action: 'passkey.register', target: credential.id });
-  setSessionCookie(c, await signSession({ sub: owner.id, label: owner.label }, c.env));
+  setSessionCookie(c, await createSession(c.env.DB, { sub: owner.id, label: owner.label }, c.env));
   return c.json({ ok: true });
 });
 passkeyRoutes.post('/auth/options', async (c) => {
+  const limited = await limitOptions(c);
+  if (limited) {
+    c.header('retry-after', String(limited.retryAfter));
+    return c.json({ ok: false, error: 'rate_limited' }, 429);
+  }
   const owner = await getOrCreateOwner(c.env.DB, c.env.OWNER_LABEL);
-  const existing = await getPasskeys(c.env.DB, owner.id);
   const options = await generateAuthenticationOptions({
     rpID: new URL(origin(c)).hostname,
-    userVerification: 'preferred',
-    allowCredentials: existing.map((passkey) => ({
-      id: passkey.id,
-      transports: transports(passkey.transports),
-    })),
+    userVerification: 'required',
   });
-  await c.env.SESSIONS.put(`pk:auth:${options.challenge}`, options.challenge, {
-    expirationTtl: 300,
-  });
+  await storeChallenge(c.env, 'authentication', owner.id, options.challenge);
   return c.json(options);
 });
 passkeyRoutes.post('/auth/verify', async (c) => {
@@ -177,14 +220,11 @@ passkeyRoutes.post('/auth/verify', async (c) => {
   if (!parsed.success || !authenticationResponse(parsed.data.response))
     return c.json({ ok: false, error: 'invalid_body' }, 400);
   const response = parsed.data.response;
-  const clientDataParsed = z
-    .object({ challenge: z.string() })
-    .safeParse(
-      JSON.parse(new TextDecoder().decode(base64UrlDecode(response.response.clientDataJSON))),
-    );
-  if (!clientDataParsed.success) return c.json({ ok: false, error: 'missing_challenge' }, 400);
-  const challenge = await c.env.SESSIONS.get(`pk:auth:${clientDataParsed.data.challenge}`);
-  if (!challenge) return c.json({ ok: false, error: 'challenge_expired' }, 400);
+  const owner = await getOrCreateOwner(c.env.DB, c.env.OWNER_LABEL);
+  const challenge = responseChallenge(response.response.clientDataJSON);
+  if (!challenge) return c.json({ ok: false, error: 'missing_challenge' }, 400);
+  if (!(await claimChallenge(c.env, 'authentication', owner.id, challenge)))
+    return c.json({ ok: false, error: 'challenge_expired' }, 400);
   const passkey = await getPasskey(c.env.DB, response.id);
   if (!passkey) return c.json({ ok: false, error: 'unknown_credential' }, 400);
   let verification;
@@ -200,23 +240,25 @@ passkeyRoutes.post('/auth/verify', async (c) => {
         counter: passkey.counter,
         transports: transports(passkey.transports),
       },
-      requireUserVerification: false,
+      requireUserVerification: true,
     });
   } catch (error) {
-    logWarn({ evt: 'auth.login.verify_failed', err: String(error) });
+    logWarn({
+      evt: 'auth.login.verify_failed',
+      requestId: c.get('requestId'),
+      err: describeError(error),
+    });
     return c.json({ ok: false, error: 'verification_failed' }, 400);
   }
   if (!verification.verified || !verification.authenticationInfo)
     return c.json({ ok: false, error: 'not_verified' }, 400);
-  const owner = await getOrCreateOwner(c.env.DB, c.env.OWNER_LABEL);
   await updatePasskeyUsage(
     c.env.DB,
     passkey.id,
     verification.authenticationInfo.newCounter,
     Math.floor(Date.now() / 1000),
   );
-  await c.env.SESSIONS.delete(`pk:auth:${clientDataParsed.data.challenge}`);
-  setSessionCookie(c, await signSession({ sub: owner.id, label: owner.label }, c.env));
+  setSessionCookie(c, await createSession(c.env.DB, { sub: owner.id, label: owner.label }, c.env));
   await logAudit(c.env.DB, { actor: owner.id, action: 'login.passkey', target: passkey.id });
   return c.json({ ok: true });
 });
@@ -232,10 +274,9 @@ passkeyRoutes.patch('/:id', requireSession, async (c) => {
 passkeyRoutes.delete('/:id', requireSession, async (c) => {
   const session = c.get('session');
   if (!session) return c.json({ ok: false, error: 'unauthorized' }, 401);
-  const passkeys = await getPasskeys(c.env.DB, session.sub);
-  if (passkeys.length <= 1 && passkeys.some((passkey) => passkey.id === c.req.param('id')))
-    return c.json({ ok: false, error: 'last_passkey' }, 409);
-  if (!(await deletePasskey(c.env.DB, c.req.param('id'), session.sub)))
-    return c.json({ ok: false, error: 'not_found' }, 404);
+  const result = await deletePasskey(c.env.DB, c.req.param('id'), session.sub);
+  if (result === 'last_passkey') return c.json({ ok: false, error: 'last_passkey' }, 409);
+  if (result === 'not_found') return c.json({ ok: false, error: 'not_found' }, 404);
+  clearSessionCookie(c);
   return c.json({ ok: true });
 });

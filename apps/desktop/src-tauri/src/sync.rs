@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, RwLock};
@@ -27,7 +28,17 @@ pub trait ArtRemote: Send + Sync {
         destination: &Path,
     ) -> Result<DownloadMode>;
     async fn issue_upload_ticket(&self, entry: &ArtManifestEntry) -> Result<UploadTicket>;
-    async fn upload(&self, ticket: &UploadTicket, bytes: Vec<u8>) -> Result<()>;
+    async fn issue_upload_tickets(
+        &self,
+        entries: &[ArtManifestEntry],
+    ) -> Result<Vec<(ArtManifestEntry, UploadTicket)>> {
+        let mut issued = Vec::with_capacity(entries.len());
+        for entry in entries {
+            issued.push((entry.clone(), self.issue_upload_ticket(entry).await?));
+        }
+        Ok(issued)
+    }
+    async fn upload(&self, ticket: &UploadTicket, path: &Path, bytes: u64) -> Result<()>;
 }
 
 #[async_trait]
@@ -45,9 +56,11 @@ pub trait CardArtSource: Send + Sync {
 pub struct TcgdexArtSource {
     http: reqwest::Client,
     api_base: Url,
-    language_cards: RwLock<HashMap<String, Arc<HashMap<String, Option<Url>>>>>,
+    language_cards: RwLock<HashMap<String, LanguageCardMap>>,
     detail_fallbacks: Mutex<HashMap<String, u16>>,
 }
+
+type LanguageCardMap = Arc<HashMap<String, Option<Url>>>;
 
 const MAX_DETAIL_FALLBACKS_PER_LANGUAGE: u16 = 100;
 const INDEX_CHECKPOINT_CARDS: usize = 250;
@@ -204,8 +217,16 @@ impl CardArtSource for TcgdexArtSource {
         }
         let mut file = options.open(destination).await?;
         let mut stream = response.bytes_stream();
+        let mut written = if resumed { start } else { 0 };
         while let Some(chunk) = stream.next().await {
-            file.write_all(&chunk?).await?;
+            let chunk = chunk?;
+            written = written.saturating_add(chunk.len() as u64);
+            if written > 15 * 1024 * 1024 {
+                return Err(DesktopError::InvalidImage(
+                    "TCGdex art exceeded 15 MiB while streaming".to_string(),
+                ));
+            }
+            file.write_all(&chunk).await?;
         }
         file.flush().await?;
         file.sync_all().await?;
@@ -264,8 +285,19 @@ impl ArtRemote for CloudArtRemote {
             .await
     }
 
-    async fn upload(&self, ticket: &UploadTicket, bytes: Vec<u8>) -> Result<()> {
-        self.client.upload_art(&self.base_url, ticket, bytes).await
+    async fn issue_upload_tickets(
+        &self,
+        entries: &[ArtManifestEntry],
+    ) -> Result<Vec<(ArtManifestEntry, UploadTicket)>> {
+        self.client
+            .issue_upload_tickets(&self.base_url, &self.token, entries)
+            .await
+    }
+
+    async fn upload(&self, ticket: &UploadTicket, path: &Path, bytes: u64) -> Result<()> {
+        self.client
+            .upload_art_file(&self.base_url, ticket, path, bytes)
+            .await
     }
 }
 
@@ -293,6 +325,7 @@ pub struct ArtSyncEngine {
     root: PathBuf,
     remote: Arc<dyn ArtRemote>,
     source: Option<Arc<dyn CardArtSource>>,
+    cancellation: Option<Arc<AtomicBool>>,
 }
 
 impl ArtSyncEngine {
@@ -301,6 +334,7 @@ impl ArtSyncEngine {
             root,
             remote,
             source: None,
+            cancellation: None,
         }
     }
 
@@ -313,154 +347,244 @@ impl ArtSyncEngine {
             root,
             remote,
             source: Some(source),
+            cancellation: None,
         }
+    }
+
+    pub fn with_cancellation(mut self, cancellation: Arc<AtomicBool>) -> Self {
+        self.cancellation = Some(cancellation);
+        self
+    }
+
+    fn check_cancelled(&self) -> Result<()> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            return Err(DesktopError::Cancelled);
+        }
+        Ok(())
     }
 
     pub async fn synchronize(&self) -> Result<SyncReport> {
         validate_library_path(&self.root)?;
         tokio::fs::create_dir_all(&self.root).await?;
-        if let Some(source) = self.source.as_ref() {
-            return self.synchronize_sources(source).await;
+        self.write_status("running", None, None)?;
+        let result = if let Some(source) = self.source.as_ref() {
+            self.synchronize_sources(source).await
+        } else {
+            self.synchronize_remote_manifest().await
+        };
+        match &result {
+            Ok(report) => self.write_status("complete", Some(report), None)?,
+            Err(error) => self.write_status("failed", None, Some(&error.to_string()))?,
         }
-        self.synchronize_remote_manifest().await
+        result
+    }
+
+    fn write_status(
+        &self,
+        state: &str,
+        report: Option<&SyncReport>,
+        error: Option<&str>,
+    ) -> Result<()> {
+        write_private(
+            &self.root.join("sync-status.json"),
+            &serde_json::to_vec_pretty(&serde_json::json!({
+                "state": state,
+                "updatedAt": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|reason| DesktopError::InvalidImage(reason.to_string()))?
+                    .as_secs(),
+                "report": report,
+                "error": error,
+            }))?,
+        )
     }
 
     async fn synchronize_remote_manifest(&self) -> Result<SyncReport> {
-        let manifest = self.full_manifest().await?;
-        let mut report = SyncReport {
-            manifest_entries: manifest.len() as u64,
-            ..SyncReport::default()
-        };
-        for entry in manifest {
-            let outcome = self.synchronize_entry(&entry).await?;
-            match outcome {
-                EntryOutcome::Downloaded { bytes, resumed } => {
-                    report.downloaded += 1;
-                    report.bytes_written += bytes;
-                    if resumed {
-                        report.resumed += 1;
+        let mut report = SyncReport::default();
+        let mut cursor: Option<String> = None;
+        loop {
+            self.check_cancelled()?;
+            let page = self.remote.manifest_page(cursor.as_deref()).await?;
+            report.manifest_entries += page.entries.len() as u64;
+            for entry in page.entries {
+                let outcome = self.synchronize_entry(&entry).await?;
+                match outcome {
+                    EntryOutcome::Downloaded { bytes, resumed } => {
+                        report.downloaded += 1;
+                        report.bytes_written += bytes;
+                        if resumed {
+                            report.resumed += 1;
+                        }
                     }
+                    EntryOutcome::Skipped => report.skipped += 1,
                 }
-                EntryOutcome::Skipped => report.skipped += 1,
+            }
+            match page.cursor {
+                Some(next) if cursor.as_deref() != Some(next.as_str()) => cursor = Some(next),
+                Some(_) => {
+                    return Err(DesktopError::InvalidCloudResponse(
+                        "art manifest cursor did not advance".to_string(),
+                    ))
+                }
+                None => break,
             }
         }
         Ok(report)
     }
 
     async fn synchronize_sources(&self, source: &Arc<dyn CardArtSource>) -> Result<SyncReport> {
-        let manifest = self.full_manifest().await?;
-        let mut remote_entries = manifest
-            .iter()
-            .cloned()
-            .map(|entry| (manifest_key(&entry.card_id, entry.variant), entry))
-            .collect::<BTreeMap<_, _>>();
-        let sources = self.full_source_catalogue().await?;
-        let index_path = self.root.join("source-index.json");
-        let mut index = load_source_index(&index_path)?;
-        let mut report = SyncReport {
-            manifest_entries: manifest.len() as u64,
-            source_cards: sources.len() as u64,
-            ..SyncReport::default()
-        };
-        let mut cards_since_checkpoint = 0_usize;
-
-        for source_entry in sources {
-            validate_source_entry(&source_entry)?;
-            let indexed = index.cards.get(&source_entry.card_id).cloned();
-            if indexed
-                .as_ref()
-                .is_some_and(|card| card.matches_source(&source_entry))
-            {
-                let mut restored = true;
-                for variant in [ArtVariant::High, ArtVariant::Low] {
-                    let Some(expected) = indexed
-                        .as_ref()
-                        .and_then(|card| card.entry(&source_entry.card_id, variant))
-                    else {
-                        restored = false;
-                        break;
-                    };
-                    let Some(remote) =
-                        remote_entries.get(&manifest_key(&source_entry.card_id, variant))
-                    else {
-                        restored = false;
-                        break;
-                    };
-                    if remote != &expected {
-                        restored = false;
-                        break;
-                    }
-                    match self.synchronize_entry(remote).await? {
-                        EntryOutcome::Downloaded { bytes, resumed } => {
-                            report.downloaded += 1;
-                            report.bytes_written += bytes;
-                            if resumed {
-                                report.resumed += 1;
-                            }
-                        }
-                        EntryOutcome::Skipped => report.skipped += 1,
-                    }
+        let index_path = self.root.join("source-index.sqlite3");
+        let legacy_index_path = self.root.join("source-index.json");
+        let mut index = load_source_index(&index_path, &legacy_index_path)?;
+        index.clear_remote_manifest()?;
+        let mut report = SyncReport::default();
+        let mut manifest_cursor: Option<String> = None;
+        loop {
+            self.check_cancelled()?;
+            let page = self
+                .remote
+                .manifest_page(manifest_cursor.as_deref())
+                .await?;
+            report.manifest_entries += page.entries.len() as u64;
+            index.put_remote_entries(&page.entries)?;
+            match page.cursor {
+                Some(next) if manifest_cursor.as_deref() != Some(next.as_str()) => {
+                    manifest_cursor = Some(next)
                 }
-                if restored {
-                    continue;
+                Some(_) => {
+                    return Err(DesktopError::InvalidCloudResponse(
+                        "art manifest cursor did not advance".to_string(),
+                    ))
                 }
-            }
-
-            let Some(image_base) = source.image_base(&source_entry).await? else {
-                report.missing_images += 1;
-                continue;
-            };
-            let mut indexed_variants = BTreeMap::new();
-            for variant in [ArtVariant::High, ArtVariant::Low] {
-                let (entry, resumed) = self
-                    .download_source_variant(source, &source_entry, &image_base, variant)
-                    .await?;
-                report.downloaded += 1;
-                report.bytes_written += entry.bytes;
-                if resumed {
-                    report.resumed += 1;
-                }
-                let key = manifest_key(&entry.card_id, entry.variant);
-                if remote_entries.get(&key) == Some(&entry) {
-                    report.skipped += 1;
-                } else {
-                    let ticket = self.remote.issue_upload_ticket(&entry).await?;
-                    let bytes = tokio::fs::read(local_art_path(&self.root, &entry)).await?;
-                    self.remote.upload(&ticket, bytes).await?;
-                    report.uploaded += 1;
-                    remote_entries.insert(key, entry.clone());
-                }
-                indexed_variants.insert(variant.as_str().to_string(), IndexedVariant::from(&entry));
-            }
-            index.cards.insert(
-                source_entry.card_id.clone(),
-                IndexedCard {
-                    provider: source_entry.provider,
-                    source_id: source_entry.source_id,
-                    language: source_entry.language,
-                    source_updated_at: source_entry.source_updated_at,
-                    source_checksum: source_entry.source_checksum,
-                    variants: indexed_variants,
-                },
-            );
-            cards_since_checkpoint += 1;
-            if cards_since_checkpoint >= INDEX_CHECKPOINT_CARDS {
-                save_source_index(&index_path, &index)?;
-                cards_since_checkpoint = 0;
+                None => break,
             }
         }
-        save_source_index(&index_path, &index)?;
-        Ok(report)
-    }
-
-    async fn full_source_catalogue(&self) -> Result<Vec<CatalogueSourceEntry>> {
-        let mut entries = Vec::new();
-        let mut cursor: Option<String> = None;
+        let mut cards_since_checkpoint = 0_usize;
+        let mut source_cursor: Option<String> = None;
         loop {
-            let page = self.remote.catalogue_source_page(cursor.as_deref()).await?;
-            entries.extend(page.entries);
+            self.check_cancelled()?;
+            let page = self
+                .remote
+                .catalogue_source_page(source_cursor.as_deref())
+                .await?;
+            report.source_cards += page.entries.len() as u64;
+            for source_entry in page.entries {
+                self.check_cancelled()?;
+                validate_source_entry(&source_entry)?;
+                let indexed = index.get(&source_entry.card_id)?;
+                if indexed
+                    .as_ref()
+                    .is_some_and(|card| card.matches_source(&source_entry))
+                {
+                    let mut restored = true;
+                    for variant in [ArtVariant::High, ArtVariant::Low] {
+                        let Some(expected) = indexed
+                            .as_ref()
+                            .and_then(|card| card.entry(&source_entry.card_id, variant))
+                        else {
+                            restored = false;
+                            break;
+                        };
+                        let Some(remote) = index.remote_entry(&source_entry.card_id, variant)?
+                        else {
+                            restored = false;
+                            break;
+                        };
+                        if remote != expected {
+                            restored = false;
+                            break;
+                        }
+                        match self.synchronize_entry(&remote).await? {
+                            EntryOutcome::Downloaded { bytes, resumed } => {
+                                report.downloaded += 1;
+                                report.bytes_written += bytes;
+                                if resumed {
+                                    report.resumed += 1;
+                                }
+                            }
+                            EntryOutcome::Skipped => report.skipped += 1,
+                        }
+                    }
+                    if restored {
+                        continue;
+                    }
+                }
+
+                let Some(image_base) = source.image_base(&source_entry).await? else {
+                    report.missing_images += 1;
+                    continue;
+                };
+                let mut indexed_variants = BTreeMap::new();
+                let mut pending_uploads = Vec::new();
+                let downloads = futures_util::future::try_join_all(
+                    [ArtVariant::High, ArtVariant::Low]
+                        .into_iter()
+                        .map(|variant| {
+                            self.download_source_variant(
+                                source,
+                                &source_entry,
+                                &image_base,
+                                variant,
+                            )
+                        }),
+                )
+                .await?;
+                for (entry, resumed) in downloads {
+                    report.downloaded += 1;
+                    report.bytes_written += entry.bytes;
+                    if resumed {
+                        report.resumed += 1;
+                    }
+                    if index.remote_entry(&entry.card_id, entry.variant)?.as_ref() == Some(&entry) {
+                        report.skipped += 1;
+                    } else {
+                        pending_uploads.push(entry.clone());
+                    }
+                    indexed_variants.insert(
+                        entry.variant.as_str().to_string(),
+                        IndexedVariant::from(&entry),
+                    );
+                }
+                if !pending_uploads.is_empty() {
+                    let tickets = self.remote.issue_upload_tickets(&pending_uploads).await?;
+                    futures_util::future::try_join_all(tickets.iter().map(|(entry, ticket)| {
+                        let remote = Arc::clone(&self.remote);
+                        let ticket = ticket.clone();
+                        let path = local_art_path(&self.root, entry);
+                        let bytes = entry.bytes;
+                        async move { remote.upload(&ticket, &path, bytes).await }
+                    }))
+                    .await?;
+                    for (entry, _) in tickets {
+                        report.uploaded += 1;
+                        index.put_remote_entries(std::slice::from_ref(&entry))?;
+                    }
+                }
+                index.insert(
+                    source_entry.card_id.clone(),
+                    IndexedCard {
+                        provider: source_entry.provider,
+                        source_id: source_entry.source_id,
+                        language: source_entry.language,
+                        source_updated_at: source_entry.source_updated_at,
+                        source_checksum: source_entry.source_checksum,
+                        variants: indexed_variants,
+                    },
+                )?;
+                cards_since_checkpoint += 1;
+                if cards_since_checkpoint >= INDEX_CHECKPOINT_CARDS {
+                    index.checkpoint()?;
+                    cards_since_checkpoint = 0;
+                }
+            }
             match page.cursor {
-                Some(next) if cursor.as_deref() != Some(next.as_str()) => cursor = Some(next),
+                Some(next) if source_cursor.as_deref() != Some(next.as_str()) => {
+                    source_cursor = Some(next)
+                }
                 Some(_) => {
                     return Err(DesktopError::InvalidCloudResponse(
                         "catalogue source cursor did not advance".to_string(),
@@ -469,7 +593,8 @@ impl ArtSyncEngine {
                 None => break,
             }
         }
-        Ok(entries)
+        index.checkpoint()?;
+        Ok(report)
     }
 
     async fn download_source_variant(
@@ -517,10 +642,8 @@ impl ArtSyncEngine {
             sha256: sha256_bytes(&bytes),
             bytes: bytes.len() as u64,
         };
-        if destination.exists() {
-            tokio::fs::remove_file(&destination).await?;
-        }
-        tokio::fs::rename(part, destination).await?;
+        tokio::fs::rename(part, &destination).await?;
+        save_file_identity(&destination, &entry).await?;
         Ok((entry, mode == DownloadMode::Resumed))
     }
 
@@ -552,7 +675,7 @@ impl ArtSyncEngine {
             return Ok(UploadOutcome::AlreadyPresent);
         }
         let ticket = self.remote.issue_upload_ticket(&entry).await?;
-        self.remote.upload(&ticket, bytes).await?;
+        self.remote.upload(&ticket, path, entry.bytes).await?;
         Ok(UploadOutcome::Uploaded)
     }
 
@@ -594,6 +717,18 @@ impl ArtSyncEngine {
             tokio::fs::remove_file(&part).await?;
             start = 0;
         }
+        if start == entry.bytes && start > 0 {
+            if sha256_file(&part).await? == entry.sha256 {
+                tokio::fs::rename(&part, &destination).await?;
+                save_file_identity(&destination, entry).await?;
+                return Ok(EntryOutcome::Downloaded {
+                    bytes: entry.bytes,
+                    resumed: true,
+                });
+            }
+            tokio::fs::remove_file(&part).await?;
+            start = 0;
+        }
         let mode = self.remote.download_to(entry, start, &part).await?;
         let actual_bytes = tokio::fs::metadata(&part).await?.len();
         if actual_bytes != entry.bytes {
@@ -612,10 +747,8 @@ impl ArtSyncEngine {
                 variant: entry.variant.as_str().to_string(),
             });
         }
-        if destination.exists() {
-            tokio::fs::remove_file(&destination).await?;
-        }
         tokio::fs::rename(&part, &destination).await?;
+        save_file_identity(&destination, entry).await?;
         Ok(EntryOutcome::Downloaded {
             bytes: entry.bytes,
             resumed: mode == DownloadMode::Resumed,
@@ -628,9 +761,132 @@ enum EntryOutcome {
     Skipped,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct SourceIndex {
+    connection: rusqlite::Connection,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct LegacySourceIndex {
     cards: BTreeMap<String, IndexedCard>,
+}
+
+impl SourceIndex {
+    fn open(path: &Path) -> Result<Self> {
+        let connection = rusqlite::Connection::open(path)?;
+        connection.execute_batch(
+            r#"PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             CREATE TABLE IF NOT EXISTS source_cards (
+               card_id TEXT PRIMARY KEY NOT NULL,
+               provider TEXT NOT NULL,
+               source_id TEXT NOT NULL,
+               language TEXT NOT NULL,
+               source_updated_at INTEGER NOT NULL,
+               source_checksum TEXT NOT NULL,
+               variants_json TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS remote_manifest (
+               card_id TEXT NOT NULL,
+               variant TEXT NOT NULL,
+               sha256 TEXT NOT NULL,
+               bytes INTEGER NOT NULL,
+               PRIMARY KEY (card_id, variant)
+             );"#,
+        )?;
+        Ok(Self { connection })
+    }
+
+    fn get(&self, card_id: &str) -> Result<Option<IndexedCard>> {
+        let mut statement = self.connection.prepare(
+            r#"SELECT provider, source_id, language, source_updated_at, source_checksum, variants_json
+             FROM source_cards WHERE card_id = ?1"#,
+        )?;
+        let mut rows = statement.query([card_id])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        let variants_json: String = row.get(5)?;
+        Ok(Some(IndexedCard {
+            provider: row.get(0)?,
+            source_id: row.get(1)?,
+            language: row.get(2)?,
+            source_updated_at: row.get(3)?,
+            source_checksum: row.get(4)?,
+            variants: serde_json::from_str(&variants_json)?,
+        }))
+    }
+
+    fn insert(&self, card_id: String, card: IndexedCard) -> Result<()> {
+        self.connection.execute(
+            r#"INSERT INTO source_cards
+              (card_id, provider, source_id, language, source_updated_at, source_checksum, variants_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(card_id) DO UPDATE SET provider = excluded.provider,
+               source_id = excluded.source_id, language = excluded.language,
+               source_updated_at = excluded.source_updated_at,
+               source_checksum = excluded.source_checksum,
+               variants_json = excluded.variants_json"#,
+            rusqlite::params![
+                card_id,
+                card.provider,
+                card.source_id,
+                card.language,
+                card.source_updated_at,
+                card.source_checksum,
+                serde_json::to_string(&card.variants)?,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn checkpoint(&self) -> Result<()> {
+        self.connection
+            .execute_batch("PRAGMA wal_checkpoint(PASSIVE);")?;
+        Ok(())
+    }
+
+    fn clear_remote_manifest(&self) -> Result<()> {
+        self.connection.execute("DELETE FROM remote_manifest", [])?;
+        Ok(())
+    }
+
+    fn put_remote_entries(&mut self, entries: &[ArtManifestEntry]) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        {
+            let mut statement = transaction.prepare(
+                r#"INSERT INTO remote_manifest (card_id, variant, sha256, bytes)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(card_id, variant) DO UPDATE SET
+                   sha256 = excluded.sha256, bytes = excluded.bytes"#,
+            )?;
+            for entry in entries {
+                statement.execute(rusqlite::params![
+                    entry.card_id,
+                    entry.variant.as_str(),
+                    entry.sha256,
+                    entry.bytes,
+                ])?;
+            }
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn remote_entry(&self, card_id: &str, variant: ArtVariant) -> Result<Option<ArtManifestEntry>> {
+        let mut statement = self.connection.prepare(
+            r#"SELECT sha256, bytes FROM remote_manifest WHERE card_id = ?1 AND variant = ?2"#,
+        )?;
+        let mut rows = statement.query(rusqlite::params![card_id, variant.as_str()])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(ArtManifestEntry {
+            card_id: card_id.to_string(),
+            variant,
+            sha256: row.get(0)?,
+            bytes: row.get(1)?,
+        }))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -681,23 +937,17 @@ impl From<&ArtManifestEntry> for IndexedVariant {
     }
 }
 
-fn load_source_index(path: &Path) -> Result<SourceIndex> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(serde_json::from_slice(&bytes)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SourceIndex::default()),
-        Err(error) => Err(error.into()),
+fn load_source_index(path: &Path, legacy_path: &Path) -> Result<SourceIndex> {
+    let needs_migration = !path.exists() && legacy_path.exists();
+    let index = SourceIndex::open(path)?;
+    if needs_migration {
+        let legacy: LegacySourceIndex = serde_json::from_slice(&std::fs::read(legacy_path)?)?;
+        for (card_id, card) in legacy.cards {
+            index.insert(card_id, card)?;
+        }
+        std::fs::rename(legacy_path, legacy_path.with_extension("json.migrated"))?;
     }
-}
-
-fn save_source_index(path: &Path, index: &SourceIndex) -> Result<()> {
-    let temporary = path.with_extension("json.tmp");
-    write_private(&temporary, &serde_json::to_vec_pretty(index)?)?;
-    std::fs::rename(temporary, path)?;
-    Ok(())
-}
-
-fn manifest_key(card_id: &str, variant: ArtVariant) -> String {
-    format!("{card_id}|{}", variant.as_str())
+    Ok(index)
 }
 
 fn validate_source_entry(source: &CatalogueSourceEntry) -> Result<()> {
@@ -720,6 +970,11 @@ fn validate_source_entry(source: &CatalogueSourceEntry) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn manifest_key(card_id: &str, variant: ArtVariant) -> String {
+    format!("{card_id}|{}", variant.as_str())
 }
 
 fn validate_tcgdex_asset_url(url: &Url) -> Result<()> {
@@ -772,7 +1027,53 @@ async fn file_matches(path: &Path, entry: &ArtManifestEntry) -> Result<bool> {
     if metadata.len() != entry.bytes {
         return Ok(false);
     }
-    Ok(sha256_file(path).await? == entry.sha256)
+    let modified_nanos = modified_nanos(&metadata)?;
+    let identity_path = identity_path(path);
+    if let Ok(bytes) = tokio::fs::read(&identity_path).await {
+        if let Ok(identity) = serde_json::from_slice::<FileIdentity>(&bytes) {
+            if identity.sha256 == entry.sha256
+                && identity.bytes == entry.bytes
+                && identity.modified_nanos == modified_nanos
+            {
+                return Ok(true);
+            }
+        }
+    }
+    if sha256_file(path).await? != entry.sha256 {
+        return Ok(false);
+    }
+    save_file_identity(path, entry).await?;
+    Ok(true)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FileIdentity {
+    sha256: String,
+    bytes: u64,
+    modified_nanos: u128,
+}
+
+fn identity_path(path: &Path) -> PathBuf {
+    path.with_extension("webp.meta.json")
+}
+
+fn modified_nanos(metadata: &std::fs::Metadata) -> Result<u128> {
+    Ok(metadata
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| DesktopError::InvalidImage(error.to_string()))?
+        .as_nanos())
+}
+
+async fn save_file_identity(path: &Path, entry: &ArtManifestEntry) -> Result<()> {
+    let metadata = tokio::fs::metadata(path).await?;
+    let identity = FileIdentity {
+        sha256: entry.sha256.clone(),
+        bytes: entry.bytes,
+        modified_nanos: modified_nanos(&metadata)?,
+    };
+    write_private(&identity_path(path), &serde_json::to_vec(&identity)?)
 }
 
 async fn sha256_file(path: &Path) -> Result<String> {
@@ -872,7 +1173,7 @@ mod tests {
             })
         }
 
-        async fn upload(&self, _ticket: &UploadTicket, _bytes: Vec<u8>) -> Result<()> {
+        async fn upload(&self, _ticket: &UploadTicket, _path: &Path, _bytes: u64) -> Result<()> {
             *self.uploads.lock().expect("uploads") += 1;
             Ok(())
         }
@@ -948,7 +1249,7 @@ mod tests {
             })
         }
 
-        async fn upload(&self, ticket: &UploadTicket, _bytes: Vec<u8>) -> Result<()> {
+        async fn upload(&self, ticket: &UploadTicket, _path: &Path, _bytes: u64) -> Result<()> {
             let entry = self
                 .pending
                 .lock()
@@ -1045,6 +1346,27 @@ mod tests {
         let starts = remote.starts.lock().expect("starts").clone();
         assert_eq!(starts[0], 0);
         assert!(starts[1] > 0);
+    }
+
+    #[tokio::test]
+    async fn completed_partial_is_promoted_without_an_invalid_range_request() {
+        let root = tempdir().expect("temp dir");
+        let payload = webp();
+        let remote = remote(payload.clone(), None, false);
+        let engine = ArtSyncEngine::new(root.path().join("art"), remote.clone());
+        let destination = local_art_path(&engine.root, &remote.entry);
+        tokio::fs::create_dir_all(destination.parent().expect("parent"))
+            .await
+            .expect("parent directory");
+        tokio::fs::write(destination.with_extension("webp.part"), payload)
+            .await
+            .expect("complete partial");
+
+        let report = engine.synchronize().await.expect("promoted partial");
+
+        assert_eq!(report.resumed, 1);
+        assert!(remote.starts.lock().expect("starts").is_empty());
+        assert!(destination.is_file());
     }
 
     #[tokio::test]
@@ -1152,7 +1474,7 @@ mod tests {
         assert_eq!(report.resumed, 1);
         let starts = source.starts.lock().expect("source starts");
         assert_eq!(starts[0], 0);
-        assert!(starts[1] > 0);
+        assert!(starts.iter().skip(1).any(|start| *start > 0));
         assert_eq!(*remote.uploads.lock().expect("uploads"), 2);
     }
 

@@ -1,8 +1,11 @@
+import type { AuthCoordinator } from '../index';
+
 declare global {
   type CloudflareEnv = Env & {
     SESSION_SECRET: string;
     SESSION_SECRET_PREV?: string;
     ENROLL_SECRET: string;
+    AUTH_COORDINATOR: DurableObjectNamespace<AuthCoordinator>;
   };
 }
 
@@ -11,6 +14,8 @@ export {};
 export interface SessionPayload {
   sub: string;
   label: string;
+  sid: string;
+  epoch: number;
   iat: number;
   exp: number;
 }
@@ -18,6 +23,7 @@ export interface SessionPayload {
 export interface UserRow {
   id: string;
   label: string;
+  mutation_epoch: number;
   created_at: number;
 }
 
@@ -53,6 +59,9 @@ export interface AuditInsert {
 
 export interface AuthVars {
   session?: SessionPayload;
+  enrolMethod?: 'session' | 'bootstrap';
+  requestId?: string;
+  desktopBearer?: string;
 }
 
 export interface RegistrationResponseShape {

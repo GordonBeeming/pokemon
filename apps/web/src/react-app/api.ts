@@ -1,26 +1,37 @@
 import {
   apiErrorSchema,
   binderLayoutSchema,
-  binderSlotSchema,
+  binderMutationResultSchema,
+  binderShortageSchema,
+  binderVersionPagesSchema,
+  binderViewSchema,
   catalogueCardViewSchema,
   catalogueDetailViewSchema,
-  collectionStateSchema,
-  mutationRequestSchema,
+  collectionIncrementRequestSchema,
+  collectionMutationResultSchema,
+  collectionNotesPatchRequestSchema,
+  collectionSetRequestSchema,
 } from '@pokedex/shared';
 import type {
   BinderLayout,
-  BinderSlot,
+  BinderMutationResult,
+  BinderSlotLocation,
+  BinderVersionPages,
+  BinderView,
   CatalogueCardView,
   CatalogueDetailView,
+  CollectionIncrementRequest,
+  CollectionNotesPatchRequest,
+  CollectionSetRequest,
   CollectionState,
 } from '@pokedex/shared';
-import { z } from 'zod';
 import type {
+  AuthenticationResponseJSON,
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
-  AuthenticationResponseJSON,
   RegistrationResponseJSON,
 } from '@simplewebauthn/browser';
+import { z } from 'zod';
 
 const successSchema = z.object({ ok: z.literal(true) }).passthrough();
 const sessionSchema = z
@@ -32,48 +43,21 @@ const dashboardSchema = successSchema.extend({
     .strict(),
   pricing: z.object({ priced: z.number(), missing: z.number(), estimateAud: z.number() }).strict(),
   binderCount: z.number(),
-  activeShortages: z.array(
-    z
-      .object({ cardId: z.string(), required: z.number(), owned: z.number(), missing: z.number() })
-      .strict(),
-  ),
+  activeShortages: z.array(binderShortageSchema),
 });
 const searchSchema = successSchema.extend({
   total: z.number().int().nonnegative(),
   cards: z.array(catalogueCardViewSchema),
 });
 const detailSchema = successSchema.extend({ card: catalogueDetailViewSchema });
-const collectionSchema = successSchema.extend({ state: collectionStateSchema });
-const binderSchema = z
-  .object({
-    id: z.string(),
-    name: z.string(),
-    activeVersionId: z.string().nullable(),
-    latestVersionId: z.string().nullable(),
-    updatedAt: z.string(),
-  })
-  .strict();
-const binderVersionSchema = z
-  .object({
-    id: z.string(),
-    binderId: z.string(),
-    versionNumber: z.number(),
-    status: z.enum(['draft', 'active', 'archived']),
-    layout: binderLayoutSchema,
-    slots: z.array(binderSlotSchema),
-    shortages: z.array(
-      z
-        .object({
-          cardId: z.string(),
-          required: z.number(),
-          owned: z.number(),
-          missing: z.number(),
-        })
-        .strict(),
-    ),
-  })
-  .strict();
-const bindersSchema = successSchema.extend({ binders: z.array(binderSchema) });
+const collectionSchema = successSchema.merge(collectionMutationResultSchema);
+const bindersSchema = successSchema.extend({ binders: z.array(binderViewSchema) });
+const binderPagesEnvelopeSchema = successSchema.extend({ binder: binderVersionPagesSchema });
+const binderMutationEnvelopeSchema = successSchema.extend({ binder: binderMutationResultSchema });
+const shortagePageSchema = successSchema.extend({
+  shortages: z.array(binderShortageSchema),
+  nextOffset: z.number().int().nonnegative().nullable(),
+});
 const setsSchema = successSchema.extend({
   sets: z.array(
     z
@@ -99,75 +83,148 @@ const speciesSchema = successSchema.extend({
       .strict(),
   ),
 });
-const versionSchema = successSchema.extend({ binder: binderVersionSchema });
 const tokenSchema = z
   .object({
     id: z.string(),
     label: z.string(),
+    scopes: z.array(z.string()).optional(),
     createdAt: z.string().optional(),
+    expiresAt: z.string().nullable().optional(),
+    revokedAt: z.string().nullable().optional(),
     lastUsedAt: z.string().nullable().optional(),
   })
   .passthrough();
 const tokensSchema = successSchema.extend({ tokens: z.array(tokenSchema) });
+const pairCodeSchema = successSchema.extend({
+  code: z.string().min(8).max(64),
+  expiresAt: z.string().datetime().optional(),
+});
+
+function record(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null ? { ...value } : null;
+}
+
+const authenticationOptionsSchema = z.custom<PublicKeyCredentialRequestOptionsJSON>((value) => {
+  const candidate = record(value);
+  return (
+    candidate !== null &&
+    typeof candidate.challenge === 'string' &&
+    (candidate.rpId === undefined || typeof candidate.rpId === 'string') &&
+    (candidate.allowCredentials === undefined || Array.isArray(candidate.allowCredentials))
+  );
+});
+
+const registrationOptionsSchema = z.custom<PublicKeyCredentialCreationOptionsJSON>((value) => {
+  const candidate = record(value);
+  return (
+    candidate !== null &&
+    typeof candidate.challenge === 'string' &&
+    record(candidate.rp) !== null &&
+    record(candidate.user) !== null
+  );
+});
 
 export type Dashboard = z.infer<typeof dashboardSchema>;
-export type Binder = z.infer<typeof binderSchema>;
-export type BinderVersion = z.infer<typeof binderVersionSchema>;
 export type DesktopToken = z.infer<typeof tokenSchema>;
+export type PairingCode = z.infer<typeof pairCodeSchema>;
+export type SetFacet = z.infer<typeof setsSchema>['sets'][number];
+export type SpeciesFacet = z.infer<typeof speciesSchema>['species'][number];
 
 export class ApiError extends Error {
   constructor(
     public readonly code: string,
     message: string,
+    public readonly status: number,
+    public readonly requestId: string | null,
+    public readonly retryAfterSeconds: number | null,
   ) {
     super(message);
+    this.name = 'ApiError';
   }
 }
 
-async function request<TOutput, TDef extends z.ZodTypeDef, TInput>(
+async function purgePrivateCaches(): Promise<void> {
+  navigator.serviceWorker?.controller?.postMessage({ type: 'PURGE_PRIVATE_CACHES' });
+  if (!('caches' in globalThis)) return;
+  const names = await caches.keys();
+  await Promise.all(
+    names.filter((name) => name.startsWith('pokedex-')).map(async (name) => caches.delete(name)),
+  );
+}
+
+async function request<Output, Definition extends z.ZodTypeDef, Input>(
   path: string,
-  schema: z.ZodType<TOutput, TDef, TInput>,
-  init?: RequestInit,
-): Promise<TOutput> {
+  schema: z.ZodType<Output, Definition, Input>,
+  init: RequestInit = {},
+): Promise<Output> {
+  const headers = new Headers(init.headers);
+  if (init.body !== undefined && !headers.has('content-type'))
+    headers.set('content-type', 'application/json');
   const response = await fetch(path, {
-    credentials: 'same-origin',
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
     ...init,
+    credentials: 'same-origin',
+    headers,
   });
-  const body: unknown = await response.json().catch(() => null);
-  const failure = apiErrorSchema.safeParse(body);
-  if (!response.ok || failure.success)
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (cause) {
     throw new ApiError(
-      failure.success ? failure.data.error : 'invalid_response',
-      failure.success
-        ? (failure.data.message ?? failure.data.error)
-        : 'The server returned an invalid response.',
+      'invalid_response',
+      cause instanceof Error ? cause.message : 'The server response was not valid JSON.',
+      response.status,
+      response.headers.get('x-request-id'),
+      null,
     );
+  }
+  const failure = apiErrorSchema.safeParse(body);
+  if (!response.ok || failure.success) {
+    const code = failure.success ? failure.data.error : 'invalid_response';
+    const requestId = failure.success
+      ? (failure.data.requestId ?? response.headers.get('x-request-id'))
+      : response.headers.get('x-request-id');
+    const retryAfter = Number.parseInt(response.headers.get('retry-after') ?? '', 10);
+    if (response.status === 401) await purgePrivateCaches();
+    throw new ApiError(
+      code,
+      failure.success ? (failure.data.message ?? code) : 'The server returned an invalid response.',
+      response.status,
+      requestId,
+      Number.isFinite(retryAfter) ? retryAfter : null,
+    );
+  }
   const parsed = schema.safeParse(body);
   if (!parsed.success)
-    throw new ApiError('invalid_response', 'The server returned an unexpected response.');
+    throw new ApiError(
+      'invalid_response',
+      'The server returned an unexpected response.',
+      response.status,
+      response.headers.get('x-request-id'),
+      null,
+    );
   return schema.parse(body);
 }
 
+const json = (body: unknown): string => JSON.stringify(body);
+const encoded = (value: string): string => encodeURIComponent(value);
+
 export const api = {
-  me: (): Promise<z.infer<typeof sessionSchema>> => request('/api/auth/me', sessionSchema),
+  me: (signal?: AbortSignal): Promise<z.infer<typeof sessionSchema>> =>
+    request('/api/auth/me', sessionSchema, { signal }),
   devLogin: (): Promise<void> =>
     request('/api/auth/dev-login', successSchema, { method: 'POST' }).then(() => undefined),
   authenticationOptions: (): Promise<PublicKeyCredentialRequestOptionsJSON> =>
-    request('/api/auth/passkey/auth/options', z.custom<PublicKeyCredentialRequestOptionsJSON>(), {
-      method: 'POST',
-    }),
+    request('/api/auth/passkey/auth/options', authenticationOptionsSchema, { method: 'POST' }),
   verifyAuthentication: (response: AuthenticationResponseJSON): Promise<void> =>
     request('/api/auth/passkey/auth/verify', successSchema, {
       method: 'POST',
-      body: JSON.stringify({ response }),
+      body: json({ response }),
     }).then(() => undefined),
   registrationOptions: (enrolSecret: string): Promise<PublicKeyCredentialCreationOptionsJSON> =>
-    request(
-      '/api/auth/passkey/register/options',
-      z.custom<PublicKeyCredentialCreationOptionsJSON>(),
-      { method: 'POST', headers: { 'x-enrol-secret': enrolSecret } },
-    ),
+    request('/api/auth/passkey/register/options', registrationOptionsSchema, {
+      method: 'POST',
+      headers: { 'x-enrol-secret': enrolSecret },
+    }),
   verifyRegistration: (
     response: RegistrationResponseJSON,
     enrolSecret: string,
@@ -175,16 +232,20 @@ export const api = {
   ): Promise<void> =>
     request('/api/auth/passkey/register/verify', successSchema, {
       method: 'POST',
-      body: JSON.stringify({ response, enrolSecret, name }),
+      body: json({ response, enrolSecret, name }),
     }).then(() => undefined),
-  dashboard: (): Promise<Dashboard> => request('/api/dashboard', dashboardSchema),
-  search: (params: URLSearchParams): Promise<z.infer<typeof searchSchema>> =>
-    request(`/api/catalogue/search?${params}`, searchSchema),
-  sets: () => request('/api/catalogue/facets/sets', setsSchema).then((body) => body.sets),
-  species: () =>
-    request('/api/catalogue/facets/species', speciesSchema).then((body) => body.species),
-  card: (id: string): Promise<CatalogueDetailView> =>
-    request(`/api/catalogue/${encodeURIComponent(id)}`, detailSchema).then((body) => body.card),
+  dashboard: (signal?: AbortSignal): Promise<Dashboard> =>
+    request('/api/dashboard', dashboardSchema, { signal }),
+  search: (params: URLSearchParams, signal?: AbortSignal): Promise<z.infer<typeof searchSchema>> =>
+    request(`/api/catalogue/search?${params}`, searchSchema, { signal }),
+  sets: (signal?: AbortSignal): Promise<SetFacet[]> =>
+    request('/api/catalogue/facets/sets', setsSchema, { signal }).then((body) => body.sets),
+  species: (signal?: AbortSignal): Promise<SpeciesFacet[]> =>
+    request('/api/catalogue/facets/species', speciesSchema, { signal }).then(
+      (body) => body.species,
+    ),
+  card: (id: string, signal?: AbortSignal): Promise<CatalogueDetailView> =>
+    request(`/api/catalogue/${encoded(id)}`, detailSchema, { signal }).then((body) => body.card),
   createCustomCard: (input: {
     name: string;
     language: string;
@@ -195,88 +256,146 @@ export const api = {
   }): Promise<string> =>
     request('/api/catalogue/custom', successSchema.extend({ id: z.string() }), {
       method: 'POST',
-      body: JSON.stringify(input),
+      body: json(input),
     }).then((body) => body.id),
-  setCollection: (
-    cardId: string,
-    quantity: number,
-    notes: string | null,
-    mutationId: string,
-  ): Promise<CollectionState> =>
-    request(`/api/collection/${encodeURIComponent(cardId)}`, collectionSchema, {
+  setCollection: (cardId: string, input: CollectionSetRequest): Promise<CollectionState> =>
+    request(`/api/collection/${encoded(cardId)}`, collectionSchema, {
       method: 'PUT',
-      body: JSON.stringify(
-        mutationRequestSchema
-          .extend({ quantity: z.number().int().min(0), notes: z.string().nullable() })
-          .parse({ mutationId, quantity, notes }),
-      ),
+      body: json(collectionSetRequestSchema.parse(input)),
     }).then((body) => body.state),
-  binders: (): Promise<Binder[]> =>
-    request('/api/binders', bindersSchema).then((body) => body.binders),
-  binder: (id: string): Promise<BinderVersion> =>
-    request(`/api/binders/versions/${encodeURIComponent(id)}`, versionSchema).then(
-      (body) => body.binder,
+  incrementCollection: (
+    cardId: string,
+    input: CollectionIncrementRequest,
+  ): Promise<CollectionState> =>
+    request(`/api/collection/${encoded(cardId)}/increment`, collectionSchema, {
+      method: 'POST',
+      body: json(collectionIncrementRequestSchema.parse(input)),
+    }).then((body) => body.state),
+  patchCollectionNotes: (
+    cardId: string,
+    input: CollectionNotesPatchRequest,
+  ): Promise<CollectionState> =>
+    request(`/api/collection/${encoded(cardId)}/notes`, collectionSchema, {
+      method: 'PATCH',
+      body: json(collectionNotesPatchRequestSchema.parse(input)),
+    }).then((body) => body.state),
+  binders: (signal?: AbortSignal): Promise<BinderView[]> =>
+    request('/api/binders', bindersSchema, { signal }).then((body) => body.binders),
+  binder: (id: string, page = 0, limit = 1, signal?: AbortSignal): Promise<BinderVersionPages> =>
+    request(
+      `/api/binders/versions/${encoded(id)}?page=${page}&limit=${limit}`,
+      binderPagesEnvelopeSchema,
+      { signal },
+    ).then((body) => body.binder),
+  binderShortages: (
+    id: string,
+    offset = 0,
+    limit = 100,
+    signal?: AbortSignal,
+  ): Promise<z.infer<typeof shortagePageSchema>> =>
+    request(
+      `/api/binders/versions/${encoded(id)}/shortages?offset=${offset}&limit=${limit}`,
+      shortagePageSchema,
+      { signal },
     ),
-  createBinder: (name: string, layout: BinderLayout): Promise<BinderVersion> =>
-    request('/api/binders', versionSchema, {
+  createBinder: (name: string, layout: BinderLayout): Promise<BinderMutationResult> =>
+    request('/api/binders', binderMutationEnvelopeSchema, {
       method: 'POST',
-      body: JSON.stringify({ name, layout }),
+      body: json({ name, layout: binderLayoutSchema.parse(layout) }),
     }).then((body) => body.binder),
-  cloneBinder: (id: string): Promise<BinderVersion> =>
-    request(`/api/binders/versions/${encodeURIComponent(id)}/clone`, versionSchema, {
+  cloneBinder: (id: string, expectedRevision: number): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/clone`, binderMutationEnvelopeSchema, {
       method: 'POST',
+      body: json({ expectedRevision }),
     }).then((body) => body.binder),
-  activateBinder: (id: string): Promise<BinderVersion> =>
-    request(`/api/binders/versions/${encodeURIComponent(id)}/activate`, versionSchema, {
+  activateBinder: (id: string, expectedRevision: number): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/activate`, binderMutationEnvelopeSchema, {
       method: 'POST',
+      body: json({ expectedRevision }),
     }).then((body) => body.binder),
   setSlot: (
     id: string,
-    page: number,
-    row: number,
-    column: number,
-    cardId: string | null,
-  ): Promise<BinderVersion> =>
-    request(`/api/binders/versions/${encodeURIComponent(id)}/slot`, versionSchema, {
+    input: {
+      expectedRevision: number;
+      page: number;
+      row: number;
+      column: number;
+      cardId: string | null;
+    },
+  ): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/slot`, binderMutationEnvelopeSchema, {
       method: 'PUT',
-      body: JSON.stringify({ page, row, column, cardId }),
+      body: json(input),
     }).then((body) => body.binder),
-  addPage: (id: string): Promise<BinderVersion> =>
-    request(`/api/binders/versions/${encodeURIComponent(id)}/pages`, versionSchema, {
+  swapSlots: (
+    id: string,
+    input: {
+      expectedRevision: number;
+      source: BinderSlotLocation;
+      target: BinderSlotLocation;
+    },
+  ): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/swap`, binderMutationEnvelopeSchema, {
       method: 'POST',
+      body: json(input),
     }).then((body) => body.binder),
-  reorderPages: (id: string, pageIds: string[]): Promise<BinderVersion> =>
-    request(`/api/binders/versions/${encodeURIComponent(id)}/pages/order`, versionSchema, {
+  addPage: (id: string, expectedRevision: number): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/pages`, binderMutationEnvelopeSchema, {
+      method: 'POST',
+      body: json({ expectedRevision }),
+    }).then((body) => body.binder),
+  reorderPages: (
+    id: string,
+    pageIds: string[],
+    expectedRevision: number,
+  ): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/pages/order`, binderMutationEnvelopeSchema, {
       method: 'PUT',
-      body: JSON.stringify({ pageIds }),
+      body: json({ pageIds, expectedRevision }),
     }).then((body) => body.binder),
-  deletePage: (id: string, pageId: string): Promise<BinderVersion> =>
+  deletePage: (
+    id: string,
+    pageId: string,
+    expectedRevision: number,
+  ): Promise<BinderMutationResult> =>
     request(
-      `/api/binders/versions/${encodeURIComponent(id)}/pages/${encodeURIComponent(pageId)}`,
-      versionSchema,
-      { method: 'DELETE' },
+      `/api/binders/versions/${encoded(id)}/pages/${encoded(pageId)}`,
+      binderMutationEnvelopeSchema,
+      {
+        method: 'DELETE',
+        body: json({ expectedRevision }),
+      },
     ).then((body) => body.binder),
   arrangeBinder: (
     id: string,
     mode: 'set-number' | 'release-date' | 'pokedex-number' | 'language',
-  ): Promise<BinderVersion> =>
-    request(`/api/binders/versions/${encodeURIComponent(id)}/arrange`, versionSchema, {
+    expectedRevision: number,
+  ): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/arrange`, binderMutationEnvelopeSchema, {
       method: 'POST',
-      body: JSON.stringify({ mode }),
+      body: json({ mode, expectedRevision }),
     }).then((body) => body.binder),
-  pair: (): Promise<string> =>
-    request('/api/desktop/pair', successSchema.extend({ code: z.string() }), {
+  pair: (): Promise<PairingCode> =>
+    request('/api/desktop/pair', pairCodeSchema, {
       method: 'POST',
-      body: JSON.stringify({
+      body: json({
         scopes: ['art:read', 'art:write', 'catalogue:read', 'collection:write', 'binders:write'],
       }),
-    }).then((body) => body.code),
-  tokens: (): Promise<DesktopToken[]> =>
-    request('/api/desktop/tokens', tokensSchema).then((body) => body.tokens),
+    }),
+  tokens: (signal?: AbortSignal): Promise<DesktopToken[]> =>
+    request('/api/desktop/tokens', tokensSchema, { signal }).then((body) => body.tokens),
   revokeToken: (id: string): Promise<void> =>
-    request(`/api/desktop/tokens/${encodeURIComponent(id)}`, successSchema, {
+    request(`/api/desktop/tokens/${encoded(id)}`, successSchema, {
       method: 'DELETE',
     }).then(() => undefined),
 };
 
-export type { BinderLayout, BinderSlot, CatalogueCardView, CatalogueDetailView };
+export type {
+  BinderLayout,
+  BinderMutationResult,
+  BinderVersionPages,
+  BinderView,
+  CatalogueCardView,
+  CatalogueDetailView,
+  CollectionState,
+};

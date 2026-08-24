@@ -10,6 +10,8 @@ pub enum DesktopError {
     InvalidImage(String),
     #[error("the desktop is not paired")]
     NotPaired,
+    #[error("operation cancelled")]
+    Cancelled,
     #[error("cloud request failed with status {status}: {code}")]
     Cloud { status: u16, code: String },
     #[error("cloud response was invalid: {0}")]
@@ -24,6 +26,8 @@ pub enum DesktopError {
     Http(#[from] reqwest::Error),
     #[error("URL error: {0}")]
     Url(#[from] url::ParseError),
+    #[error("SQLite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
     #[error("Keychain error: {0}")]
     Keychain(String),
     #[error("MCP error: {0}")]

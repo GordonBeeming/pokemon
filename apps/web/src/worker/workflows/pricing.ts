@@ -1,6 +1,24 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 import { z } from 'zod';
-import { applyStagedPrices, stagePrices } from '../lib/pricing';
+import {
+  applyStagedPrices,
+  beginPriceSyncRun,
+  extractTcgdexPrices,
+  getPriceSyncCursor,
+  prunePricingData,
+  setPriceSyncCursor,
+  stagePrices,
+  upsertFxRate,
+  type PriceCandidate,
+  type StagedPriceRow,
+} from '../lib/pricing';
+import { describeError, logInfo, logWarn } from '../lib/log';
+import { nowSeconds } from '../lib/db';
+
+const PRICE_SOURCE_PAGE = 250;
+const OUTBOUND_CONCURRENCY = 5;
+const DETAIL_MAX_BYTES = 2 * 1024 * 1024;
+const PRICE_OBJECT_MAX_BYTES = 25 * 1024 * 1024;
 
 const stagedPriceSchema = z
   .array(
@@ -9,32 +27,212 @@ const stagedPriceSchema = z
         cardId: z.string().min(1),
         source: z.enum(['tcgplayer', 'cardmarket']),
         nativeAmount: z.number().positive(),
-        nativeCurrency: z.string().regex(/^[A-Z]{3}$/),
+        nativeCurrency: z.string().regex(/^[A-Z]{3}$/u),
         sourceCapturedAt: z.number().int().nonnegative(),
       })
       .strict(),
   )
   .min(1);
+const fxResponseSchema = z
+  .object({ date: z.string().date(), rates: z.record(z.string(), z.number().positive()) })
+  .strict();
 
-export class PriceSyncWorkflow extends WorkflowEntrypoint<
-  CloudflareEnv,
-  { objectKey?: string; fxDate?: string }
-> {
+async function boundedJson(response: Response): Promise<unknown> {
+  const declared = response.headers.get('content-length');
+  if (declared && Number(declared) > DETAIL_MAX_BYTES) throw new Error('price_response_too_large');
+  if (!response.body) throw new Error('price_response_empty');
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  while (true) {
+    const result = await reader.read();
+    if (result.done) break;
+    length += result.value.byteLength;
+    if (length > DETAIL_MAX_BYTES) {
+      await reader.cancel();
+      throw new Error('price_response_too_large');
+    }
+    chunks.push(result.value);
+  }
+  const bytes = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch (error) {
+    throw new Error(`price_response_invalid: ${describeError(error)}`);
+  }
+}
+
+async function fetchJson(url: string): Promise<unknown> {
+  const response = await fetch(url, {
+    headers: { accept: 'application/json' },
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`price_fetch_failed_${response.status}`);
+  }
+  return boundedJson(response);
+}
+
+async function mapConcurrent<T, U>(values: T[], mapper: (value: T) => Promise<U>): Promise<U[]> {
+  const results: U[] = [];
+  for (let offset = 0; offset < values.length; offset += OUTBOUND_CONCURRENCY) {
+    results.push(
+      ...(await Promise.all(values.slice(offset, offset + OUTBOUND_CONCURRENCY).map(mapper))),
+    );
+  }
+  return results;
+}
+
+async function sourcePage(db: D1Database): Promise<{ ids: string[]; cursor: string | null }> {
+  const existingCursor = await getPriceSyncCursor(db);
+  const read = async (cursor: string | null) =>
+    db
+      .prepare(
+        `SELECT DISTINCT source_id FROM card_sources
+         WHERE provider = 'tcgdex' AND language = 'en' AND active = 1
+           AND (?1 IS NULL OR source_id > ?1)
+         ORDER BY source_id LIMIT ?2`,
+      )
+      .bind(cursor, PRICE_SOURCE_PAGE)
+      .all<{ source_id: string }>();
+  let page = await read(existingCursor);
+  if (page.results.length === 0 && existingCursor !== null) page = await read(null);
+  const ids = page.results.map((row) => row.source_id);
+  return { ids, cursor: ids.at(-1) ?? null };
+}
+
+async function cardRowsForSources(
+  db: D1Database,
+  prices: Array<{ sourceId: string; candidates: PriceCandidate[] }>,
+): Promise<StagedPriceRow[]> {
+  const bySource = new Map(prices.map((price) => [price.sourceId, price.candidates]));
+  const sourceIds = [...bySource.keys()];
+  if (sourceIds.length === 0) return [];
+  const rows = await db
+    .prepare(
+      `SELECT source.card_id, source.source_id
+       FROM card_sources source JOIN json_each(?1) requested
+         ON requested.value = source.source_id
+       WHERE source.provider = 'tcgdex' AND source.active = 1`,
+    )
+    .bind(JSON.stringify(sourceIds))
+    .all<{ card_id: string; source_id: string }>();
+  return rows.results.flatMap((row) =>
+    (bySource.get(row.source_id) ?? []).map((candidate) => ({
+      ...candidate,
+      cardId: row.card_id,
+    })),
+  );
+}
+
+async function ensureFxRates(db: D1Database, currencies: string[]): Promise<string> {
+  const targets = [...new Set(currencies.filter((currency) => currency !== 'AUD'))].sort();
+  if (targets.length === 0) return new Date().toISOString().slice(0, 10);
+  const rates = await mapConcurrent(targets, async (currency) => {
+    const parsed = fxResponseSchema.safeParse(
+      await fetchJson(`https://api.frankfurter.dev/v1/latest?base=${currency}&symbols=AUD`),
+    );
+    const aud = parsed.success ? parsed.data.rates.AUD : undefined;
+    if (!parsed.success || typeof aud !== 'number')
+      throw new Error(`fx_response_invalid_${currency}`);
+    await upsertFxRate(db, parsed.data.date, currency, aud);
+    return parsed.data.date;
+  });
+  const dates = [...new Set(rates)];
+  if (dates.length !== 1) throw new Error('fx_date_mismatch');
+  return dates[0] ?? new Date().toISOString().slice(0, 10);
+}
+
+interface PriceWorkflowPayload {
+  objectKey?: string;
+  fxDate?: string;
+}
+
+export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWorkflowPayload> {
   override async run(
-    event: Readonly<WorkflowEvent<{ objectKey?: string; fxDate?: string }>>,
+    event: Readonly<WorkflowEvent<PriceWorkflowPayload>>,
     step: WorkflowStep,
   ): Promise<void> {
-    await step.do('apply-staged-prices', async () => {
-      if (!event.payload.objectKey || !event.payload.fxDate)
-        throw new Error('price_stage_parameters_missing');
-      const object = await this.env.ART.get(event.payload.objectKey);
-      if (!object) throw new Error('price_stage_missing');
-      const parsed = stagedPriceSchema.safeParse(await object.json<unknown>());
-      if (!parsed.success) throw new Error('price_stage_invalid');
-      const runId = `price_stage_${crypto.randomUUID()}`;
-      await stagePrices(this.env.DB, runId, parsed.data);
-      await applyStagedPrices(this.env.DB, runId, event.payload.fxDate);
-      return null;
-    });
+    const runId = `price_sync_${event.instanceId}`;
+    await step.do('begin-price-run', () => beginPriceSyncRun(this.env.DB, runId));
+    try {
+      let rows: StagedPriceRow[];
+      let cursor: string | null = null;
+      if (event.payload.objectKey) {
+        rows = await step.do('read-price-object', async () => {
+          const object = await this.env.ART.get(event.payload.objectKey ?? '');
+          if (!object) throw new Error('price_stage_missing');
+          if (object.size > PRICE_OBJECT_MAX_BYTES) throw new Error('price_stage_too_large');
+          const parsed = stagedPriceSchema.safeParse(await object.json<unknown>());
+          if (!parsed.success) throw new Error('price_stage_invalid');
+          return parsed.data;
+        });
+      } else {
+        const page = await step.do('select-price-sources', () => sourcePage(this.env.DB));
+        cursor = page.cursor;
+        const prices = await step.do('fetch-price-sources', () =>
+          mapConcurrent(page.ids, async (sourceId) =>
+            extractTcgdexPrices(
+              await fetchJson(`https://api.tcgdex.net/v2/en/cards/${encodeURIComponent(sourceId)}`),
+            ),
+          ),
+        );
+        rows = await step.do('map-price-sources', () => cardRowsForSources(this.env.DB, prices));
+      }
+
+      if (rows.length === 0) {
+        await step.do('complete-empty-price-run', async () => {
+          await this.env.DB.prepare(
+            `UPDATE price_sync_runs SET completed_at = ?1, status = 'complete', row_count = 0
+             WHERE id = ?2 AND status = 'running'`,
+          )
+            .bind(nowSeconds(), runId)
+            .run();
+          if (!event.payload.objectKey) await setPriceSyncCursor(this.env.DB, cursor);
+          return null;
+        });
+        return;
+      }
+
+      const fxDate =
+        event.payload.fxDate ??
+        (await step.do('refresh-price-fx', () =>
+          ensureFxRates(
+            this.env.DB,
+            rows.map((row) => row.nativeCurrency),
+          ),
+        ));
+      await step.do('stage-prices', async () => {
+        await stagePrices(this.env.DB, runId, rows);
+        return rows.length;
+      });
+      const applied = await step.do('apply-prices', () =>
+        applyStagedPrices(this.env.DB, runId, fxDate),
+      );
+      await step.do('cleanup-prices', async () => {
+        if (!event.payload.objectKey) await setPriceSyncCursor(this.env.DB, cursor);
+        if (event.payload.objectKey?.startsWith('staged/prices/'))
+          await this.env.ART.delete(event.payload.objectKey);
+        await prunePricingData(this.env.DB);
+        return null;
+      });
+      logInfo({ evt: 'workflow.pricing.complete', runId, rows: applied, fxDate, cursor });
+    } catch (error) {
+      const message = describeError(error);
+      await this.env.DB.prepare(
+        `UPDATE price_sync_runs SET completed_at = ?1, status = 'failed', error = ?2
+         WHERE id = ?3 AND status = 'running'`,
+      )
+        .bind(nowSeconds(), message, runId)
+        .run();
+      logWarn({ evt: 'workflow.pricing.failed', runId, err: message });
+      throw error;
+    }
   }
 }

@@ -12,7 +12,7 @@ The dashboard is the first working surface. Desktop layouts use a stable navigat
 
 ## Type and colour
 
-Use a legible system sans for interface text and a monospace face only for identifiers, quantities, and measurements. Use Personal/Xylem tokens from the shared UI package once it is built. Accent colour marks selection, primary actions, and collection state. Neutral layers separate navigation, content, and panels. Every state has a text or icon cue as well as colour.
+Use a legible system sans for interface text and a monospace face only for identifiers, quantities, and measurements. Personal/Xylem tokens define the palette. Accent colour marks selection, primary actions, and collection state. Neutral layers separate navigation, content, and panels. Every state has a text or icon cue as well as colour.
 
 ## Interaction
 

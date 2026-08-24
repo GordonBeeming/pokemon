@@ -7,8 +7,14 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src vite.config.ts",
+    "lint": "eslint src scripts public/sw.js vite.config.ts",
     "test": "vitest run --config vitest.config.ts",
+    "test:integration": "node scripts/verify-desktop-bearer-routes.mjs && node scripts/verify-backup-scratch.mjs",
+    "wrangler:types": "wrangler types ./cloudflare-env.d.ts --config wrangler.jsonc",
+    "wrangler:types:check": "wrangler types ./cloudflare-env.d.ts --check --config wrangler.jsonc",
+    "wrangler:check": "wrangler check startup --config wrangler.jsonc",
+    "wrangler:dry-run": "wrangler deploy --dry-run --config wrangler.jsonc",
+    "migrate:local": "wrangler d1 migrations apply pokedex-local --local --config wrangler.jsonc",
     "format:check": "prettier --check --ignore-path ../../.prettierignore ."
   },
   "dependencies": {

@@ -1,17 +1,27 @@
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
+import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 const exec = promisify(execFile);
-const root = process.cwd();
-const app = join(root, 'apps/web');
+const app = fileURLToPath(new URL('..', import.meta.url));
 const wrangler = join(app, 'node_modules/.bin/wrangler');
 const persist = await mkdtemp(join(tmpdir(), 'pokedex-desktop-routes-'));
-const port = 8795;
+const port = await new Promise((resolve, reject) => {
+  const server = createServer();
+  server.once('error', reject);
+  server.listen(0, '127.0.0.1', () => {
+    const address = server.address();
+    if (!address || typeof address === 'string')
+      return reject(new Error('ephemeral port unavailable'));
+    server.close((error) => (error ? reject(error) : resolve(address.port)));
+  });
+});
 const base = `http://127.0.0.1:${port}`;
 const token = (value) => `${value}`.padEnd(64, value).slice(0, 64);
 const hash = (value) => createHash('sha256').update(value).digest('hex');

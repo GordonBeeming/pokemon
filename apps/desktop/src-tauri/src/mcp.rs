@@ -11,14 +11,16 @@ use serde_json::{json, Value};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
+use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
+const MCP_PROTOCOL_HEADER: &str = "mcp-protocol-version";
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct McpStatus {
     pub endpoint: String,
-    pub bearer_token: String,
     pub config_snippet: String,
     pub running: bool,
     pub error: Option<String>,
@@ -53,28 +55,46 @@ struct JsonRpcRequest {
     params: Option<Value>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InitializeParams {
+    protocol_version: String,
+    capabilities: Value,
+    client_info: Value,
+}
+
 pub fn bind_address(port: u16) -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
 }
 
-pub async fn start(port: u16, token: String, backend: Arc<dyn McpBackend>) -> Result<McpStatus> {
+pub async fn start(
+    port: u16,
+    token: String,
+    backend: Arc<dyn McpBackend>,
+    live_status: Arc<RwLock<McpStatus>>,
+) -> Result<JoinHandle<()>> {
     let listener = tokio::net::TcpListener::bind(bind_address(port)).await?;
     let address = listener.local_addr()?;
     let endpoint = format!("http://127.0.0.1:{}/mcp", address.port());
     let status = McpStatus {
         config_snippet: codex_config_snippet(&endpoint, &token),
         endpoint,
-        bearer_token: token.clone(),
         running: true,
         error: None,
     };
+    *live_status.write().await = status;
     let router = router(token, backend);
-    tokio::spawn(async move {
-        if let Err(error) = axum::serve(listener, router).await {
-            tracing::error!(error = %error, "local MCP server stopped");
-        }
-    });
-    Ok(status)
+    Ok(tokio::spawn(async move {
+        let result = axum::serve(listener, router).await;
+        let error = result.err().map_or_else(
+            || "MCP server stopped".to_string(),
+            |error| error.to_string(),
+        );
+        tracing::error!(error = %error, "local MCP server stopped");
+        let mut status = live_status.write().await;
+        status.running = false;
+        status.error = Some(error);
+    }))
 }
 
 pub fn unavailable_status(port: u16, token: String, error: String) -> McpStatus {
@@ -82,7 +102,6 @@ pub fn unavailable_status(port: u16, token: String, error: String) -> McpStatus 
     McpStatus {
         config_snippet: codex_config_snippet(&endpoint, &token),
         endpoint,
-        bearer_token: token,
         running: false,
         error: Some(error),
     }
@@ -99,7 +118,7 @@ fn router(token: String, backend: Arc<dyn McpBackend>) -> Router {
 
 async fn handle_get(State(state): State<McpState>, headers: HeaderMap) -> Response {
     if let Err(response) = authorize(&headers, &state.token) {
-        return response;
+        return response.into_response();
     }
     (
         StatusCode::METHOD_NOT_ALLOWED,
@@ -111,7 +130,14 @@ async fn handle_get(State(state): State<McpState>, headers: HeaderMap) -> Respon
 
 async fn handle_post(State(state): State<McpState>, headers: HeaderMap, body: Bytes) -> Response {
     if let Err(response) = authorize(&headers, &state.token) {
-        return response;
+        return response.into_response();
+    }
+    if !accepts_json(&headers) {
+        return (
+            StatusCode::NOT_ACCEPTABLE,
+            "Accept application/json is required",
+        )
+            .into_response();
     }
     let request: JsonRpcRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
@@ -128,7 +154,17 @@ async fn handle_post(State(state): State<McpState>, headers: HeaderMap, body: By
             rpc_error(request.id, -32600, "jsonrpc must be 2.0".to_string()),
         );
     }
+    if request.method.as_deref() != Some("initialize") && !valid_protocol_header(&headers) {
+        return (
+            StatusCode::BAD_REQUEST,
+            "MCP-Protocol-Version must be 2025-06-18",
+        )
+            .into_response();
+    }
     let Some(id) = request.id.clone() else {
+        if request.method.as_deref() == Some("notifications/initialized") {
+            return StatusCode::ACCEPTED.into_response();
+        }
         return StatusCode::ACCEPTED.into_response();
     };
     let result = handle_request(&state, request, id).await;
@@ -137,18 +173,7 @@ async fn handle_post(State(state): State<McpState>, headers: HeaderMap, body: By
 
 async fn handle_request(state: &McpState, request: JsonRpcRequest, id: Value) -> Value {
     match request.method.as_deref() {
-        Some("initialize") => rpc_success(
-            id,
-            json!({
-                "protocolVersion": MCP_PROTOCOL_VERSION,
-                "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": {
-                    "name": "pokedex-desktop",
-                    "title": "Pokédex Desktop",
-                    "version": env!("CARGO_PKG_VERSION")
-                }
-            }),
-        ),
+        Some("initialize") => initialize(id, request.params),
         Some("ping") => rpc_success(id, json!({})),
         Some("tools/list") => rpc_success(id, json!({ "tools": tool_definitions() })),
         Some("tools/call") => call_tool(state, id, request.params).await,
@@ -201,9 +226,23 @@ async fn call_tool(state: &McpState, id: Value, params: Option<Value>) -> Value 
     }
 }
 
-fn authorize(headers: &HeaderMap, expected: &str) -> std::result::Result<(), Response> {
+enum AuthorizationFailure {
+    Forbidden,
+    Unauthorized,
+}
+
+impl IntoResponse for AuthorizationFailure {
+    fn into_response(self) -> Response {
+        match self {
+            Self::Forbidden => (StatusCode::FORBIDDEN, "Loopback requests only").into_response(),
+            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "Unauthorized").into_response(),
+        }
+    }
+}
+
+fn authorize(headers: &HeaderMap, expected: &str) -> std::result::Result<(), AuthorizationFailure> {
     if !valid_loopback_host(headers) || !valid_origin(headers) {
-        return Err((StatusCode::FORBIDDEN, "Loopback requests only").into_response());
+        return Err(AuthorizationFailure::Forbidden);
     }
     let supplied = headers
         .get(header::AUTHORIZATION)
@@ -212,8 +251,56 @@ fn authorize(headers: &HeaderMap, expected: &str) -> std::result::Result<(), Res
     if supplied.is_some_and(|token| constant_time_equal(token, expected)) {
         Ok(())
     } else {
-        Err((StatusCode::UNAUTHORIZED, "Unauthorized").into_response())
+        Err(AuthorizationFailure::Unauthorized)
     }
+}
+
+fn accepts_json(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value
+                .split(',')
+                .any(|part| part.trim() == "application/json")
+        })
+}
+
+fn valid_protocol_header(headers: &HeaderMap) -> bool {
+    headers
+        .get(MCP_PROTOCOL_HEADER)
+        .and_then(|value| value.to_str().ok())
+        == Some(MCP_PROTOCOL_VERSION)
+}
+
+fn initialize(id: Value, params: Option<Value>) -> Value {
+    let parsed = params
+        .and_then(|value| serde_json::from_value::<InitializeParams>(value).ok())
+        .filter(|params| {
+            params.protocol_version == MCP_PROTOCOL_VERSION
+                && params.capabilities.is_object()
+                && params.client_info.is_object()
+        });
+    if parsed.is_none() {
+        return rpc_error(
+            Some(id),
+            -32602,
+            "initialize requires protocolVersion 2025-06-18, capabilities, and clientInfo"
+                .to_string(),
+        );
+    }
+    rpc_success(
+        id,
+        json!({
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": { "tools": { "listChanged": false } },
+            "serverInfo": {
+                "name": "pokedex-desktop",
+                "title": "Pokédex Desktop",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        }),
+    )
 }
 
 fn constant_time_equal(left: &str, right: &str) -> bool {
@@ -250,7 +337,10 @@ fn valid_origin(headers: &HeaderMap) -> bool {
 fn json_response(status: StatusCode, value: Value) -> Response {
     (
         status,
-        [(header::CONTENT_TYPE, "application/json")],
+        [
+            (header::CONTENT_TYPE.as_str(), "application/json"),
+            (MCP_PROTOCOL_HEADER, MCP_PROTOCOL_VERSION),
+        ],
         value.to_string(),
     )
         .into_response()
@@ -287,21 +377,11 @@ fn escape_toml(value: &str) -> String {
 }
 
 fn is_known_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "pokedex_catalogue_search"
-            | "pokedex_card_get"
-            | "pokedex_binders_list"
-            | "pokedex_binder_get"
-            | "pokedex_binder_suggest"
-            | "pokedex_pending_scans_list"
-            | "pokedex_pending_scan_image"
-            | "pokedex_confirm_scan"
-            | "pokedex_collection_set"
-            | "pokedex_collection_notes"
-            | "pokedex_binder_create_draft"
-            | "pokedex_binder_slot_set"
-    )
+    tool_definitions().as_array().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+    })
 }
 
 fn tool_definitions() -> Value {
@@ -380,9 +460,10 @@ fn tool_definitions() -> Value {
                 "properties": {
                     "cardId": { "type": "string", "minLength": 1, "maxLength": 128 },
                     "quantity": { "type": "integer", "minimum": 0, "maximum": 9999 },
+                    "expectedRevision": { "type": "integer", "minimum": 0 },
                     "notes": { "type": ["string", "null"], "maxLength": 2000 }
                 },
-                "required": ["cardId", "quantity", "notes"],
+                "required": ["cardId", "quantity", "notes", "expectedRevision"],
                 "additionalProperties": false
             }),
             false,
@@ -396,8 +477,9 @@ fn tool_definitions() -> Value {
                 "properties": {
                     "cardId": { "type": "string", "minLength": 1, "maxLength": 128 },
                     "notes": { "type": ["string", "null"], "maxLength": 2000 }
+                    ,"expectedRevision": { "type": "integer", "minimum": 0 }
                 },
-                "required": ["cardId", "notes"],
+                "required": ["cardId", "notes", "expectedRevision"],
                 "additionalProperties": false
             }),
             false,
@@ -434,15 +516,33 @@ fn tool_definitions() -> Value {
                 "type": "object",
                 "properties": {
                     "versionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "expectedRevision": { "type": "integer", "minimum": 1 },
                     "page": { "type": "integer", "minimum": 0 },
                     "row": { "type": "integer", "minimum": 0 },
                     "column": { "type": "integer", "minimum": 0 },
                     "cardId": { "type": ["string", "null"], "maxLength": 128 }
                 },
-                "required": ["versionId", "page", "row", "column", "cardId"],
+                "required": ["versionId", "expectedRevision", "page", "row", "column", "cardId"],
                 "additionalProperties": false
             }),
             false,
+            true
+        ),
+        write_tool(
+            "pokedex_binder_slot_swap",
+            "Atomically swap two slots in a draft binder version.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "versionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "expectedRevision": { "type": "integer", "minimum": 1 },
+                    "source": slot_location_schema(),
+                    "target": slot_location_schema()
+                },
+                "required": ["versionId", "expectedRevision", "source", "target"],
+                "additionalProperties": false
+            }),
+            true,
             true
         )
     ])
@@ -453,6 +553,7 @@ fn read_tool(name: &str, description: &str, input_schema: Value, open_world: boo
         "name": name,
         "description": description,
         "inputSchema": input_schema,
+        "outputSchema": { "type": "object", "additionalProperties": true },
         "annotations": {
             "readOnlyHint": true,
             "destructiveHint": false,
@@ -473,6 +574,7 @@ fn write_tool(
         "name": name,
         "description": description,
         "inputSchema": input_schema,
+        "outputSchema": { "type": "object", "additionalProperties": true },
         "annotations": {
             "readOnlyHint": false,
             "destructiveHint": destructive,
@@ -491,6 +593,19 @@ fn id_schema(name: &str) -> Value {
         "type": "object",
         "properties": { (name): { "type": "string", "minLength": 1, "maxLength": 128 } },
         "required": [name],
+        "additionalProperties": false
+    })
+}
+
+fn slot_location_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "page": { "type": "integer", "minimum": 0 },
+            "row": { "type": "integer", "minimum": 0 },
+            "column": { "type": "integer", "minimum": 0 }
+        },
+        "required": ["page", "row", "column"],
         "additionalProperties": false
     })
 }
@@ -525,6 +640,8 @@ mod tests {
             .header(header::HOST, "127.0.0.1:47837")
             .header(header::AUTHORIZATION, format!("Bearer {token}"))
             .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, "application/json")
+            .header(MCP_PROTOCOL_HEADER, MCP_PROTOCOL_VERSION)
             .body(Body::from(body.to_string()))
             .expect("request")
     }
@@ -544,7 +661,16 @@ mod tests {
         let initialize = app
             .clone()
             .oneshot(request(
-                json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": MCP_PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "clientInfo": { "name": "test", "version": "1" }
+                    }
+                }),
                 "secret",
             ))
             .await
@@ -673,6 +799,48 @@ mod tests {
                 .expect("origin response")
                 .status(),
             StatusCode::FORBIDDEN
+        );
+    }
+
+    #[tokio::test]
+    async fn initialize_rejects_unsupported_protocol_and_later_calls_require_header() {
+        let app = router("secret".to_string(), Arc::new(FakeBackend));
+        let unsupported = app
+            .clone()
+            .oneshot(request(
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 8,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": { "name": "test", "version": "1" }
+                    }
+                }),
+                "secret",
+            ))
+            .await
+            .expect("unsupported protocol response");
+        assert_eq!(response_json(unsupported).await["error"]["code"], -32602);
+
+        let without_version = Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header(header::HOST, "127.0.0.1:47837")
+            .header(header::AUTHORIZATION, "Bearer secret")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::ACCEPT, "application/json")
+            .body(Body::from(
+                json!({ "jsonrpc": "2.0", "id": 9, "method": "ping" }).to_string(),
+            ))
+            .expect("request");
+        assert_eq!(
+            app.oneshot(without_version)
+                .await
+                .expect("missing version response")
+                .status(),
+            StatusCode::BAD_REQUEST
         );
     }
 

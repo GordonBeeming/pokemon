@@ -6,10 +6,10 @@ mod mcp;
 mod secrets;
 mod sync;
 
-use crate::cloud::{ArtVariant, CloudClient};
+use crate::cloud::{ArtVariant, CloudClient, CollectionSetInput};
 use crate::config::{AppConfig, AppPaths};
 use crate::error::{DesktopError, Result};
-use crate::inbox::{CaptureSource, PendingInbox, PendingScan, PendingScanImage};
+use crate::inbox::{CaptureSource, PendingInbox, PendingScan, PendingScanImage, ScanState};
 use crate::mcp::{McpBackend, McpStatus, ToolPayload};
 use crate::secrets::{DesktopTokenStore, KeychainTokenStore};
 use crate::sync::{ArtSyncEngine, CloudArtRemote, SyncReport, TcgdexArtSource, UploadOutcome};
@@ -17,9 +17,10 @@ use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::Manager;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 const REQUIRED_SCOPES: [&str; 5] = [
@@ -36,11 +37,17 @@ struct DesktopServices {
     inbox: PendingInbox,
     token_store: Arc<dyn DesktopTokenStore>,
     cloud: CloudClient,
+    settings_lock: Mutex<()>,
+    sync_lock: Mutex<()>,
+    scan_lock: Mutex<()>,
+    sync_cancel: Arc<AtomicBool>,
 }
 
 struct TauriState {
     services: Arc<DesktopServices>,
-    mcp_status: RwLock<McpStatus>,
+    mcp_status: Arc<RwLock<McpStatus>>,
+    mcp_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    mcp_token: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -64,23 +71,28 @@ impl DesktopServices {
             config: RwLock::new(config),
             token_store,
             cloud: CloudClient::new()?,
+            settings_lock: Mutex::new(()),
+            sync_lock: Mutex::new(()),
+            scan_lock: Mutex::new(()),
+            sync_cancel: Arc::new(AtomicBool::new(false)),
         })
     }
 
-    fn cloud_token(&self) -> Result<String> {
-        self.token_store.get()?.ok_or(DesktopError::NotPaired)
+    fn cloud_token(&self, origin: &str) -> Result<String> {
+        self.token_store.get(origin)?.ok_or(DesktopError::NotPaired)
     }
 
-    fn handle_cloud<T>(&self, result: Result<T>) -> Result<T> {
+    fn handle_cloud<T>(&self, origin: &str, token: &str, result: Result<T>) -> Result<T> {
         if matches!(result, Err(DesktopError::Cloud { status: 401, .. })) {
-            self.token_store.delete()?;
+            self.token_store.compare_delete(origin, token)?;
         }
         result
     }
 
     async fn cloud_context(&self) -> Result<(String, String)> {
         let config = self.config.read().await;
-        Ok((config.cloud_base_url.clone(), self.cloud_token()?))
+        let origin = config.cloud_base_url.clone();
+        Ok((origin.clone(), self.cloud_token(&origin)?))
     }
 }
 
@@ -88,14 +100,15 @@ impl DesktopServices {
 async fn desktop_status(
     state: tauri::State<'_, TauriState>,
 ) -> std::result::Result<DesktopStatus, String> {
+    let config = state.services.config.read().await.clone();
     let paired = state
         .services
         .token_store
-        .get()
+        .get(&config.cloud_base_url)
         .map_err(display_error)?
         .is_some();
     Ok(DesktopStatus {
-        config: state.services.config.read().await.clone(),
+        config,
         paired,
         pending_scans: state.services.inbox.list().map_err(display_error)?,
         mcp: state.mcp_status.read().await.clone(),
@@ -107,10 +120,35 @@ async fn save_settings(
     state: tauri::State<'_, TauriState>,
     config: AppConfig,
 ) -> std::result::Result<AppConfig, String> {
+    let _guard = state.services.settings_lock.lock().await;
+    let previous = state.services.config.read().await.clone();
     config.validate().map_err(display_error)?;
     sync::validate_library_path(&config.image_library_path).map_err(display_error)?;
     config::save(&state.services.paths.config_file, &config).map_err(display_error)?;
     *state.services.config.write().await = config.clone();
+    if previous.mcp_port != config.mcp_port {
+        if let Some(task) = state.mcp_task.lock().await.take() {
+            task.abort();
+        }
+        let backend: Arc<dyn McpBackend> = state.services.clone();
+        match mcp::start(
+            config.mcp_port,
+            state.mcp_token.clone(),
+            backend,
+            state.mcp_status.clone(),
+        )
+        .await
+        {
+            Ok(task) => *state.mcp_task.lock().await = Some(task),
+            Err(error) => {
+                *state.mcp_status.write().await = mcp::unavailable_status(
+                    config.mcp_port,
+                    state.mcp_token.clone(),
+                    error.to_string(),
+                );
+            }
+        }
+    }
     Ok(config)
 }
 
@@ -140,14 +178,19 @@ async fn redeem_pairing_code(
     state
         .services
         .token_store
-        .set(&result.token)
+        .set(&config.cloud_base_url, &result.token)
         .map_err(display_error)?;
     Ok(result.scopes)
 }
 
 #[tauri::command]
-fn disconnect_cloud(state: tauri::State<'_, TauriState>) -> std::result::Result<(), String> {
-    state.services.token_store.delete().map_err(display_error)
+async fn disconnect_cloud(state: tauri::State<'_, TauriState>) -> std::result::Result<(), String> {
+    let origin = state.services.config.read().await.cloud_base_url.clone();
+    state
+        .services
+        .token_store
+        .delete(&origin)
+        .map_err(display_error)
 }
 
 #[tauri::command]
@@ -188,6 +231,12 @@ fn delete_pending_scan(
 async fn synchronize_art(
     state: tauri::State<'_, TauriState>,
 ) -> std::result::Result<SyncReport, String> {
+    let _guard = state
+        .services
+        .sync_lock
+        .try_lock()
+        .map_err(|_| "Art synchronization is already running.".to_string())?;
+    state.services.sync_cancel.store(false, Ordering::Relaxed);
     let (base_url, token) = state
         .services
         .cloud_context()
@@ -210,9 +259,15 @@ async fn synchronize_art(
         remote,
         Arc::new(TcgdexArtSource::new().map_err(display_error)?),
     )
+    .with_cancellation(state.services.sync_cancel.clone())
     .synchronize()
     .await
     .map_err(display_error)
+}
+
+#[tauri::command]
+fn cancel_art_sync(state: tauri::State<'_, TauriState>) {
+    state.services.sync_cancel.store(true, Ordering::Relaxed);
 }
 
 #[tauri::command]
@@ -274,24 +329,32 @@ impl McpBackend for DesktopServices {
                     .cloud
                     .catalogue_search(&base, &token, query, limit)
                     .await;
-                Ok(ToolPayload::Structured(self.handle_cloud(result)?))
+                Ok(ToolPayload::Structured(
+                    self.handle_cloud(&base, &token, result)?,
+                ))
             }
             "pokedex_card_get" => {
                 let card_id = required_string(&arguments, "cardId", 128)?;
                 let (base, token) = self.cloud_context().await?;
                 let result = self.cloud.card(&base, &token, card_id).await;
-                Ok(ToolPayload::Structured(self.handle_cloud(result)?))
+                Ok(ToolPayload::Structured(
+                    self.handle_cloud(&base, &token, result)?,
+                ))
             }
             "pokedex_binders_list" => {
                 let (base, token) = self.cloud_context().await?;
                 let result = self.cloud.list_binders(&base, &token).await;
-                Ok(ToolPayload::Structured(self.handle_cloud(result)?))
+                Ok(ToolPayload::Structured(
+                    self.handle_cloud(&base, &token, result)?,
+                ))
             }
             "pokedex_binder_get" => {
                 let version_id = required_string(&arguments, "versionId", 128)?;
                 let (base, token) = self.cloud_context().await?;
                 let result = self.cloud.binder(&base, &token, version_id).await;
-                Ok(ToolPayload::Structured(self.handle_cloud(result)?))
+                Ok(ToolPayload::Structured(
+                    self.handle_cloud(&base, &token, result)?,
+                ))
             }
             "pokedex_binder_suggest" => {
                 let version_id = required_string(&arguments, "versionId", 128)?;
@@ -300,7 +363,9 @@ impl McpBackend for DesktopServices {
                     .cloud
                     .binder_suggestions(&base, &token, version_id)
                     .await;
-                Ok(ToolPayload::Structured(self.handle_cloud(result)?))
+                Ok(ToolPayload::Structured(
+                    self.handle_cloud(&base, &token, result)?,
+                ))
             }
             "pokedex_pending_scans_list" => Ok(ToolPayload::Structured(json!({
                 "scans": self.inbox.list()?
@@ -325,10 +390,13 @@ impl McpBackend for DesktopServices {
                     .ok_or_else(|| DesktopError::Mcp("layout is required".to_string()))?;
                 let (base, token) = self.cloud_context().await?;
                 let result = self.cloud.create_binder(&base, &token, name, layout).await;
-                Ok(ToolPayload::Structured(self.handle_cloud(result)?))
+                Ok(ToolPayload::Structured(
+                    self.handle_cloud(&base, &token, result)?,
+                ))
             }
             "pokedex_binder_slot_set" => {
                 let version_id = required_string(&arguments, "versionId", 128)?;
+                let expected_revision = required_u64(&arguments, "expectedRevision")?;
                 let slot = json!({
                     "page": required_u64(&arguments, "page")?,
                     "row": required_u64(&arguments, "row")?,
@@ -338,9 +406,31 @@ impl McpBackend for DesktopServices {
                 let (base, token) = self.cloud_context().await?;
                 let result = self
                     .cloud
-                    .set_binder_slot(&base, &token, version_id, slot)
+                    .set_binder_slot(&base, &token, version_id, slot, expected_revision)
                     .await;
-                Ok(ToolPayload::Structured(self.handle_cloud(result)?))
+                Ok(ToolPayload::Structured(
+                    self.handle_cloud(&base, &token, result)?,
+                ))
+            }
+            "pokedex_binder_slot_swap" => {
+                let version_id = required_string(&arguments, "versionId", 128)?;
+                let expected_revision = required_u64(&arguments, "expectedRevision")?;
+                let source = arguments
+                    .get("source")
+                    .cloned()
+                    .ok_or_else(|| DesktopError::Mcp("source is required".to_string()))?;
+                let target = arguments
+                    .get("target")
+                    .cloned()
+                    .ok_or_else(|| DesktopError::Mcp("target is required".to_string()))?;
+                let (base, token) = self.cloud_context().await?;
+                let result = self
+                    .cloud
+                    .swap_binder_slots(&base, &token, version_id, expected_revision, source, target)
+                    .await;
+                Ok(ToolPayload::Structured(
+                    self.handle_cloud(&base, &token, result)?,
+                ))
             }
             _ => Err(DesktopError::Mcp(format!("unknown tool: {name}"))),
         }
@@ -349,6 +439,7 @@ impl McpBackend for DesktopServices {
 
 impl DesktopServices {
     async fn confirm_scan(&self, arguments: &Map<String, Value>) -> Result<ToolPayload> {
+        let _guard = self.scan_lock.lock().await;
         if arguments.get("confirmed").and_then(Value::as_bool) != Some(true) {
             return Err(DesktopError::Mcp(
                 "confirmed must be true before the collection can change".to_string(),
@@ -356,49 +447,29 @@ impl DesktopServices {
         }
         let scan_id = required_uuid(arguments, "scanId")?;
         let card_id = required_string(arguments, "cardId", 128)?;
+        let claimed = self.inbox.claim(scan_id, card_id)?;
+        if claimed.state == ScanState::Completed {
+            let completed = claimed.completed_result.ok_or_else(|| {
+                DesktopError::Mcp("completed scan is missing its stored result".to_string())
+            })?;
+            self.inbox.finish_completed(scan_id)?;
+            return Ok(ToolPayload::Structured(completed));
+        }
         self.inbox.read_image(scan_id)?;
         let (base, token) = self.cloud_context().await?;
-        let card_response = self.handle_cloud(self.cloud.card(&base, &token, card_id).await)?;
-        let card = card_response
-            .get("card")
-            .and_then(Value::as_object)
-            .ok_or_else(|| DesktopError::InvalidCloudResponse("card is missing".to_string()))?;
-        if card.get("id").and_then(Value::as_str) != Some(card_id) {
-            return Err(DesktopError::InvalidCloudResponse(
-                "confirmed card identifier did not match the cloud response".to_string(),
-            ));
-        }
-        let collection = card.get("collection").and_then(Value::as_object);
-        let quantity = collection
-            .and_then(|value| value.get("quantity"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        if quantity >= 9999 {
-            return Err(DesktopError::Mcp(
-                "quantity is already at the maximum of 9999".to_string(),
-            ));
-        }
-        let notes = collection
-            .and_then(|value| value.get("notes"))
-            .and_then(Value::as_str);
         let mutation = self
             .cloud
-            .set_collection(
-                &base,
-                &token,
-                card_id,
-                quantity as u32 + 1,
-                notes,
-                Uuid::new_v4(),
-            )
+            .increment_collection(&base, &token, card_id, 1, claimed.mutation_id)
             .await;
-        let mutation = self.handle_cloud(mutation)?;
-        self.inbox.delete(scan_id)?;
-        Ok(ToolPayload::Structured(json!({
-            "confirmedCard": card_response["card"],
+        let mutation = self.handle_cloud(&base, &token, mutation)?;
+        let result = json!({
+            "confirmedCardId": card_id,
             "collection": mutation,
             "deletedScanId": scan_id
-        })))
+        });
+        self.inbox.complete(scan_id, result.clone())?;
+        self.inbox.finish_completed(scan_id)?;
+        Ok(ToolPayload::Structured(result))
     }
 
     async fn set_collection_tool(&self, arguments: &Map<String, Value>) -> Result<ToolPayload> {
@@ -410,44 +481,46 @@ impl DesktopServices {
             ));
         }
         let notes = optional_nullable_string(arguments, "notes", 2000)?;
+        let expected_revision = required_u64(arguments, "expectedRevision")?;
         let (base, token) = self.cloud_context().await?;
         let result = self
             .cloud
             .set_collection(
                 &base,
                 &token,
-                card_id,
-                quantity as u32,
-                notes.as_deref(),
-                Uuid::new_v4(),
+                CollectionSetInput {
+                    card_id,
+                    quantity: quantity as u32,
+                    notes: notes.as_deref(),
+                    mutation_id: Uuid::new_v4(),
+                    expected_revision,
+                },
             )
             .await;
-        Ok(ToolPayload::Structured(self.handle_cloud(result)?))
+        Ok(ToolPayload::Structured(serde_json::to_value(
+            self.handle_cloud(&base, &token, result)?,
+        )?))
     }
 
     async fn set_notes_tool(&self, arguments: &Map<String, Value>) -> Result<ToolPayload> {
         let card_id = required_string(arguments, "cardId", 128)?;
         let notes = optional_nullable_string(arguments, "notes", 2000)?;
+        let expected_revision = required_u64(arguments, "expectedRevision")?;
         let (base, token) = self.cloud_context().await?;
-        let card = self.handle_cloud(self.cloud.card(&base, &token, card_id).await)?;
-        let quantity = card
-            .get("card")
-            .and_then(|value| value.get("collection"))
-            .and_then(|value| value.get("quantity"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
         let result = self
             .cloud
-            .set_collection(
+            .patch_collection_notes(
                 &base,
                 &token,
                 card_id,
-                quantity as u32,
                 notes.as_deref(),
+                expected_revision,
                 Uuid::new_v4(),
             )
             .await;
-        Ok(ToolPayload::Structured(self.handle_cloud(result)?))
+        Ok(ToolPayload::Structured(serde_json::to_value(
+            self.handle_cloud(&base, &token, result)?,
+        )?))
     }
 }
 
@@ -509,6 +582,11 @@ fn optional_nullable_string(
 }
 
 pub fn run() {
+    let _ = tracing_subscriber::fmt()
+        .json()
+        .with_target(false)
+        .with_current_span(false)
+        .try_init();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -521,17 +599,32 @@ pub fn run() {
                 Arc::new(KeychainTokenStore),
             )?);
             let backend: Arc<dyn McpBackend> = services.clone();
-            let status = tauri::async_runtime::block_on(mcp::start(
+            let status = Arc::new(RwLock::new(mcp::unavailable_status(
+                config.mcp_port,
+                mcp_token.clone(),
+                "starting".to_string(),
+            )));
+            let task = match tauri::async_runtime::block_on(mcp::start(
                 config.mcp_port,
                 mcp_token.clone(),
                 backend,
-            ))
-            .unwrap_or_else(|error| {
-                mcp::unavailable_status(config.mcp_port, mcp_token, error.to_string())
-            });
+                status.clone(),
+            )) {
+                Ok(task) => Some(task),
+                Err(error) => {
+                    *tauri::async_runtime::block_on(status.write()) = mcp::unavailable_status(
+                        config.mcp_port,
+                        mcp_token.clone(),
+                        error.to_string(),
+                    );
+                    None
+                }
+            };
             app.manage(TauriState {
                 services,
-                mcp_status: RwLock::new(status),
+                mcp_status: status,
+                mcp_task: Mutex::new(task),
+                mcp_token,
             });
             Ok(())
         })
@@ -544,6 +637,7 @@ pub fn run() {
             pending_scan_image,
             delete_pending_scan,
             synchronize_art,
+            cancel_art_sync,
             upload_art_file
         ])
         .run(tauri::generate_context!())
@@ -555,7 +649,7 @@ mod tests {
     use super::*;
     use crate::inbox::CaptureSource;
     use axum::extract::Path as AxumPath;
-    use axum::routing::{get, put};
+    use axum::routing::{get, post};
     use axum::{Json, Router};
     use std::sync::Mutex;
     use tempfile::tempdir;
@@ -563,16 +657,16 @@ mod tests {
     struct MemoryTokenStore(Mutex<Option<String>>);
 
     impl DesktopTokenStore for MemoryTokenStore {
-        fn get(&self) -> Result<Option<String>> {
+        fn get(&self, _origin: &str) -> Result<Option<String>> {
             Ok(self.0.lock().expect("token lock").clone())
         }
 
-        fn set(&self, token: &str) -> Result<()> {
+        fn set(&self, _origin: &str, token: &str) -> Result<()> {
             *self.0.lock().expect("token lock") = Some(token.to_string());
             Ok(())
         }
 
-        fn delete(&self) -> Result<()> {
+        fn delete(&self, _origin: &str) -> Result<()> {
             *self.0.lock().expect("token lock") = None;
             Ok(())
         }
@@ -589,13 +683,19 @@ mod tests {
         }))
     }
 
-    async fn mock_collection(AxumPath(card_id): AxumPath<String>) -> Json<Value> {
+    async fn mock_collection(
+        AxumPath(card_id): AxumPath<String>,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        assert_eq!(body["delta"], 1);
+        assert!(body["mutationId"].as_str().is_some());
         Json(json!({
             "ok": true,
             "state": {
                 "cardId": card_id,
                 "quantity": 1,
                 "notes": null,
+                "revision": 1,
                 "updatedAt": "2026-08-24T00:00:00.000Z"
             },
             "replayed": false
@@ -609,7 +709,10 @@ mod tests {
         let address = listener.local_addr().expect("cloud address");
         let router = Router::new()
             .route("/api/desktop/catalogue/{card_id}", get(mock_card))
-            .route("/api/desktop/collection/{card_id}", put(mock_collection));
+            .route(
+                "/api/desktop/collection/{card_id}/increment",
+                post(mock_collection),
+            );
         tokio::spawn(async move {
             axum::serve(listener, router).await.expect("mock cloud");
         });
@@ -701,13 +804,20 @@ mod tests {
                 .expect("services");
 
         let error = services
-            .handle_cloud::<()>(Err(DesktopError::Cloud {
-                status: 401,
-                code: "desktop_token_invalid".to_string(),
-            }))
+            .handle_cloud::<()>(
+                "https://pokedex.example",
+                "revoked",
+                Err(DesktopError::Cloud {
+                    status: 401,
+                    code: "desktop_token_invalid".to_string(),
+                }),
+            )
             .expect_err("revoked token error");
 
         assert!(error.to_string().contains("desktop_token_invalid"));
-        assert!(store.get().expect("stored token").is_none());
+        assert!(store
+            .get("https://pokedex.example")
+            .expect("stored token")
+            .is_none());
     }
 }

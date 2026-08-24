@@ -12,14 +12,14 @@ describe('auth foundation', () => {
     expect(enrolSecretMatches('enrol', { ENROLL_SECRET: 'enrol' })).toBe(true);
   });
 
-  it('signs 30-day sessions and accepts the previous rotation secret', async () => {
+  it('signs bounded sessions and accepts the previous rotation secret', async () => {
     const token = await signSession(
-      { sub: 'owner', label: 'Owner' },
+      { sub: 'owner', label: 'Owner', sid: 'session-id', epoch: 3 },
       { SESSION_SECRET: previous, SESSION_SECRET_PREV: undefined },
     );
     await expect(
       verifySession(token, { SESSION_SECRET: current, SESSION_SECRET_PREV: previous }),
-    ).resolves.toMatchObject({ sub: 'owner', label: 'Owner' });
+    ).resolves.toMatchObject({ sub: 'owner', label: 'Owner', sid: 'session-id', epoch: 3 });
   });
 
   it('only marks secure cookies on non-local origins', () => {

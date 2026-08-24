@@ -6,6 +6,9 @@ export interface PendingScan {
   source: CaptureSource;
   mimeType: string;
   bytes: number;
+  mutationId: string;
+  state: 'pending' | 'claimed' | 'completed';
+  confirmedCardId: string | null;
 }
 
 export interface PendingScanImage {
@@ -23,7 +26,6 @@ export interface AppConfig {
 
 export interface McpStatus {
   endpoint: string;
-  bearerToken: string;
   configSnippet: string;
   running: boolean;
   error: string | null;

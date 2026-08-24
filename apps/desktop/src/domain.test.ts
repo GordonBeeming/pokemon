@@ -13,6 +13,9 @@ const pending = {
   source: 'file' as const,
   mimeType: 'image/webp',
   bytes: 4,
+  mutationId: '319e23de-1648-460e-8a82-a1379428357d',
+  state: 'pending' as const,
+  confirmedCardId: null,
 };
 
 describe('capture workflows', () => {

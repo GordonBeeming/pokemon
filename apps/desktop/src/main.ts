@@ -14,6 +14,7 @@ import {
   type SaveCapture,
   type SyncReport,
 } from './domain';
+import { ExclusiveAction, LatestGeneration } from './ui-controller';
 import './styles.css';
 
 const app = document.querySelector('#app');
@@ -26,7 +27,7 @@ app.innerHTML = `
         <h1>Pokédex Scanner</h1>
         <p>Capture one card, confirm the match, then move on.</p>
       </div>
-      <div class="status-line" aria-label="Connection status">
+      <div class="status-line" aria-label="Connection status" role="status" aria-live="polite">
         <span class="status-chip" id="cloud-status">Cloud unknown</span>
         <span class="status-chip" id="mcp-status">MCP unknown</span>
       </div>
@@ -104,7 +105,9 @@ app.innerHTML = `
             <div class="form-actions">
               <button type="submit">Save settings</button>
               <button class="primary" id="sync-art" type="button">Sync high + low art</button>
+              <button id="cancel-sync" type="button" hidden>Cancel sync</button>
             </div>
+            <progress id="sync-progress" hidden aria-label="Art synchronization in progress"></progress>
           </form>
         </section>
 
@@ -142,7 +145,9 @@ const libraryPath = requireElement('#library-path', HTMLInputElement);
 const cloudUrl = requireElement('#cloud-url', HTMLInputElement);
 const deviceLabel = requireElement('#device-label', HTMLInputElement);
 const syncArt = requireElement('#sync-art', HTMLButtonElement);
+const cancelSync = requireElement('#cancel-sync', HTMLButtonElement);
 const syncState = requireElement('#sync-state', HTMLSpanElement);
+const syncProgress = requireElement('#sync-progress', HTMLProgressElement);
 const mcpEndpoint = requireElement('#mcp-endpoint', HTMLSpanElement);
 const mcpConfig = requireElement('#mcp-config', HTMLPreElement);
 const copyMcp = requireElement('#copy-mcp', HTMLButtonElement);
@@ -150,14 +155,21 @@ const notice = requireElement('#notice', HTMLDivElement);
 
 let status: DesktopStatus | null = null;
 let cameraStream: MediaStream | null = null;
+const refreshGenerations = new LatestGeneration();
+const cameraAction = new ExclusiveAction();
 
 const saveLocalCapture: SaveCapture = async (bytes, mimeType, source) =>
   invoke<PendingScan>('save_capture', { bytes, mimeType, source });
 
 async function refresh(): Promise<void> {
-  status = await invoke<DesktopStatus>('desktop_status');
-  renderStatus(status);
-  await renderPending(status.pendingScans);
+  const generation = refreshGenerations.next();
+  const next = await invoke<DesktopStatus>('desktop_status');
+  const pending = await pendingFragment(next.pendingScans);
+  if (!refreshGenerations.isCurrent(generation)) return;
+  status = next;
+  renderStatus(next);
+  pendingCount.textContent = `${next.pendingScans.length} pending`;
+  pendingList.replaceChildren(pending);
 }
 
 function renderStatus(next: DesktopStatus): void {
@@ -174,68 +186,79 @@ function renderStatus(next: DesktopStatus): void {
   deviceLabel.value = next.config.deviceLabel;
 }
 
-async function renderPending(scans: PendingScan[]): Promise<void> {
-  pendingCount.textContent = `${scans.length} pending`;
-  pendingList.replaceChildren();
+async function pendingFragment(scans: PendingScan[]): Promise<DocumentFragment> {
+  const fragment = document.createDocumentFragment();
   if (scans.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'empty-state';
     empty.textContent = 'No captures are waiting. The next image will appear here.';
-    pendingList.append(empty);
-    return;
+    fragment.append(empty);
+    return fragment;
   }
-  for (const scan of scans) {
-    const article = document.createElement('article');
-    article.className = 'pending-item';
-    const preview = document.createElement('div');
-    preview.className = 'pending-preview';
-    const image = document.createElement('img');
-    image.alt = `Pending ${scan.source} capture`;
-    const pendingImage = await invoke<PendingScanImage>('pending_scan_image', { scanId: scan.id });
-    image.src = imageDataUrl(pendingImage);
-    preview.append(image);
+  const articles = await Promise.all(scans.map(pendingArticle));
+  fragment.append(...articles);
+  return fragment;
+}
 
-    const detail = document.createElement('div');
-    detail.className = 'pending-detail';
-    const title = document.createElement('strong');
-    title.textContent = scan.source === 'camera' ? 'Camera capture' : 'Imported image';
-    const metadata = document.createElement('span');
-    metadata.textContent = `${formatBytes(scan.bytes)} · ${new Date(scan.createdAt * 1000).toLocaleString()}`;
-    detail.append(title, metadata);
+async function pendingArticle(scan: PendingScan): Promise<HTMLElement> {
+  const article = document.createElement('article');
+  article.className = 'pending-item';
+  const preview = document.createElement('div');
+  preview.className = 'pending-preview';
+  const image = document.createElement('img');
+  image.alt = `Pending ${scan.source} capture`;
+  const pendingImage = await invoke<PendingScanImage>('pending_scan_image', { scanId: scan.id });
+  image.src = imageDataUrl(pendingImage);
+  preview.append(image);
 
-    const remove = document.createElement('button');
-    remove.className = 'text-action danger';
-    remove.type = 'button';
-    remove.textContent = 'Delete';
-    remove.setAttribute('aria-label', `Delete pending capture ${scan.id}`);
-    remove.addEventListener('click', () => {
-      void runAction(async () => {
-        await invoke('delete_pending_scan', { scanId: scan.id });
-        await refresh();
-        showNotice('Local capture deleted.');
-      });
+  const detail = document.createElement('div');
+  detail.className = 'pending-detail';
+  const title = document.createElement('strong');
+  title.textContent = scan.source === 'camera' ? 'Camera capture' : 'Imported image';
+  const metadata = document.createElement('span');
+  metadata.textContent = `${formatBytes(scan.bytes)} · ${new Date(scan.createdAt * 1000).toLocaleString()}`;
+  detail.append(title, metadata);
+
+  const remove = document.createElement('button');
+  remove.className = 'text-action danger';
+  remove.type = 'button';
+  remove.textContent = 'Delete';
+  remove.setAttribute('aria-label', `Delete pending capture ${scan.id}`);
+  remove.addEventListener('click', () => {
+    void runAction(async () => {
+      await invoke('delete_pending_scan', { scanId: scan.id });
+      await refresh();
+      showNotice('Local capture deleted.');
     });
-    article.append(preview, detail, remove);
-    pendingList.append(article);
-  }
+  });
+  article.append(preview, detail, remove);
+  return article;
 }
 
 cameraToggle.addEventListener('click', () => {
   void runAction(async () => {
-    if (cameraStream) {
-      stopCamera();
-      return;
-    }
-    cameraStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
-      audio: false,
+    await cameraAction.run(async () => {
+      cameraToggle.disabled = true;
+      try {
+        if (cameraStream) {
+          stopCamera();
+          return;
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
+          audio: false,
+        });
+        cameraStream = stream;
+        camera.srcObject = stream;
+        await camera.play();
+        camera.hidden = false;
+        cameraPlaceholder.hidden = true;
+        cameraCapture.disabled = false;
+        cameraToggle.textContent = 'Stop camera';
+      } finally {
+        cameraToggle.disabled = false;
+      }
     });
-    camera.srcObject = cameraStream;
-    await camera.play();
-    camera.hidden = false;
-    cameraPlaceholder.hidden = true;
-    cameraCapture.disabled = false;
-    cameraToggle.textContent = 'Stop camera';
   });
 });
 
@@ -302,6 +325,8 @@ settingsForm.addEventListener('submit', (event) => {
 syncArt.addEventListener('click', () => {
   void runAction(async () => {
     syncArt.disabled = true;
+    syncProgress.hidden = false;
+    cancelSync.hidden = false;
     syncState.textContent = 'Syncing';
     try {
       const report = await invoke<SyncReport>('synchronize_art');
@@ -309,9 +334,24 @@ syncArt.addEventListener('click', () => {
       showNotice(
         `Art sync checked ${report.sourceCards} catalogue cards: ${report.downloaded} downloaded, ${report.uploaded} uploaded, ${report.skipped} unchanged, ${report.missingImages} without source art.`,
       );
+    } catch (error) {
+      syncState.textContent = String(error).toLowerCase().includes('cancel')
+        ? 'Cancelled'
+        : 'Sync failed';
+      throw error;
     } finally {
       syncArt.disabled = false;
+      syncProgress.hidden = true;
+      cancelSync.hidden = true;
     }
+  });
+});
+
+cancelSync.addEventListener('click', () => {
+  cancelSync.disabled = true;
+  syncState.textContent = 'Cancelling';
+  void invoke('cancel_art_sync').finally(() => {
+    cancelSync.disabled = false;
   });
 });
 

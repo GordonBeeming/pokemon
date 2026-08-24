@@ -1,6 +1,11 @@
 import {
   binderLayoutSchema,
+  binderSlotSetRequestSchema,
+  binderSlotSwapRequestSchema,
   cardCategorySchema,
+  collectionIncrementRequestSchema,
+  collectionNotesPatchRequestSchema,
+  collectionSetRequestSchema,
   languageSchema,
   mutationRequestSchema,
 } from '@pokedex/shared';
@@ -28,9 +33,15 @@ import {
   listBinders,
   reorderBinderPages,
   setBinderSlot,
+  swapBinderSlots,
+  getBinderVersionShortages,
+  BinderDomainError,
 } from '../../lib/binders';
 import {
   createCustomCard,
+  beginStagedCatalogueRun,
+  stageCatalogueCards,
+  applyStagedCatalogueRun,
   getCardDetail,
   importCatalogueLanguage,
   listSetFacets,
@@ -38,15 +49,24 @@ import {
   listCatalogueSources,
   searchCards,
 } from '../../lib/catalogue';
-import { collectionSummary, setCollectionState } from '../../lib/collection';
+import {
+  collectionSummary,
+  incrementCollectionQuantity,
+  patchCollectionNotes,
+  setCollectionState,
+  CollectionDomainError,
+} from '../../lib/collection';
 import { asPositiveInt } from '../../lib/db';
-import { requireSession } from '../../lib/guards';
+import { clientIp, enforceRateLimit, requireSession } from '../../lib/guards';
 import { logAudit } from '../../lib/auth';
-import { describeError, logWarn } from '../../lib/log';
+import { ApplicationError, describeError, logError } from '../../lib/log';
 import { priceCoverage } from '../../lib/pricing';
 import type { AuthVars } from '../../lib/types';
 
 const api = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
+const desktopPublic = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
+const desktop = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
+const browser = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
 
 const collectionBody = mutationRequestSchema
   .extend({
@@ -54,6 +74,10 @@ const collectionBody = mutationRequestSchema
     notes: z.string().max(2000).nullable(),
   })
   .strict();
+const collectionSetBody = collectionSetRequestSchema;
+const compatibleCollectionSetBody = z.union([collectionSetBody, collectionBody]);
+const collectionIncrementBody = collectionIncrementRequestSchema;
+const collectionNotesBody = collectionNotesPatchRequestSchema;
 const createBinderBody = z
   .object({ name: z.string().trim().min(1).max(120), layout: binderLayoutSchema })
   .strict();
@@ -63,13 +87,18 @@ const slotBody = z
     row: z.number().int().nonnegative(),
     column: z.number().int().nonnegative(),
     cardId: z.string().trim().min(1).max(128).nullable(),
+    expectedRevision: z.number().int().positive().optional(),
   })
   .strict();
+const compatibleSlotBody = z.union([binderSlotSetRequestSchema, slotBody]);
 const pageOrderBody = z
   .object({ pageIds: z.array(z.string().trim().min(1).max(128)).min(1) })
   .strict();
 const arrangementBody = z
-  .object({ mode: z.enum(['set-number', 'release-date', 'pokedex-number', 'language']) })
+  .object({
+    mode: z.enum(['set-number', 'release-date', 'pokedex-number', 'language']),
+    expectedRevision: z.number().int().positive().optional(),
+  })
   .strict();
 const pairBody = z
   .object({
@@ -95,6 +124,9 @@ const uploadRequestBody = z
       .max(15 * 1024 * 1024),
   })
   .strict();
+const bulkUploadRequestBody = z
+  .object({ uploads: z.array(uploadRequestBody).min(1).max(100) })
+  .strict();
 const syncBody = z
   .object({
     provider: z.literal('tcgdex'),
@@ -114,6 +146,9 @@ const syncBody = z
             setId: z.string().trim().min(1).max(128),
             setName: z.string().trim().min(1).max(200),
             number: z.string().trim().min(1).max(32),
+            numberSort: z.number().int().nonnegative().nullable().optional(),
+            releaseDate: z.string().date().nullable().optional(),
+            pokedexNumber: z.number().int().positive().nullable().optional(),
             supertype: z.string().trim().max(80).nullable().optional(),
             subtype: z.string().trim().max(120).nullable().optional(),
             species: z.string().trim().max(120).nullable().optional(),
@@ -128,6 +163,9 @@ const syncBody = z
 const customCardBody = syncBody.shape.cards.element
   .omit({ sourceId: true, checksum: true, sourceUpdatedAt: true })
   .strict();
+const syncPageBody = z.object({ cards: syncBody.shape.cards }).strict();
+const syncRunBody = z.object({ language: languageSchema }).strict();
+const syncFinalizeBody = z.object({ allowDestructiveDrop: z.boolean().optional() }).strict();
 
 function sessionOwner(c: { get: (key: 'session') => AuthVars['session'] }): string {
   const session = c.get('session');
@@ -148,79 +186,93 @@ export function parseDesktopBearer(header: string | undefined): string | null {
   return matched?.[1] ?? null;
 }
 
-export function isDesktopBearerRoute(pathname: string): boolean {
-  const path = pathname.replace(/^\/api/u, '');
-  return (
-    path === '/desktop/catalogue/search' ||
-    path === '/desktop/catalogue/sources' ||
-    /^\/desktop\/catalogue\/[^/]+$/u.test(path) ||
-    path === '/desktop/art/upload-tokens' ||
-    /^\/desktop\/art\/uploads\/[^/]+$/u.test(path) ||
-    path === '/desktop/art/manifest' ||
-    /^\/desktop\/art\/[^/]+\/(?:high|low)$/u.test(path) ||
-    /^\/desktop\/collection\/[^/]+$/u.test(path) ||
-    path === '/desktop/binders' ||
-    /^\/desktop\/binders\/versions\/[^/]+$/u.test(path) ||
-    /^\/desktop\/binders\/versions\/[^/]+\/slot$/u.test(path) ||
-    /^\/desktop\/binders\/versions\/[^/]+\/suggest$/u.test(path)
-  );
-}
-
 async function desktopOwner(
-  c: { env: CloudflareEnv; req: { header: (name: string) => string | undefined } },
+  c: { env: CloudflareEnv; get: (key: 'desktopBearer') => string | undefined },
   scope: 'catalogue:read' | 'art:read' | 'art:write' | 'collection:write' | 'binders:write',
 ): Promise<string> {
-  const bearer = parseDesktopBearer(c.req.header('authorization'));
+  const bearer = c.get('desktopBearer');
   if (!bearer) throw new Error('desktop_token_invalid');
   return requireDesktopToken(c.env.DB, bearer, scope);
 }
 
 function apiFailure(
-  c: {
-    json: (body: { ok: false; error: string }, status: 400 | 401 | 404 | 409 | 500) => Response;
-  },
+  c: import('hono').Context<{ Bindings: CloudflareEnv; Variables: AuthVars }>,
   error: unknown,
 ): Response {
-  const message = describeError(error);
-  const known = new Set([
-    'unauthorized',
-    'card_not_found',
-    'binder_version_not_found',
-    'binder_page_not_found',
+  const code =
+    (error instanceof ApplicationError
+      ? error.code
+      : error instanceof BinderDomainError || error instanceof CollectionDomainError
+        ? error.code
+        : error instanceof Error
+          ? error.message.split(':', 1)[0]
+          : 'internal_error') ?? 'internal_error';
+  const conflict = new Set([
     'binder_version_not_draft',
-    'binder_slot_out_of_bounds',
-    'pair_code_invalid',
+    'binder_revision_conflict',
+    'binder_last_page',
+    'binder_page_order_invalid',
+    'binder_page_limit_reached',
+    'collection_revision_conflict',
+    'collection_mutation_conflict',
+    'collection_quantity_out_of_bounds',
     'pair_code_already_consumed',
-    'desktop_token_invalid',
-    'desktop_token_scope_missing',
-    'art_upload_token_invalid',
-    'art_upload_size_invalid',
+    'art_upload_version_conflict',
+  ]);
+  const invalid = new Set([
+    'invalid_body',
+    'invalid_filter',
+    'invalid_json',
+    'invalid_catalogue_source_cursor',
+    'binder_page_window_invalid',
+    'binder_slot_out_of_bounds',
     'art_upload_not_webp',
     'art_upload_checksum_mismatch',
-    'backup_not_found',
+    'pair_code_invalid',
     'backup_invalid',
-    'invalid_catalogue_source_cursor',
+    'invalid_variant',
+    'language_mismatch',
+    'invalid_desktop_scopes',
+    'staged_sync_empty',
+    'binder_arrangement_card_missing',
+    'collection_not_found',
   ]);
-  const code =
-    (error instanceof Error ? error.message : message).split(':', 1).at(0) ?? 'internal_error';
   const status =
     code === 'unauthorized' ||
     code === 'desktop_token_invalid' ||
     code === 'desktop_token_scope_missing'
       ? 401
-      : code.endsWith('_not_found') || code === 'card_not_found'
-        ? 404
-        : code.includes('not_draft') || code.includes('already_consumed')
-          ? 409
-          : known.has(code)
-            ? 400
-            : 500;
-  if (status === 500) logWarn({ evt: 'api.request_failed', err: message });
-  return c.json({ ok: false, error: status === 500 ? 'internal_error' : code }, status);
+      : error instanceof ApplicationError
+        ? error.status
+        : code.endsWith('_not_found') || code === 'card_not_found' || code === 'art_not_found'
+          ? 404
+          : conflict.has(code)
+            ? 409
+            : invalid.has(code)
+              ? 400
+              : 500;
+  const requestId = c.get('requestId');
+  if (status >= 500)
+    logError({
+      evt: 'api.request_failed',
+      requestId,
+      method: c.req.method,
+      path: new URL(c.req.url).pathname,
+      status,
+      code,
+      err: describeError(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+  return c.json({ ok: false, error: status === 500 ? 'internal_error' : code, requestId }, status);
 }
 
-api.post('/desktop/pair/redeem', async (c) => {
+desktopPublic.post('/desktop/pair/redeem', async (c) => {
   try {
+    const rate = await enforceRateLimit(c.env, `pair:${clientIp(c.req.raw)}`, 6, 15 * 60);
+    if (!rate.allowed) {
+      c.header('retry-after', String(rate.retryAfter));
+      return c.json({ ok: false, error: 'rate_limited', requestId: c.get('requestId') }, 429);
+    }
     const parsed = redeemBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     const token = await redeemPairCode(c.env.DB, parsed.data.code, parsed.data.label);
@@ -230,7 +282,21 @@ api.post('/desktop/pair/redeem', async (c) => {
   }
 });
 
-api.post('/desktop/art/upload-tokens', async (c) => {
+const requireDesktopBearer = async (
+  c: import('hono').Context<{ Bindings: CloudflareEnv; Variables: AuthVars }>,
+  next: import('hono').Next,
+) => {
+  const bearer = parseDesktopBearer(c.req.header('authorization'));
+  if (!bearer) return c.json({ ok: false, error: 'desktop_token_invalid' }, 401);
+  c.set('desktopBearer', bearer);
+  await next();
+};
+desktop.use('/desktop/art/*', requireDesktopBearer);
+desktop.use('/desktop/catalogue/*', requireDesktopBearer);
+desktop.use('/desktop/collection/*', requireDesktopBearer);
+desktop.use('/desktop/binders*', requireDesktopBearer);
+
+desktop.post('/desktop/art/upload-tokens', async (c) => {
   try {
     const ownerId = await desktopOwner(c, 'art:write');
     const parsed = uploadRequestBody.safeParse(await parsedJson(c.req.raw));
@@ -248,8 +314,35 @@ api.post('/desktop/art/upload-tokens', async (c) => {
     return apiFailure(c, error);
   }
 });
+desktop.post('/desktop/art/upload-tokens/bulk', async (c) => {
+  try {
+    const ownerId = await desktopOwner(c, 'art:write');
+    const parsed = bulkUploadRequestBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const uploads = [];
+    for (const item of parsed.data.uploads) {
+      const token = await createArtUploadToken(
+        c.env.DB,
+        ownerId,
+        item.cardId,
+        item.variant,
+        item.sha256,
+        item.maxBytes,
+      );
+      uploads.push({
+        cardId: item.cardId,
+        variant: item.variant,
+        token,
+        uploadPath: `/api/desktop/art/uploads/${token}`,
+      });
+    }
+    return c.json({ ok: true, uploads }, 201);
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
 
-api.put('/desktop/art/uploads/:token', async (c) => {
+desktopPublic.put('/desktop/art/uploads/:token', async (c) => {
   try {
     return c.json({
       ok: true,
@@ -260,7 +353,7 @@ api.put('/desktop/art/uploads/:token', async (c) => {
   }
 });
 
-api.get('/desktop/catalogue/search', async (c) => {
+desktop.get('/desktop/catalogue/search', async (c) => {
   try {
     const ownerId = await desktopOwner(c, 'catalogue:read');
     const query = c.req.query();
@@ -284,7 +377,7 @@ api.get('/desktop/catalogue/search', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.get('/desktop/catalogue/sources', async (c) => {
+desktop.get('/desktop/catalogue/sources', async (c) => {
   try {
     await desktopOwner(c, 'catalogue:read');
     const result = await listCatalogueSources(
@@ -297,7 +390,7 @@ api.get('/desktop/catalogue/sources', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.get('/desktop/catalogue/:id', async (c) => {
+desktop.get('/desktop/catalogue/:id', async (c) => {
   try {
     const card = await getCardDetail(
       c.env.DB,
@@ -309,7 +402,7 @@ api.get('/desktop/catalogue/:id', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.get('/desktop/art/manifest', async (c) => {
+desktop.get('/desktop/art/manifest', async (c) => {
   try {
     await desktopOwner(c, 'art:read');
     return c.json({
@@ -324,7 +417,7 @@ api.get('/desktop/art/manifest', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.get('/desktop/art/:cardId/:variant', async (c) => {
+desktop.get('/desktop/art/:cardId/:variant', async (c) => {
   try {
     await desktopOwner(c, 'art:read');
     const variant = c.req.param('variant');
@@ -342,9 +435,9 @@ api.get('/desktop/art/:cardId/:variant', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.put('/desktop/collection/:cardId', async (c) => {
+desktop.put('/desktop/collection/:cardId', async (c) => {
   try {
-    const parsed = collectionBody.safeParse(await parsedJson(c.req.raw));
+    const parsed = compatibleCollectionSetBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     const ownerId = await desktopOwner(c, 'collection:write');
     return c.json({
@@ -358,7 +451,37 @@ api.put('/desktop/collection/:cardId', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.get('/desktop/binders', async (c) => {
+desktop.post('/desktop/collection/:cardId/increment', async (c) => {
+  try {
+    const parsed = collectionIncrementBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const result = await incrementCollectionQuantity(
+      c.env.DB,
+      await desktopOwner(c, 'collection:write'),
+      {
+        ...parsed.data,
+        cardId: c.req.param('cardId'),
+      },
+    );
+    return c.json({ ok: true, ...result });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+desktop.patch('/desktop/collection/:cardId/notes', async (c) => {
+  try {
+    const parsed = collectionNotesBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const result = await patchCollectionNotes(c.env.DB, await desktopOwner(c, 'collection:write'), {
+      ...parsed.data,
+      cardId: c.req.param('cardId'),
+    });
+    return c.json({ ok: true, ...result });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+desktop.get('/desktop/binders', async (c) => {
   try {
     return c.json({
       ok: true,
@@ -368,21 +491,42 @@ api.get('/desktop/binders', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.get('/desktop/binders/versions/:id', async (c) => {
+desktop.get('/desktop/binders/versions/:id', async (c) => {
   try {
+    const page = Math.max(0, Number.parseInt(c.req.query('page') ?? '0', 10) || 0);
+    const limit = asPositiveInt(c.req.query('limit'), 1, 4);
+    const binder = await getBinderVersion(
+      c.env.DB,
+      await desktopOwner(c, 'binders:write'),
+      c.req.param('id'),
+      page,
+      limit,
+    );
     return c.json({
       ok: true,
-      binder: await getBinderVersion(
-        c.env.DB,
-        await desktopOwner(c, 'binders:write'),
-        c.req.param('id'),
-      ),
+      binder,
+      ...binder,
     });
   } catch (error) {
     return apiFailure(c, error);
   }
 });
-api.post('/desktop/binders', async (c) => {
+desktop.get('/desktop/binders/versions/:id/shortages', async (c) => {
+  try {
+    const offset = Math.max(0, Number.parseInt(c.req.query('offset') ?? '0', 10) || 0);
+    const result = await getBinderVersionShortages(
+      c.env.DB,
+      await desktopOwner(c, 'binders:write'),
+      c.req.param('id'),
+      offset,
+      asPositiveInt(c.req.query('limit'), 100, 100),
+    );
+    return c.json({ ok: true, ...result });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+desktop.post('/desktop/binders', async (c) => {
   try {
     const parsed = createBinderBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
@@ -402,9 +546,9 @@ api.post('/desktop/binders', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.put('/desktop/binders/versions/:id/slot', async (c) => {
+desktop.put('/desktop/binders/versions/:id/slot', async (c) => {
   try {
-    const parsed = slotBody.safeParse(await parsedJson(c.req.raw));
+    const parsed = compatibleSlotBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json({
       ok: true,
@@ -416,36 +560,65 @@ api.put('/desktop/binders/versions/:id/slot', async (c) => {
         parsed.data.row,
         parsed.data.column,
         parsed.data.cardId,
+        parsed.data.expectedRevision,
       ),
     });
   } catch (error) {
     return apiFailure(c, error);
   }
 });
-api.get('/desktop/binders/versions/:id/suggest', async (c) => {
+desktop.post('/desktop/binders/versions/:id/swap', async (c) => {
+  try {
+    const parsed = binderSlotSwapRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await swapBinderSlots(
+        c.env.DB,
+        await desktopOwner(c, 'binders:write'),
+        c.req.param('id'),
+        parsed.data.source,
+        parsed.data.target,
+        parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+desktop.get('/desktop/binders/versions/:id/suggest', async (c) => {
   try {
     const binder = await getBinderVersion(
       c.env.DB,
       await desktopOwner(c, 'binders:write'),
       c.req.param('id'),
     );
+    const shortagePage = await getBinderVersionShortages(
+      c.env.DB,
+      await desktopOwner(c, 'binders:write'),
+      c.req.param('id'),
+    );
     return c.json({
       ok: true,
-      shortages: binder.shortages,
-      emptySlots: binder.slots.filter((slot) => slot.cardId === null),
+      shortages: shortagePage.shortages,
+      nextOffset: shortagePage.nextOffset,
+      emptySlots: binder.pages.flatMap((page) => page.slots.filter((slot) => slot.cardId === null)),
     });
   } catch (error) {
     return apiFailure(c, error);
   }
 });
 
-api.use('*', async (c, next) => {
-  const path = new URL(c.req.url).pathname;
-  if (isDesktopBearerRoute(path) || path === '/api/desktop/pair/redeem') return next();
-  return requireSession(c, next);
-});
+browser.use('/dashboard*', requireSession);
+browser.use('/catalogue*', requireSession);
+browser.use('/collection*', requireSession);
+browser.use('/binders*', requireSession);
+browser.use('/backups*', requireSession);
+browser.use('/desktop/pair', requireSession);
+browser.use('/desktop/tokens*', requireSession);
+browser.use('/art*', requireSession);
 
-api.get('/dashboard', async (c) => {
+browser.get('/dashboard', async (c) => {
   try {
     const ownerId = sessionOwner(c);
     const [collection, pricing, binders, activeShortages] = await Promise.all([
@@ -460,7 +633,7 @@ api.get('/dashboard', async (c) => {
   }
 });
 
-api.get('/catalogue/search', async (c) => {
+browser.get('/catalogue/search', async (c) => {
   try {
     const query = c.req.query();
     const language = query.language ? languageSchema.safeParse(query.language) : undefined;
@@ -493,7 +666,7 @@ api.get('/catalogue/search', async (c) => {
   }
 });
 
-api.get('/catalogue/:id', async (c) => {
+browser.get('/catalogue/:id', async (c) => {
   try {
     const card = await getCardDetail(c.env.DB, sessionOwner(c), c.req.param('id'));
     return card ? c.json({ ok: true, card }) : c.json({ ok: false, error: 'card_not_found' }, 404);
@@ -502,7 +675,7 @@ api.get('/catalogue/:id', async (c) => {
   }
 });
 
-api.get('/catalogue/facets/sets', async (c) => {
+browser.get('/catalogue/facets/sets', async (c) => {
   const parsed = c.req.query('language')
     ? languageSchema.safeParse(c.req.query('language'))
     : undefined;
@@ -520,7 +693,7 @@ api.get('/catalogue/facets/sets', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.get('/catalogue/facets/species', async (c) => {
+browser.get('/catalogue/facets/species', async (c) => {
   const parsed = c.req.query('language')
     ? languageSchema.safeParse(c.req.query('language'))
     : undefined;
@@ -539,7 +712,7 @@ api.get('/catalogue/facets/species', async (c) => {
   }
 });
 
-api.post('/catalogue/sync', async (c) => {
+browser.post('/catalogue/sync', async (c) => {
   try {
     const parsed = syncBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
@@ -561,7 +734,45 @@ api.post('/catalogue/sync', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.post('/catalogue/custom', async (c) => {
+browser.post('/catalogue/sync/runs', async (c) => {
+  try {
+    const parsed = syncRunBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json(
+      { ok: true, runId: await beginStagedCatalogueRun(c.env.DB, parsed.data.language) },
+      201,
+    );
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browser.post('/catalogue/sync/runs/:id/cards', async (c) => {
+  try {
+    const parsed = syncPageBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    await stageCatalogueCards(c.env.DB, c.req.param('id'), parsed.data.cards);
+    return c.json({ ok: true, accepted: parsed.data.cards.length });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browser.post('/catalogue/sync/runs/:id/finalize', async (c) => {
+  try {
+    const parsed = syncFinalizeBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      ...(await applyStagedCatalogueRun(
+        c.env.DB,
+        c.req.param('id'),
+        parsed.data.allowDestructiveDrop ?? false,
+      )),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browser.post('/catalogue/custom', async (c) => {
   try {
     const parsed = customCardBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
@@ -577,9 +788,9 @@ api.post('/catalogue/custom', async (c) => {
   }
 });
 
-api.put('/collection/:cardId', async (c) => {
+browser.put('/collection/:cardId', async (c) => {
   try {
-    const parsed = collectionBody.safeParse(await parsedJson(c.req.raw));
+    const parsed = compatibleCollectionSetBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     const ownerId = sessionOwner(c);
     const result = await setCollectionState(c.env.DB, ownerId, {
@@ -597,15 +808,41 @@ api.put('/collection/:cardId', async (c) => {
     return apiFailure(c, error);
   }
 });
+browser.post('/collection/:cardId/increment', async (c) => {
+  try {
+    const parsed = collectionIncrementBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const result = await incrementCollectionQuantity(c.env.DB, sessionOwner(c), {
+      ...parsed.data,
+      cardId: c.req.param('cardId'),
+    });
+    return c.json({ ok: true, ...result });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browser.patch('/collection/:cardId/notes', async (c) => {
+  try {
+    const parsed = collectionNotesBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const result = await patchCollectionNotes(c.env.DB, sessionOwner(c), {
+      ...parsed.data,
+      cardId: c.req.param('cardId'),
+    });
+    return c.json({ ok: true, ...result });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
 
-api.get('/binders', async (c) => {
+browser.get('/binders', async (c) => {
   try {
     return c.json({ ok: true, binders: await listBinders(c.env.DB, sessionOwner(c)) });
   } catch (error) {
     return apiFailure(c, error);
   }
 });
-api.post('/binders', async (c) => {
+browser.post('/binders', async (c) => {
   try {
     const parsed = createBinderBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
@@ -620,17 +857,41 @@ api.post('/binders', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.get('/binders/versions/:id', async (c) => {
+browser.get('/binders/versions/:id', async (c) => {
   try {
+    const result = await getBinderVersion(
+      c.env.DB,
+      sessionOwner(c),
+      c.req.param('id'),
+      Math.max(0, Number.parseInt(c.req.query('page') ?? '0', 10) || 0),
+      asPositiveInt(c.req.query('limit'), 1, 4),
+    );
     return c.json({
       ok: true,
-      binder: await getBinderVersion(c.env.DB, sessionOwner(c), c.req.param('id')),
+      binder: result,
+      ...result,
     });
   } catch (error) {
     return apiFailure(c, error);
   }
 });
-api.post('/binders/versions/:id/clone', async (c) => {
+browser.get('/binders/versions/:id/shortages', async (c) => {
+  try {
+    return c.json({
+      ok: true,
+      ...(await getBinderVersionShortages(
+        c.env.DB,
+        sessionOwner(c),
+        c.req.param('id'),
+        Math.max(0, Number.parseInt(c.req.query('offset') ?? '0', 10) || 0),
+        asPositiveInt(c.req.query('limit'), 100, 100),
+      )),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browser.post('/binders/versions/:id/clone', async (c) => {
   try {
     return c.json(
       { ok: true, binder: await cloneBinderVersion(c.env.DB, sessionOwner(c), c.req.param('id')) },
@@ -640,7 +901,7 @@ api.post('/binders/versions/:id/clone', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.post('/binders/versions/:id/activate', async (c) => {
+browser.post('/binders/versions/:id/activate', async (c) => {
   try {
     return c.json({
       ok: true,
@@ -650,9 +911,9 @@ api.post('/binders/versions/:id/activate', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.put('/binders/versions/:id/slot', async (c) => {
+browser.put('/binders/versions/:id/slot', async (c) => {
   try {
-    const parsed = slotBody.safeParse(await parsedJson(c.req.raw));
+    const parsed = compatibleSlotBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json({
       ok: true,
@@ -664,13 +925,33 @@ api.put('/binders/versions/:id/slot', async (c) => {
         parsed.data.row,
         parsed.data.column,
         parsed.data.cardId,
+        parsed.data.expectedRevision,
       ),
     });
   } catch (error) {
     return apiFailure(c, error);
   }
 });
-api.post('/binders/versions/:id/arrange', async (c) => {
+browser.post('/binders/versions/:id/swap', async (c) => {
+  try {
+    const parsed = binderSlotSwapRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await swapBinderSlots(
+        c.env.DB,
+        sessionOwner(c),
+        c.req.param('id'),
+        parsed.data.source,
+        parsed.data.target,
+        parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browser.post('/binders/versions/:id/arrange', async (c) => {
   try {
     const parsed = arrangementBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
@@ -687,7 +968,7 @@ api.post('/binders/versions/:id/arrange', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.post('/binders/versions/:id/pages', async (c) => {
+browser.post('/binders/versions/:id/pages', async (c) => {
   try {
     return c.json(
       { ok: true, binder: await addBinderPage(c.env.DB, sessionOwner(c), c.req.param('id')) },
@@ -697,7 +978,7 @@ api.post('/binders/versions/:id/pages', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.delete('/binders/versions/:id/pages/:pageId', async (c) => {
+browser.delete('/binders/versions/:id/pages/:pageId', async (c) => {
   try {
     return c.json({
       ok: true,
@@ -712,7 +993,7 @@ api.delete('/binders/versions/:id/pages/:pageId', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.put('/binders/versions/:id/pages/order', async (c) => {
+browser.put('/binders/versions/:id/pages/order', async (c) => {
   try {
     const parsed = pageOrderBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
@@ -730,14 +1011,14 @@ api.put('/binders/versions/:id/pages/order', async (c) => {
   }
 });
 
-api.post('/backups', async (c) => {
+browser.post('/backups', async (c) => {
   try {
     return c.json({ ok: true, ...(await createBackup(c.env.DB, c.env.ART, sessionOwner(c))) }, 201);
   } catch (error) {
     return apiFailure(c, error);
   }
 });
-api.post('/backups/:id/restore', async (c) => {
+browser.post('/backups/:id/restore', async (c) => {
   try {
     await restoreBackup(c.env.DB, c.env.ART, sessionOwner(c), c.req.param('id'));
     return c.json({ ok: true });
@@ -745,7 +1026,7 @@ api.post('/backups/:id/restore', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.post('/desktop/pair', async (c) => {
+browser.post('/desktop/pair', async (c) => {
   try {
     const parsed = pairBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
@@ -757,14 +1038,14 @@ api.post('/desktop/pair', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.get('/desktop/tokens', async (c) => {
+browser.get('/desktop/tokens', async (c) => {
   try {
     return c.json({ ok: true, tokens: await listDesktopTokens(c.env.DB, sessionOwner(c)) });
   } catch (error) {
     return apiFailure(c, error);
   }
 });
-api.delete('/desktop/tokens/:id', async (c) => {
+browser.delete('/desktop/tokens/:id', async (c) => {
   try {
     const revoked = await revokeDesktopToken(c.env.DB, sessionOwner(c), c.req.param('id'));
     return revoked
@@ -774,7 +1055,7 @@ api.delete('/desktop/tokens/:id', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.get('/art/manifest', async (c) => {
+browser.get('/art/manifest', async (c) => {
   try {
     return c.json({
       ok: true,
@@ -788,7 +1069,7 @@ api.get('/art/manifest', async (c) => {
     return apiFailure(c, error);
   }
 });
-api.get('/art/:cardId/:variant', async (c) => {
+browser.get('/art/:cardId/:variant', async (c) => {
   try {
     const variant = c.req.param('variant');
     if (variant !== 'high' && variant !== 'low')
@@ -805,4 +1086,8 @@ api.get('/art/:cardId/:variant', async (c) => {
     return apiFailure(c, error);
   }
 });
+
+api.route('/', desktopPublic);
+api.route('/', desktop);
+api.route('/', browser);
 export { api as apiRoutes };

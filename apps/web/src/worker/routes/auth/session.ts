@@ -1,11 +1,12 @@
 import { Hono } from 'hono';
 import {
   clearSessionCookie,
+  createSession,
   getOrCreateOwner,
   getSession,
   logAudit,
+  revokeSession,
   setSessionCookie,
-  signSession,
 } from '../../lib/auth';
 import type { AuthVars } from '../../lib/types';
 
@@ -19,7 +20,10 @@ sessionRoutes.get('/me', async (c) => {
 sessionRoutes.post('/logout', async (c) => {
   const session = await getSession(c);
   clearSessionCookie(c);
-  if (session) await logAudit(c.env.DB, { actor: session.sub, action: 'logout' });
+  if (session) {
+    await revokeSession(c.env.DB, session);
+    await logAudit(c.env.DB, { actor: session.sub, action: 'logout' });
+  }
   return c.json({ ok: true });
 });
 sessionRoutes.post('/dev-login', async (c) => {
@@ -27,7 +31,7 @@ sessionRoutes.post('/dev-login', async (c) => {
   if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1')
     return c.json({ ok: false, error: 'not_found' }, 404);
   const owner = await getOrCreateOwner(c.env.DB, c.env.OWNER_LABEL);
-  setSessionCookie(c, await signSession({ sub: owner.id, label: owner.label }, c.env));
+  setSessionCookie(c, await createSession(c.env.DB, { sub: owner.id, label: owner.label }, c.env));
   await logAudit(c.env.DB, { actor: owner.id, action: 'login.dev' });
   return c.json({ ok: true });
 });
