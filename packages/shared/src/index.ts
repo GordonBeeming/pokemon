@@ -124,9 +124,22 @@ export type MutationRequest = z.infer<typeof mutationRequestSchema>;
 
 export const binderSlotSchema = z
   .object({
+    pageId: z.string().trim().min(1).max(128),
     row: z.number().int().nonnegative(),
     column: z.number().int().nonnegative(),
     cardId: cardIdSchema.nullable(),
   })
   .strict();
 export type BinderSlot = z.infer<typeof binderSlotSchema>;
+
+export const catalogueCardViewSchema = catalogueBriefSchema.extend({
+  collection: collectionStateSchema.nullable(),
+  price: priceBaselineSchema,
+});
+export type CatalogueCardView = z.infer<typeof catalogueCardViewSchema>;
+
+export const catalogueDetailViewSchema = catalogueDetailSchema.extend({
+  collection: collectionStateSchema.nullable(),
+  price: priceBaselineSchema,
+});
+export type CatalogueDetailView = z.infer<typeof catalogueDetailViewSchema>;

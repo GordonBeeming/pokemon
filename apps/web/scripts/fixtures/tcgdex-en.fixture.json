@@ -1,0 +1,25 @@
+[
+  {
+    "id": "base1-4",
+    "name": "Charizard",
+    "category": "Pokemon",
+    "set": { "id": "base1", "name": "Base Set" },
+    "localId": "4",
+    "types": ["Fire"],
+    "dexId": 6,
+    "rarity": "Rare Holo",
+    "illustrator": "Mitsuhiro Arita",
+    "updatedAt": "2026-08-24T00:00:00.000Z"
+  },
+  {
+    "id": "base1-88",
+    "name": "Professor Oak",
+    "category": "Trainer",
+    "set": { "id": "base1", "name": "Base Set" },
+    "localId": "88",
+    "types": [],
+    "rarity": "Rare",
+    "illustrator": "Ken Sugimori",
+    "updatedAt": "2026-08-24T00:00:00.000Z"
+  }
+]

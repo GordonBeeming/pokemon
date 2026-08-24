@@ -22,6 +22,32 @@
     { "binding": "RATE_LIMIT", "id": "11111111111111111111111111111111" },
   ],
   "r2_buckets": [{ "binding": "ART", "bucket_name": "pokedex-art-local" }],
+  "workflows": [
+    {
+      "binding": "CATALOGUE_SYNC",
+      "name": "pokedex-catalogue-sync",
+      "class_name": "CatalogueSyncWorkflow",
+      "schedules": ["0 3 * * *"],
+    },
+    {
+      "binding": "PRICE_SYNC",
+      "name": "pokedex-price-sync",
+      "class_name": "PriceSyncWorkflow",
+      "schedules": ["20 3 * * *"],
+    },
+    {
+      "binding": "FX_SYNC",
+      "name": "pokedex-fx-sync",
+      "class_name": "FxSyncWorkflow",
+      "schedules": ["40 3 * * *"],
+    },
+    {
+      "binding": "BACKUP",
+      "name": "pokedex-backup",
+      "class_name": "BackupWorkflow",
+      "schedules": ["0 4 * * *"],
+    },
+  ],
   "assets": {
     "binding": "ASSETS",
     "directory": "./dist/client",

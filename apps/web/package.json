@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@pokedex/shared": "workspace:*",
+    "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
     "hono": "^4.13.4",
     "jose": "^6.1.0",

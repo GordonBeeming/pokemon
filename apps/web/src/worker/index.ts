@@ -1,7 +1,12 @@
 import { Hono } from 'hono';
+import { apiRoutes } from './routes/api';
 import { passkeyRoutes } from './routes/auth/passkey';
 import { sessionRoutes } from './routes/auth/session';
 import { describeError, logError } from './lib/log';
+export { BackupWorkflow } from './workflows/backup';
+export { CatalogueSyncWorkflow } from './workflows/catalogue';
+export { FxSyncWorkflow } from './workflows/fx';
+export { PriceSyncWorkflow } from './workflows/pricing';
 
 const app = new Hono<{ Bindings: CloudflareEnv }>();
 app.get('/api/health', async (c) => {
@@ -15,6 +20,7 @@ app.get('/api/health', async (c) => {
 });
 app.route('/api/auth/passkey', passkeyRoutes);
 app.route('/api/auth', sessionRoutes);
+app.route('/api', apiRoutes);
 app.all('/api/*', (c) => c.json({ ok: false, error: 'not_found' }, 404));
 app.all('*', (c) => c.env.ASSETS.fetch(c.req.raw));
 app.onError((error, c) => {
