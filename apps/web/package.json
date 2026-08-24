@@ -1,0 +1,32 @@
+{
+  "name": "@pokedex/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src vite.config.ts",
+    "test": "vitest run --config vitest.config.ts",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@pokedex/shared": "workspace:*",
+    "@simplewebauthn/server": "^13.3.2",
+    "hono": "^4.13.4",
+    "jose": "^6.1.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.13.0",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^5.0.2",
+    "vite": "^6.4.1",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.125.0"
+  }
+}

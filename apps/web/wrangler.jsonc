@@ -1,0 +1,31 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "pokedex-web",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "vars": {
+    "OWNER_LABEL": "Owner",
+    "PUBLIC_ORIGIN": "http://localhost:5173",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pokedex-local",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "./migrations",
+    },
+  ],
+  "kv_namespaces": [
+    { "binding": "SESSIONS", "id": "00000000000000000000000000000000" },
+    { "binding": "RATE_LIMIT", "id": "11111111111111111111111111111111" },
+  ],
+  "r2_buckets": [{ "binding": "ART", "bucket_name": "pokedex-art-local" }],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./dist/client",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true,
+  },
+}

@@ -1,0 +1,29 @@
+import { describe, expect, it } from 'vitest';
+import { cookieSecureFor, enrolSecretMatches, signSession, verifySession } from './auth';
+import { timingSafeStringEqual } from './crypto';
+
+const current = '01234567890123456789012345678901';
+const previous = '98765432109876543210987654321098';
+
+describe('auth foundation', () => {
+  it('compares bootstrap secrets without accepting a different value', () => {
+    expect(timingSafeStringEqual('same-secret', 'same-secret')).toBe(true);
+    expect(timingSafeStringEqual('same-secret', 'other-secret')).toBe(false);
+    expect(enrolSecretMatches('enrol', { ENROLL_SECRET: 'enrol' })).toBe(true);
+  });
+
+  it('signs 30-day sessions and accepts the previous rotation secret', async () => {
+    const token = await signSession(
+      { sub: 'owner', label: 'Owner' },
+      { SESSION_SECRET: previous, SESSION_SECRET_PREV: undefined },
+    );
+    await expect(
+      verifySession(token, { SESSION_SECRET: current, SESSION_SECRET_PREV: previous }),
+    ).resolves.toMatchObject({ sub: 'owner', label: 'Owner' });
+  });
+
+  it('only marks secure cookies on non-local origins', () => {
+    expect(cookieSecureFor(new Request('http://localhost:5173/login'))).toBe(false);
+    expect(cookieSecureFor(new Request('https://pokedex.example/login'))).toBe(true);
+  });
+});

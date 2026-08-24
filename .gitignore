@@ -1,0 +1,10 @@
+node_modules/
+dist/
+coverage/
+.turbo/
+.wrangler/
+apps/web/.dev.vars
+apps/web/.env*
+!.env.example
+*.local
+.DS_Store
