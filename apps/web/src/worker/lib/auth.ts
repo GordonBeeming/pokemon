@@ -7,7 +7,10 @@ import type { AuditInsert, PasskeyInsert, PasskeyRow, SessionPayload, UserRow } 
 export const SESSION_COOKIE = 'pokedex_session';
 const SESSION_MAX_AGE = 60 * 60 * 24 * 30;
 type SessionEnv = Pick<CloudflareEnv, 'SESSION_SECRET' | 'SESSION_SECRET_PREV'>;
-type AuthContext = Context<{ Bindings: CloudflareEnv; Variables: import('./types').AuthVars }>;
+type AuthContext<
+  Path extends string = string,
+  Input extends object = Record<string, never>,
+> = Context<{ Bindings: CloudflareEnv; Variables: import('./types').AuthVars }, Path, Input>;
 
 export async function signSession(
   payload: Omit<SessionPayload, 'iat' | 'exp'>,
@@ -59,11 +62,16 @@ export function cookieSecureFor(request: Request): boolean {
   return host !== 'localhost' && host !== '127.0.0.1' && host !== '::1';
 }
 
-export function getSession(c: AuthContext): Promise<SessionPayload | null> {
+export function getSession<Path extends string, Input extends object>(
+  c: AuthContext<Path, Input>,
+): Promise<SessionPayload | null> {
   const token = getCookie(c, SESSION_COOKIE);
   return token ? verifySession(token, c.env) : Promise.resolve(null);
 }
-export function setSessionCookie(c: AuthContext, token: string): void {
+export function setSessionCookie<Path extends string, Input extends object>(
+  c: AuthContext<Path, Input>,
+  token: string,
+): void {
   setCookie(c, SESSION_COOKIE, token, {
     httpOnly: true,
     secure: cookieSecureFor(c.req.raw),
@@ -72,7 +80,9 @@ export function setSessionCookie(c: AuthContext, token: string): void {
     maxAge: SESSION_MAX_AGE,
   });
 }
-export function clearSessionCookie(c: AuthContext): void {
+export function clearSessionCookie<Path extends string, Input extends object>(
+  c: AuthContext<Path, Input>,
+): void {
   deleteCookie(c, SESSION_COOKIE, { path: '/' });
 }
 export function enrolSecretMatches(

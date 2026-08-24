@@ -15,6 +15,7 @@ export interface PriceCandidate {
   nativeAmount: number;
   nativeCurrency: string;
   sourceCapturedAt: number;
+  amountAud?: number | null;
 }
 
 export interface StagedPriceRow extends PriceCandidate {
@@ -92,16 +93,15 @@ function baseline(row: PriceRow | null): PriceBaseline {
 }
 
 export function selectConservativePrice(candidates: PriceCandidate[]): PriceCandidate | null {
-  const tcgPlayer = candidates.filter(
-    (candidate) => candidate.source === 'tcgplayer' && candidate.nativeAmount > 0,
+  const pool = candidates.filter(
+    (candidate) =>
+      candidate.nativeAmount > 0 &&
+      candidate.amountAud !== null &&
+      candidate.amountAud !== undefined,
   );
-  const cardMarket = candidates.filter(
-    (candidate) => candidate.source === 'cardmarket' && candidate.nativeAmount > 0,
-  );
-  const pool = tcgPlayer.length > 0 ? tcgPlayer : cardMarket;
   if (pool.length === 0) return null;
   return pool.reduce((lowest, candidate) =>
-    candidate.nativeAmount < lowest.nativeAmount ? candidate : lowest,
+    (candidate.amountAud ?? Infinity) < (lowest.amountAud ?? Infinity) ? candidate : lowest,
   );
 }
 
@@ -174,7 +174,7 @@ export async function priceForCard(db: D1Database, cardId: string): Promise<Pric
     .prepare(
       `SELECT source, native_amount, native_currency, source_captured_at, fx_date, amount_aud
        FROM price_snapshots WHERE card_id = ?1 AND native_amount > 0
-       ORDER BY CASE source WHEN 'tcgplayer' THEN 0 ELSE 1 END, native_amount ASC, source_captured_at DESC LIMIT 1`,
+       ORDER BY amount_aud IS NULL, amount_aud ASC, source_captured_at DESC LIMIT 1`,
     )
     .bind(cardId)
     .first<PriceRow>();
@@ -193,8 +193,7 @@ export async function priceCoverage(
     .prepare(
       `WITH selected AS (
         SELECT p.card_id, p.amount_aud, ROW_NUMBER() OVER (
-          PARTITION BY p.card_id ORDER BY CASE p.source WHEN 'tcgplayer' THEN 0 ELSE 1 END,
-          p.native_amount ASC, p.source_captured_at DESC) AS row_number
+          PARTITION BY p.card_id ORDER BY p.amount_aud IS NULL, p.amount_aud ASC, p.source_captured_at DESC) AS row_number
         FROM price_snapshots p WHERE p.native_amount > 0
       )
       SELECT COUNT(CASE WHEN selected.amount_aud IS NOT NULL THEN 1 END) AS priced,

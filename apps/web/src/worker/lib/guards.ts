@@ -1,18 +1,18 @@
-import type { MiddlewareHandler } from 'hono';
+import type { Context, Next } from 'hono';
 import { z } from 'zod';
 import { enrolSecretMatches, getSession } from './auth';
 import { logWarn } from './log';
 import type { AuthVars, SessionPayload } from './types';
 
-export const requireSession: MiddlewareHandler<{
-  Bindings: CloudflareEnv;
-  Variables: AuthVars;
-}> = async (c, next) => {
+export async function requireSession<Path extends string, Input extends object>(
+  c: Context<{ Bindings: CloudflareEnv; Variables: AuthVars }, Path, Input>,
+  next: Next,
+): Promise<Response | void> {
   const session = await getSession(c);
   if (!session) return c.json({ ok: false, error: 'unauthorized' }, 401);
   c.set('session', session);
   await next();
-};
+}
 
 function clientIp(request: Request): string {
   return (
@@ -43,10 +43,10 @@ async function rateLimit(
 }
 
 const enrolBody = z.object({ enrolSecret: z.string().min(1).max(256) }).partial();
-export const requireEnrolAuth: MiddlewareHandler<{
-  Bindings: CloudflareEnv;
-  Variables: AuthVars;
-}> = async (c, next) => {
+export async function requireEnrolAuth<Path extends string, Input extends object>(
+  c: Context<{ Bindings: CloudflareEnv; Variables: AuthVars }, Path, Input>,
+  next: Next,
+): Promise<Response | void> {
   const session = await getSession(c);
   if (session) {
     c.set('session', session);
@@ -68,6 +68,6 @@ export const requireEnrolAuth: MiddlewareHandler<{
     return c.json({ ok: false, error: 'unauthorized' }, 401);
   }
   await next();
-};
+}
 
 export const sessionVariables = (session: SessionPayload | undefined): AuthVars => ({ session });

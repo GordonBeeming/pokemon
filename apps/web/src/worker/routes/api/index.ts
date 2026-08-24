@@ -35,6 +35,7 @@ import {
   importCatalogueLanguage,
   listSetFacets,
   listSpeciesFacets,
+  listCatalogueSources,
   searchCards,
 } from '../../lib/catalogue';
 import { collectionSummary, setCollectionState } from '../../lib/collection';
@@ -142,6 +143,38 @@ async function parsedJson(request: Request): Promise<unknown> {
   }
 }
 
+export function parseDesktopBearer(header: string | undefined): string | null {
+  const matched = header?.match(/^Bearer ([a-f0-9]{64})$/iu);
+  return matched?.[1] ?? null;
+}
+
+export function isDesktopBearerRoute(pathname: string): boolean {
+  const path = pathname.replace(/^\/api/u, '');
+  return (
+    path === '/desktop/catalogue/search' ||
+    path === '/desktop/catalogue/sources' ||
+    /^\/desktop\/catalogue\/[^/]+$/u.test(path) ||
+    path === '/desktop/art/upload-tokens' ||
+    /^\/desktop\/art\/uploads\/[^/]+$/u.test(path) ||
+    path === '/desktop/art/manifest' ||
+    /^\/desktop\/art\/[^/]+\/(?:high|low)$/u.test(path) ||
+    /^\/desktop\/collection\/[^/]+$/u.test(path) ||
+    path === '/desktop/binders' ||
+    /^\/desktop\/binders\/versions\/[^/]+$/u.test(path) ||
+    /^\/desktop\/binders\/versions\/[^/]+\/slot$/u.test(path) ||
+    /^\/desktop\/binders\/versions\/[^/]+\/suggest$/u.test(path)
+  );
+}
+
+async function desktopOwner(
+  c: { env: CloudflareEnv; req: { header: (name: string) => string | undefined } },
+  scope: 'catalogue:read' | 'art:read' | 'art:write' | 'collection:write' | 'binders:write',
+): Promise<string> {
+  const bearer = parseDesktopBearer(c.req.header('authorization'));
+  if (!bearer) throw new Error('desktop_token_invalid');
+  return requireDesktopToken(c.env.DB, bearer, scope);
+}
+
 function apiFailure(
   c: {
     json: (body: { ok: false; error: string }, status: 400 | 401 | 404 | 409 | 500) => Response;
@@ -166,8 +199,10 @@ function apiFailure(
     'art_upload_checksum_mismatch',
     'backup_not_found',
     'backup_invalid',
+    'invalid_catalogue_source_cursor',
   ]);
-  const code = message.split(':', 1).at(0) ?? 'internal_error';
+  const code =
+    (error instanceof Error ? error.message : message).split(':', 1).at(0) ?? 'internal_error';
   const status =
     code === 'unauthorized' ||
     code === 'desktop_token_invalid' ||
@@ -197,8 +232,7 @@ api.post('/desktop/pair/redeem', async (c) => {
 
 api.post('/desktop/art/upload-tokens', async (c) => {
   try {
-    const bearer = c.req.header('authorization')?.replace(/^Bearer\s+/iu, '') ?? '';
-    const ownerId = await requireDesktopToken(c.env.DB, bearer, 'art:write');
+    const ownerId = await desktopOwner(c, 'art:write');
     const parsed = uploadRequestBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     const token = await createArtUploadToken(
@@ -226,7 +260,190 @@ api.put('/desktop/art/uploads/:token', async (c) => {
   }
 });
 
-api.use('*', requireSession);
+api.get('/desktop/catalogue/search', async (c) => {
+  try {
+    const ownerId = await desktopOwner(c, 'catalogue:read');
+    const query = c.req.query();
+    const language = query.language ? languageSchema.safeParse(query.language) : undefined;
+    const category = query.category ? cardCategorySchema.safeParse(query.category) : undefined;
+    if ((language && !language.success) || (category && !category.success))
+      return c.json({ ok: false, error: 'invalid_filter' }, 400);
+    return c.json({
+      ok: true,
+      ...(await searchCards(c.env.DB, ownerId, {
+        query: query.q,
+        language: language?.success ? language.data : undefined,
+        category: category?.success ? category.data : undefined,
+        setId: query.setId,
+        species: query.species,
+        limit: asPositiveInt(query.limit, 50, 100),
+        offset: Math.max(0, Number.parseInt(query.offset ?? '0', 10) || 0),
+      })),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+api.get('/desktop/catalogue/sources', async (c) => {
+  try {
+    await desktopOwner(c, 'catalogue:read');
+    const result = await listCatalogueSources(
+      c.env.DB,
+      c.req.query('cursor') ?? null,
+      asPositiveInt(c.req.query('limit'), 500, 500),
+    );
+    return c.json({ ok: true, ...result });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+api.get('/desktop/catalogue/:id', async (c) => {
+  try {
+    const card = await getCardDetail(
+      c.env.DB,
+      await desktopOwner(c, 'catalogue:read'),
+      c.req.param('id'),
+    );
+    return card ? c.json({ ok: true, card }) : c.json({ ok: false, error: 'card_not_found' }, 404);
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+api.get('/desktop/art/manifest', async (c) => {
+  try {
+    await desktopOwner(c, 'art:read');
+    return c.json({
+      ok: true,
+      ...(await listArtManifest(
+        c.env.DB,
+        c.req.query('cursor') ?? null,
+        asPositiveInt(c.req.query('limit'), 100, 500),
+      )),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+api.get('/desktop/art/:cardId/:variant', async (c) => {
+  try {
+    await desktopOwner(c, 'art:read');
+    const variant = c.req.param('variant');
+    if (variant !== 'high' && variant !== 'low')
+      return c.json({ ok: false, error: 'invalid_variant' }, 400);
+    const response = await getArtResponse(
+      c.env.DB,
+      c.env.ART,
+      c.req.param('cardId'),
+      variant,
+      c.req.raw,
+    );
+    return response ?? c.json({ ok: false, error: 'art_not_found' }, 404);
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+api.put('/desktop/collection/:cardId', async (c) => {
+  try {
+    const parsed = collectionBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const ownerId = await desktopOwner(c, 'collection:write');
+    return c.json({
+      ok: true,
+      ...(await setCollectionState(c.env.DB, ownerId, {
+        ...parsed.data,
+        cardId: c.req.param('cardId'),
+      })),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+api.get('/desktop/binders', async (c) => {
+  try {
+    return c.json({
+      ok: true,
+      binders: await listBinders(c.env.DB, await desktopOwner(c, 'binders:write')),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+api.get('/desktop/binders/versions/:id', async (c) => {
+  try {
+    return c.json({
+      ok: true,
+      binder: await getBinderVersion(
+        c.env.DB,
+        await desktopOwner(c, 'binders:write'),
+        c.req.param('id'),
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+api.post('/desktop/binders', async (c) => {
+  try {
+    const parsed = createBinderBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json(
+      {
+        ok: true,
+        binder: await createBinder(
+          c.env.DB,
+          await desktopOwner(c, 'binders:write'),
+          parsed.data.name,
+          parsed.data.layout,
+        ),
+      },
+      201,
+    );
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+api.put('/desktop/binders/versions/:id/slot', async (c) => {
+  try {
+    const parsed = slotBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await setBinderSlot(
+        c.env.DB,
+        await desktopOwner(c, 'binders:write'),
+        c.req.param('id'),
+        parsed.data.page,
+        parsed.data.row,
+        parsed.data.column,
+        parsed.data.cardId,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+api.get('/desktop/binders/versions/:id/suggest', async (c) => {
+  try {
+    const binder = await getBinderVersion(
+      c.env.DB,
+      await desktopOwner(c, 'binders:write'),
+      c.req.param('id'),
+    );
+    return c.json({
+      ok: true,
+      shortages: binder.shortages,
+      emptySlots: binder.slots.filter((slot) => slot.cardId === null),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+api.use('*', async (c, next) => {
+  const path = new URL(c.req.url).pathname;
+  if (isDesktopBearerRoute(path) || path === '/api/desktop/pair/redeem') return next();
+  return requireSession(c, next);
+});
 
 api.get('/dashboard', async (c) => {
   try {

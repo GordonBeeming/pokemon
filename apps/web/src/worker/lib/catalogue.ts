@@ -1,10 +1,13 @@
 import {
   cardIdSchema,
+  languageSchema,
   type CatalogueBrief,
   type CatalogueCardView,
   type CatalogueDetailView,
   type LanguageCode,
 } from '@pokedex/shared';
+import { z } from 'zod';
+import { base64UrlDecode, base64UrlEncode } from './crypto';
 import { escapedFtsQuery, isoFromSeconds, newId, nowSeconds, scalarCount } from './db';
 import { priceForCard } from './pricing';
 
@@ -70,6 +73,99 @@ export interface SyncInput {
   complete?: boolean;
 }
 
+export interface CatalogueSourceEntry {
+  cardId: string;
+  provider: 'tcgdex';
+  sourceId: string;
+  language: LanguageCode;
+  sourceUpdatedAt: number;
+  sourceChecksum: string;
+}
+
+const sourceCursorSchema = z
+  .object({
+    cardId: z.string().min(1).max(128),
+    language: languageSchema,
+    sourceId: z.string().min(1).max(256),
+  })
+  .strict();
+type SourceCursor = z.infer<typeof sourceCursorSchema>;
+
+function encodeSourceCursor(cursor: SourceCursor): string {
+  return base64UrlEncode(new TextEncoder().encode(JSON.stringify(cursor)));
+}
+
+function decodeSourceCursor(cursor: string | null): SourceCursor | null {
+  if (!cursor) return null;
+  try {
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(base64UrlDecode(cursor)));
+    const result = sourceCursorSchema.safeParse(parsed);
+    if (!result.success) throw new Error('invalid_catalogue_source_cursor');
+    return result.data;
+  } catch {
+    throw new Error('invalid_catalogue_source_cursor');
+  }
+}
+
+export async function listCatalogueSources(
+  db: D1Database,
+  cursor: string | null,
+  limit: number,
+): Promise<{ entries: CatalogueSourceEntry[]; cursor: string | null }> {
+  const decoded = decodeSourceCursor(cursor);
+  const query = decoded
+    ? `SELECT s.card_id, s.provider, s.source_id, s.language, s.source_updated_at, s.checksum
+       FROM card_sources s JOIN catalogue_cards c ON c.id = s.card_id
+       WHERE s.provider = 'tcgdex' AND s.active = 1 AND c.is_active = 1
+         AND (s.card_id > ?1 OR (s.card_id = ?1 AND s.language > ?2) OR (s.card_id = ?1 AND s.language = ?2 AND s.source_id > ?3))
+       ORDER BY s.card_id, s.language, s.source_id LIMIT ?4`
+    : `SELECT s.card_id, s.provider, s.source_id, s.language, s.source_updated_at, s.checksum
+       FROM card_sources s JOIN catalogue_cards c ON c.id = s.card_id
+       WHERE s.provider = 'tcgdex' AND s.active = 1 AND c.is_active = 1
+       ORDER BY s.card_id, s.language, s.source_id LIMIT ?1`;
+  const statement = decoded
+    ? db.prepare(query).bind(decoded.cardId, decoded.language, decoded.sourceId, limit + 1)
+    : db.prepare(query).bind(limit + 1);
+  const rows = await statement.all<{
+    card_id: string;
+    provider: string;
+    source_id: string;
+    language: LanguageCode;
+    source_updated_at: number;
+    checksum: string;
+  }>();
+  const hasNext = rows.results.length > limit;
+  const page = rows.results.slice(0, limit);
+  const entries = page.map((row) => ({
+    cardId: row.card_id,
+    provider: 'tcgdex' as const,
+    sourceId: row.source_id,
+    language: row.language,
+    sourceUpdatedAt: row.source_updated_at,
+    sourceChecksum: row.checksum,
+  }));
+  const last = entries.at(-1);
+  return {
+    entries,
+    cursor:
+      hasNext && last
+        ? encodeSourceCursor({
+            cardId: last.cardId,
+            language: last.language,
+            sourceId: last.sourceId,
+          })
+        : null,
+  };
+}
+
+export function resolveStagedCardId(
+  existing: ReadonlyMap<string, string>,
+  sourceId: string,
+  language: LanguageCode,
+): string {
+  return existing.get(`${language}\u0000${sourceId}`) ?? newId('card');
+}
+
 export async function beginStagedCatalogueRun(
   db: D1Database,
   language: LanguageCode,
@@ -89,30 +185,43 @@ export async function stageCatalogueCards(
   runId: string,
   cards: ImportedCard[],
 ): Promise<void> {
-  const statements = cards.map((card) =>
-    db
-      .prepare(
-        'INSERT INTO catalogue_stage_cards (run_id, source_id, card_id, checksum, source_updated_at, name, language, category, set_id, set_name, number, supertype, subtype, species, rarity, artist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) ON CONFLICT(run_id, source_id) DO UPDATE SET checksum = excluded.checksum, source_updated_at = excluded.source_updated_at, name = excluded.name, category = excluded.category, set_id = excluded.set_id, set_name = excluded.set_name, number = excluded.number, supertype = excluded.supertype, subtype = excluded.subtype, species = excluded.species, rarity = excluded.rarity, artist = excluded.artist',
-      )
-      .bind(
-        runId,
-        card.sourceId,
-        newId('card'),
-        card.checksum,
-        card.sourceUpdatedAt,
-        card.name,
-        card.language,
-        card.category,
-        card.setId,
-        card.setName,
-        card.number,
-        card.supertype ?? null,
-        card.subtype ?? null,
-        card.species ?? null,
-        card.rarity ?? null,
-        card.artist ?? null,
-      ),
-  );
+  const existingBySource = new Map<string, string>();
+  for (const language of new Set(cards.map((card) => card.language))) {
+    const rows = await db
+      .prepare('SELECT source_id, card_id FROM card_sources WHERE provider = ?1 AND language = ?2')
+      .bind('tcgdex', language)
+      .all<{ source_id: string; card_id: string }>();
+    for (const row of rows.results)
+      existingBySource.set(`${language}\u0000${row.source_id}`, row.card_id);
+  }
+  const statements = [];
+  for (const card of cards) {
+    const cardId = resolveStagedCardId(existingBySource, card.sourceId, card.language);
+    statements.push(
+      db
+        .prepare(
+          'INSERT INTO catalogue_stage_cards (run_id, source_id, card_id, checksum, source_updated_at, name, language, category, set_id, set_name, number, supertype, subtype, species, rarity, artist) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16) ON CONFLICT(run_id, source_id) DO UPDATE SET checksum = excluded.checksum, source_updated_at = excluded.source_updated_at, name = excluded.name, category = excluded.category, set_id = excluded.set_id, set_name = excluded.set_name, number = excluded.number, supertype = excluded.supertype, subtype = excluded.subtype, species = excluded.species, rarity = excluded.rarity, artist = excluded.artist',
+        )
+        .bind(
+          runId,
+          card.sourceId,
+          cardId,
+          card.checksum,
+          card.sourceUpdatedAt,
+          card.name,
+          card.language,
+          card.category,
+          card.setId,
+          card.setName,
+          card.number,
+          card.supertype ?? null,
+          card.subtype ?? null,
+          card.species ?? null,
+          card.rarity ?? null,
+          card.artist ?? null,
+        ),
+    );
+  }
   for (let offset = 0; offset < statements.length; offset += 50)
     await db.batch(statements.slice(offset, offset + 50));
 }

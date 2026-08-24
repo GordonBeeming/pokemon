@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src vite.config.ts",
     "test": "vitest run --config vitest.config.ts",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check --ignore-path ../../.prettierignore ."
   },
   "dependencies": {
     "@pokedex/shared": "workspace:*",

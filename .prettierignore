@@ -1,1 +1,5 @@
 apps/web/cloudflare-env.d.ts
+apps/web/.wrangler/**
+apps/web/dist/**
+apps/desktop/src-tauri/gen/**
+apps/desktop/src-tauri/target/**
