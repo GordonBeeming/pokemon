@@ -563,7 +563,10 @@ impl DesktopServices {
                 DesktopError::Mcp("completed scan is missing its stored result".to_string())
             })?;
             let _delete_guard = self.acquire_delete_phase_lock().await;
-            transaction.finish_completed()?;
+            if let Err(error) = transaction.finish_completed() {
+                log_completed_cleanup_failure(scan.id, scan.mutation_id, true, &error);
+                return Err(error);
+            }
             tracing::info!(
                 target: "pokedex.scan",
                 event = "scan.confirmation.completed",
@@ -631,7 +634,10 @@ impl DesktopServices {
         });
         transaction.complete(result.clone())?;
         let _delete_guard = self.acquire_delete_phase_lock().await;
-        transaction.finish_completed()?;
+        if let Err(error) = transaction.finish_completed() {
+            log_completed_cleanup_failure(claimed.id, claimed.mutation_id, replayed, &error);
+            return Err(error);
+        }
         tracing::info!(
             target: "pokedex.scan",
             event = "scan.confirmation.completed",
@@ -744,6 +750,27 @@ fn log_ambiguous_confirmation(scan: &PendingScan, error: &DesktopError) {
         retryable = true,
         error_class = desktop_error_class(error),
         "scan claim retained because the collection mutation outcome is ambiguous"
+    );
+}
+
+fn log_completed_cleanup_failure(
+    scan_id: Uuid,
+    mutation_id: Uuid,
+    replayed: bool,
+    error: &DesktopError,
+) {
+    tracing::warn!(
+        target: "pokedex.scan",
+        event = "scan.confirmation.cleanup_failed",
+        operation = "confirm_scan",
+        scan_id = %scan_id,
+        mutation_id = %mutation_id,
+        state = "completed",
+        replayed,
+        phase = "local_cleanup",
+        retryable = true,
+        error_class = desktop_error_class(error),
+        "collection mutation completed but local scan cleanup must be retried"
     );
 }
 

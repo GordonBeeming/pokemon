@@ -160,6 +160,7 @@ const cameraAction = new ExclusiveAction();
 const previewQueue = new BoundedAsyncQueue(2);
 const previewScans = new WeakMap<HTMLImageElement, PendingScan>();
 const pendingActionStates = new Map<string, { state: 'working' | 'error'; message: string }>();
+let pendingFocusIntent: { ownerScanId: string; candidates: string[] } | null = null;
 const previewObserver =
   typeof IntersectionObserver === 'undefined'
     ? null
@@ -180,7 +181,7 @@ const previewObserver =
 const saveLocalCapture: SaveCapture = async (bytes, mimeType, source, previewBytes) =>
   invoke<PendingScan>('save_capture', { bytes, mimeType, source, previewBytes });
 
-async function refresh(focusCandidates?: string[]): Promise<void> {
+async function refresh(): Promise<void> {
   const generation = refreshGenerations.next();
   const next = await invoke<DesktopStatus>('desktop_status');
   const pending = pendingFragment(next.pendingScans);
@@ -188,6 +189,7 @@ async function refresh(focusCandidates?: string[]): Promise<void> {
   status = next;
   renderStatus(next);
   pendingCount.textContent = `${next.pendingScans.length} pending`;
+  const focusCandidates = acceptedPendingFocusCandidates();
   pendingList.querySelectorAll('img').forEach((image) => previewObserver?.unobserve(image));
   pendingList.replaceChildren(pending);
   if (focusCandidates) restorePendingFocus(focusCandidates);
@@ -287,16 +289,16 @@ function pendingArticle(scan: PendingScan): HTMLElement {
     renderPendingActionState(scan, article, remove, actionStatus, true);
   } else {
     remove.disabled = true;
-    remove.textContent = scan.state === 'claimed' ? 'Confirmation needs retry' : 'Confirmed';
+    remove.textContent = scan.state === 'claimed' ? 'Confirmation pending' : 'Confirmed';
     guidance.textContent =
       scan.state === 'claimed'
-        ? 'The cloud result was unclear. Retry the same confirmation from Codex; its saved mutation ID will be reused.'
+        ? 'The cloud update may still be running. If it has stopped, retry the same confirmation from Codex; its saved mutation ID will be reused.'
         : 'The collection update completed. Retry the same confirmation from Codex if local cleanup remains.';
     remove.setAttribute('aria-describedby', `${guidance.id} ${actionStatus.id}`);
     remove.setAttribute(
       'aria-label',
       scan.state === 'claimed'
-        ? `Capture ${scan.id} needs the same confirmation retried and cannot be deleted`
+        ? `Capture ${scan.id} confirmation is pending and cannot be deleted`
         : `Capture ${scan.id} is confirmed and cannot be deleted`,
     );
   }
@@ -335,7 +337,6 @@ async function deletePendingCapture(
   actionStatus: HTMLSpanElement,
 ): Promise<void> {
   const focusCandidates = pendingFocusCandidates(scan.id);
-  const shouldRestoreFocus = article.contains(document.activeElement);
   const noticeGeneration = beginNotice();
   pendingActionStates.set(scan.id, {
     state: 'working',
@@ -345,13 +346,15 @@ async function deletePendingCapture(
   try {
     await invoke('delete_pending_scan', { scanId: scan.id });
     pendingActionStates.delete(scan.id);
-    await refresh(shouldRestoreFocus ? focusCandidates : undefined);
+    queuePendingFocusIntent(scan.id, article, focusCandidates);
+    await refresh();
     finishNotice(noticeGeneration, 'ok', 'Local capture deleted.');
   } catch (error) {
     const message = `Couldn’t delete this capture. ${actionErrorMessage(error)}`;
     pendingActionStates.set(scan.id, { state: 'error', message });
     renderPendingActionState(scan, article, remove, actionStatus, false);
     try {
+      queuePendingFocusIntent(scan.id, article, [scan.id, ...focusCandidates]);
       await refresh();
       if (!status?.pendingScans.some((pending) => pending.id === scan.id)) {
         pendingActionStates.delete(scan.id);
@@ -365,6 +368,33 @@ async function deletePendingCapture(
     }
     finishNotice(noticeGeneration, 'error', message);
   }
+}
+
+function queuePendingFocusIntent(
+  ownerScanId: string,
+  article: HTMLElement,
+  candidates: string[],
+): void {
+  if (article.contains(document.activeElement)) {
+    pendingFocusIntent = { ownerScanId, candidates };
+  } else if (pendingFocusIntent?.ownerScanId === ownerScanId) {
+    pendingFocusIntent = null;
+  }
+}
+
+function acceptedPendingFocusCandidates(): string[] | undefined {
+  const intent = pendingFocusIntent;
+  if (!intent) return undefined;
+  const owner = pendingList.querySelector<HTMLElement>(
+    `.pending-item[data-scan-id="${intent.ownerScanId}"]`,
+  );
+  const active = document.activeElement;
+  if (active && active !== document.body && !owner?.contains(active)) {
+    pendingFocusIntent = null;
+    return undefined;
+  }
+  pendingFocusIntent = null;
+  return intent.candidates;
 }
 
 function pendingFocusCandidates(scanId: string): string[] {

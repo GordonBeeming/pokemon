@@ -548,6 +548,98 @@ async fn terminal_confirmation_response_resets_this_calls_claim_to_pending() {
 }
 
 #[tokio::test]
+async fn terminal_confirmation_failure_classification_is_exact() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("temporary listener");
+    let unavailable = listener.local_addr().expect("temporary address");
+    drop(listener);
+    let http = reqwest::Client::new()
+        .get(format!("http://{unavailable}"))
+        .send()
+        .await
+        .expect_err("closed listener must reject the request");
+    let mut cases = [400_u16, 401, 403, 404, 409, 413, 422]
+        .into_iter()
+        .map(|status| {
+            (
+                format!("cloud-{status}"),
+                DesktopError::Cloud {
+                    status,
+                    code: "terminal".to_string(),
+                },
+                true,
+            )
+        })
+        .collect::<Vec<_>>();
+    cases.extend([408_u16, 429, 500, 502, 503].into_iter().map(|status| {
+        (
+            format!("cloud-{status}"),
+            DesktopError::Cloud {
+                status,
+                code: "ambiguous".to_string(),
+            },
+            false,
+        )
+    }));
+    cases.push(("http".to_string(), DesktopError::Http(http), false));
+    cases.push((
+        "invalid-cloud-response".to_string(),
+        DesktopError::InvalidCloudResponse("ambiguous".to_string()),
+        false,
+    ));
+
+    for (name, error, expected) in cases {
+        assert_eq!(
+            is_terminal_non_commit_confirmation(&error),
+            expected,
+            "classification for {name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn terminal_response_preserves_a_claim_from_an_earlier_ambiguous_attempt() {
+    let root = tempdir().expect("temp dir");
+    let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
+    let mut config = AppConfig::defaults(&paths);
+    config.cloud_base_url = terminal_mutation_cloud().await;
+    let services = DesktopServices::new(
+        paths,
+        config,
+        Arc::new(MemoryTokenStore(Mutex::new(Some("token".to_string())))),
+    )
+    .expect("services");
+    let scan = services
+        .inbox
+        .save(
+            b"RIFF\x04\x00\x00\x00WEBPdata",
+            b"\xff\xd8\xffpreview",
+            "image/webp",
+            CaptureSource::Camera,
+        )
+        .expect("scan");
+    let claimed = services
+        .inbox
+        .claim(scan.id, "card-1")
+        .expect("prior ambiguous claim");
+
+    let error = services
+        .call_tool(
+            ToolName::ConfirmScan,
+            json!({ "scanId": scan.id, "cardId": "card-1", "confirmed": true }),
+        )
+        .await
+        .expect_err("terminal retry response");
+
+    assert!(matches!(error, DesktopError::Cloud { status: 422, .. }));
+    let retained = services.inbox.list().expect("retained claimed scan");
+    assert_eq!(retained[0].state, ScanState::Claimed);
+    assert_eq!(retained[0].confirmed_card_id.as_deref(), Some("card-1"));
+    assert_eq!(retained[0].mutation_id, claimed.mutation_id);
+}
+
+#[tokio::test]
 async fn confirmed_scan_increments_collection_then_deletes_the_capture() {
     let root = tempdir().expect("temp dir");
     let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
