@@ -813,6 +813,7 @@ impl ArtSyncEngine {
                 ..SourceCardOutcome::default()
             });
         };
+        // Both variant futures must finish cleanup before any error propagates; fail-fast combinators are unsafe here.
         let downloads =
             futures_util::future::join_all([ArtVariant::High, ArtVariant::Low].into_iter().map(
                 |variant| self.download_source_variant(source, &source_entry, &image_base, variant),
