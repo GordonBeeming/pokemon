@@ -226,7 +226,14 @@ function pendingArticle(scan: PendingScan): HTMLElement {
   image.alt = `Pending ${scan.source} capture`;
   image.loading = 'lazy';
   image.dataset.state = 'loading';
-  image.addEventListener('error', () => showPendingPreviewFailure(image));
+  image.addEventListener('error', () => {
+    diagnosePendingPreviewFailure(
+      scan.id,
+      'asset-load',
+      new Error('Asset preview failed to load.'),
+    );
+    showPendingPreviewFailure(image);
+  });
   const previewStatus = document.createElement('span');
   previewStatus.className = 'pending-preview-status';
   previewStatus.textContent = 'Loading preview…';
@@ -270,9 +277,19 @@ async function loadPendingPreview(image: HTMLImageElement, scan: PendingScan): P
       delete image.dataset.state;
       image.src = convertFileSrc(path);
     });
-  } catch {
+  } catch (error) {
+    diagnosePendingPreviewFailure(scan.id, 'native-command', error);
     showPendingPreviewFailure(image);
   }
+}
+
+function diagnosePendingPreviewFailure(scanId: string, phase: string, error: unknown): void {
+  console.warn('Pending preview unavailable.', {
+    event: 'pending_preview_failed',
+    scanId,
+    phase,
+    errorClass: error instanceof Error ? error.name : typeof error,
+  });
 }
 
 function showPendingPreviewFailure(image: HTMLImageElement): void {

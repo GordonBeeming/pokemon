@@ -209,6 +209,7 @@ describe('desktop main DOM', () => {
       confirmedCardId: null,
     };
     const unhandled = vi.fn((event: PromiseRejectionEvent) => event.preventDefault());
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     window.addEventListener('unhandledrejection', unhandled);
     mocks.invoke.mockImplementation((command: string) => {
       if (command === 'desktop_status') return Promise.resolve(status([scan]));
@@ -231,7 +232,15 @@ describe('desktop main DOM', () => {
     expect(image?.dataset.state).toBe('error');
     expect(document.querySelector('#notice')?.textContent).toBe('');
     expect(unhandled).not.toHaveBeenCalled();
+    expect(warning).toHaveBeenCalledOnce();
+    expect(warning).toHaveBeenCalledWith('Pending preview unavailable.', {
+      event: 'pending_preview_failed',
+      scanId: scan.id,
+      phase: 'native-command',
+      errorClass: 'Error',
+    });
     window.removeEventListener('unhandledrejection', unhandled);
+    warning.mockRestore();
   });
 
   it('replaces an asset load error with the same local fallback', async () => {
@@ -251,6 +260,7 @@ describe('desktop main DOM', () => {
         return Promise.resolve('/tmp/pending.preview.jpg');
       return Promise.resolve(undefined);
     });
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await import('./main');
     await waitFor(
@@ -262,5 +272,12 @@ describe('desktop main DOM', () => {
     expect(document.querySelector('.pending-preview-status')?.textContent).toBe('No preview');
     expect(image?.dataset.state).toBe('error');
     expect(document.querySelector('#notice')?.textContent).toBe('');
+    expect(warning).toHaveBeenCalledWith('Pending preview unavailable.', {
+      event: 'pending_preview_failed',
+      scanId: scan.id,
+      phase: 'asset-load',
+      errorClass: 'Error',
+    });
+    warning.mockRestore();
   });
 });

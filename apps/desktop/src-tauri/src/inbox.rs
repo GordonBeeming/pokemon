@@ -8,6 +8,13 @@ use uuid::Uuid;
 
 const MAX_CAPTURE_BYTES: usize = 25 * 1024 * 1024;
 const MAX_PREVIEW_BYTES: usize = 256 * 1024;
+const DELETE_TOMBSTONE_PREFIX: &str = ".pokedex-delete-";
+
+struct DeleteEntry {
+    label: &'static str,
+    source: PathBuf,
+    tombstone: PathBuf,
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -58,7 +65,11 @@ pub struct PendingInbox {
 
 impl PendingInbox {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        let inbox = Self { root };
+        if let Err(error) = inbox.scavenge_tombstones() {
+            tracing::warn!(error = %error, "could not scan pending-delete tombstones");
+        }
+        inbox
     }
 
     pub fn save(
@@ -193,10 +204,7 @@ impl PendingInbox {
 
     pub fn delete(&self, id: Uuid) -> Result<()> {
         let scan = self.read_metadata(id)?;
-        remove_if_exists(&self.image_path(id, &scan.mime_type))?;
-        remove_if_exists(&self.thumbnail_path(id))?;
-        remove_if_exists(&self.metadata_path(id))?;
-        Ok(())
+        self.delete_scan(&scan)
     }
 
     pub fn claim(&self, id: Uuid, card_id: &str) -> Result<PendingScan> {
@@ -236,10 +244,7 @@ impl PendingInbox {
         if scan.state != ScanState::Completed {
             return Err(DesktopError::Mcp("scan is not complete".to_string()));
         }
-        remove_if_exists(&self.image_path(id, &scan.mime_type))?;
-        remove_if_exists(&self.thumbnail_path(id))?;
-        remove_if_exists(&self.metadata_path(id))?;
-        Ok(())
+        self.delete_scan(&scan)
     }
 
     fn read_metadata(&self, id: Uuid) -> Result<PendingScan> {
@@ -277,6 +282,94 @@ impl PendingInbox {
 
     fn thumbnail_path(&self, id: Uuid) -> PathBuf {
         self.root.join(format!("{id}.preview.jpg"))
+    }
+
+    fn delete_scan(&self, scan: &PendingScan) -> Result<()> {
+        self.delete_scan_with(
+            scan,
+            |source, tombstone| std::fs::rename(source, tombstone),
+            |tombstone| std::fs::remove_file(tombstone),
+        )
+    }
+
+    fn delete_scan_with<R, C>(
+        &self,
+        scan: &PendingScan,
+        mut rename: R,
+        mut cleanup: C,
+    ) -> Result<()>
+    where
+        R: FnMut(&Path, &Path) -> std::io::Result<()>,
+        C: FnMut(&Path) -> std::io::Result<()>,
+    {
+        let operation_id = Uuid::new_v4();
+        let entries = [
+            DeleteEntry {
+                label: "capture",
+                source: self.image_path(scan.id, &scan.mime_type),
+                tombstone: self.delete_tombstone_path(operation_id, "capture"),
+            },
+            DeleteEntry {
+                label: "preview",
+                source: self.thumbnail_path(scan.id),
+                tombstone: self.delete_tombstone_path(operation_id, "preview"),
+            },
+            DeleteEntry {
+                label: "metadata",
+                source: self.metadata_path(scan.id),
+                tombstone: self.delete_tombstone_path(operation_id, "metadata"),
+            },
+        ];
+        let mut staged = Vec::new();
+        for entry in entries.iter().filter(|entry| entry.source.exists()) {
+            if let Err(error) = rename(&entry.source, &entry.tombstone) {
+                return Err(rollback_delete_staging(error, &staged, &mut rename));
+            }
+            staged.push(entry);
+        }
+        for entry in staged {
+            if let Err(error) = cleanup(&entry.tombstone) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(
+                        scan_id = %scan.id,
+                        operation_id = %operation_id,
+                        file = entry.label,
+                        error = %error,
+                        "pending-delete tombstone cleanup deferred to startup"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn delete_tombstone_path(&self, operation_id: Uuid, label: &str) -> PathBuf {
+        self.root
+            .join(format!("{DELETE_TOMBSTONE_PREFIX}{operation_id}-{label}"))
+    }
+
+    fn scavenge_tombstones(&self) -> Result<usize> {
+        if !self.root.exists() {
+            return Ok(0);
+        }
+        let mut removed = 0;
+        for entry in std::fs::read_dir(&self.root)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if !name.to_string_lossy().starts_with(DELETE_TOMBSTONE_PREFIX) {
+                continue;
+            }
+            match std::fs::remove_file(entry.path()) {
+                Ok(()) => removed += 1,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => tracing::warn!(
+                    tombstone = %name.to_string_lossy(),
+                    error = %error,
+                    "pending-delete tombstone cleanup remains deferred"
+                ),
+            }
+        }
+        Ok(removed)
     }
 }
 
@@ -345,6 +438,35 @@ fn rollback_save(
     } else {
         DesktopError::Rollback {
             operation,
+            primary: Box::new(primary),
+            cleanup: cleanup.join("; "),
+        }
+    }
+}
+
+fn rollback_delete_staging<R>(
+    error: std::io::Error,
+    staged: &[&DeleteEntry],
+    rename: &mut R,
+) -> DesktopError
+where
+    R: FnMut(&Path, &Path) -> std::io::Result<()>,
+{
+    let primary = DesktopError::Io(error);
+    let cleanup = staged
+        .iter()
+        .rev()
+        .filter_map(|entry| {
+            rename(&entry.tombstone, &entry.source)
+                .err()
+                .map(|error| format!("{}: {error}", entry.label))
+        })
+        .collect::<Vec<_>>();
+    if cleanup.is_empty() {
+        primary
+    } else {
+        DesktopError::Rollback {
+            operation: "pending delete staging",
             primary: Box::new(primary),
             cleanup: cleanup.join("; "),
         }
@@ -437,6 +559,84 @@ mod tests {
         assert!(message.contains("metadata failed"));
         assert!(message.contains("preview: I/O error"));
         assert!(message.contains("capture: I/O error"));
+    }
+
+    #[test]
+    fn delete_rolls_back_every_staged_file_when_a_later_rename_fails() {
+        for failed_stage in 1..=3 {
+            let root = tempdir().expect("temp dir");
+            let inbox = PendingInbox::new(root.path().join("inbox"));
+            let scan = inbox
+                .save(&webp(), &preview(), "image/webp", CaptureSource::File)
+                .expect("scan");
+            let mut stage = 0;
+
+            let error = inbox
+                .delete_scan_with(
+                    &scan,
+                    |source, tombstone| {
+                        stage += 1;
+                        if stage == failed_stage {
+                            return Err(std::io::Error::other(format!(
+                                "injected stage {failed_stage} failure"
+                            )));
+                        }
+                        std::fs::rename(source, tombstone)
+                    },
+                    |tombstone| std::fs::remove_file(tombstone),
+                )
+                .expect_err("staging failure");
+
+            assert!(error.to_string().contains(&format!("stage {failed_stage}")));
+            assert!(inbox.image_path(scan.id, &scan.mime_type).is_file());
+            assert!(inbox.thumbnail_path(scan.id).is_file());
+            assert!(inbox.metadata_path(scan.id).is_file());
+            assert_eq!(inbox.list().expect("list after rollback"), vec![scan]);
+            assert_eq!(inbox.scavenge_tombstones().expect("no tombstones"), 0);
+        }
+    }
+
+    #[test]
+    fn startup_scavenges_cleanup_failures_after_logical_deletion() {
+        let root = tempdir().expect("temp dir");
+        let inbox_root = root.path().join("inbox");
+        let inbox = PendingInbox::new(inbox_root.clone());
+        let scan = inbox
+            .save(&webp(), &preview(), "image/webp", CaptureSource::Camera)
+            .expect("scan");
+        let mut cleanup = 0;
+
+        inbox
+            .delete_scan_with(
+                &scan,
+                |source, tombstone| std::fs::rename(source, tombstone),
+                |tombstone| {
+                    cleanup += 1;
+                    if cleanup == 1 {
+                        Err(std::io::Error::other("injected cleanup failure"))
+                    } else {
+                        std::fs::remove_file(tombstone)
+                    }
+                },
+            )
+            .expect("logical deletion succeeds");
+
+        assert!(inbox.list().expect("scan is logically gone").is_empty());
+        assert_eq!(
+            std::fs::read_dir(&inbox_root)
+                .expect("inbox")
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(DELETE_TOMBSTONE_PREFIX)
+                })
+                .count(),
+            1
+        );
+        let restarted = PendingInbox::new(inbox_root);
+        assert_eq!(restarted.scavenge_tombstones().expect("clean restart"), 0);
     }
 
     #[test]
