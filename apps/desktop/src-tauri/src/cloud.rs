@@ -95,6 +95,78 @@ pub struct CollectionMutationResult {
     pub replayed: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PriceBaseline {
+    pub amount_aud: Option<f64>,
+    pub native_amount: Option<f64>,
+    pub native_currency: Option<String>,
+    pub source: Option<String>,
+    pub source_captured_at: Option<String>,
+    pub fx_date: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogueCardView {
+    pub id: String,
+    pub name: String,
+    pub language: String,
+    pub category: String,
+    pub set_id: String,
+    pub set_name: String,
+    pub number: String,
+    pub image_low_url: Option<String>,
+    pub collection: Option<CollectionState>,
+    pub price: PriceBaseline,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogueSource {
+    pub provider: String,
+    pub source_id: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogueDetailView {
+    pub id: String,
+    pub name: String,
+    pub language: String,
+    pub category: String,
+    pub set_id: String,
+    pub set_name: String,
+    pub number: String,
+    pub image_low_url: Option<String>,
+    pub supertype: Option<String>,
+    pub subtype: Option<String>,
+    pub species: Option<String>,
+    pub rarity: Option<String>,
+    pub artist: Option<String>,
+    pub image_high_url: Option<String>,
+    pub source: CatalogueSource,
+    pub notes: Option<String>,
+    pub collection: Option<CollectionState>,
+    pub price: PriceBaseline,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogueSearchResult {
+    pub ok: bool,
+    pub total: u64,
+    pub cards: Vec<CatalogueCardView>,
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CatalogueDetailResult {
+    pub ok: bool,
+    pub card: CatalogueDetailView,
+}
+
 pub struct CollectionSetInput<'a> {
     pub card_id: &'a str,
     pub quantity: u32,
@@ -114,6 +186,14 @@ pub struct BinderSlot {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct BinderLayout {
+    pub kind: String,
+    pub rows: u32,
+    pub columns: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct BinderPage {
     pub id: String,
     pub position: u32,
@@ -127,7 +207,7 @@ pub struct BinderVersionSummary {
     pub binder_id: String,
     pub version_number: u32,
     pub status: String,
-    pub layout: Value,
+    pub layout: BinderLayout,
     pub revision: u64,
     pub page_count: u32,
 }
@@ -147,6 +227,53 @@ pub struct BinderShortage {
     pub required: u32,
     pub owned: u32,
     pub missing: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BinderView {
+    pub id: String,
+    pub name: String,
+    pub active_version_id: Option<String>,
+    pub latest_version_id: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BinderListResult {
+    pub ok: bool,
+    pub binders: Vec<BinderView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BinderMutationResult {
+    pub version: BinderVersionSummary,
+    pub pages: Vec<BinderPage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BinderMutationEnvelope {
+    pub ok: bool,
+    pub binder: BinderMutationResult,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BinderGetResult {
+    pub version: BinderVersionSummary,
+    pub pages: Vec<BinderPage>,
+    pub next_page: Option<u32>,
+    pub shortages: Vec<BinderShortage>,
+    pub next_offset: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BinderSuggestionResult {
+    pub shortages: Vec<BinderShortage>,
+    pub next_offset: Option<u32>,
+    pub empty_slots: Vec<BinderSlot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,6 +337,14 @@ struct BinderResponse {
 struct BinderShortagesResponse {
     shortages: Vec<BinderShortage>,
     next_offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BinderSuggestionResponse {
+    shortages: Vec<BinderShortage>,
+    next_offset: Option<u32>,
+    empty_slots: Vec<BinderSlot>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -277,7 +412,7 @@ impl CloudClient {
         token: &str,
         query: &str,
         limit: u16,
-    ) -> Result<Value> {
+    ) -> Result<CatalogueSearchResult> {
         self.authorized_json(
             Method::GET,
             base_url,
@@ -292,7 +427,12 @@ impl CloudClient {
         .await
     }
 
-    pub async fn card(&self, base_url: &str, token: &str, card_id: &str) -> Result<Value> {
+    pub async fn card(
+        &self,
+        base_url: &str,
+        token: &str,
+        card_id: &str,
+    ) -> Result<CatalogueDetailResult> {
         self.authorized_json(
             Method::GET,
             base_url,
@@ -307,7 +447,7 @@ impl CloudClient {
         .await
     }
 
-    pub async fn list_binders(&self, base_url: &str, token: &str) -> Result<Value> {
+    pub async fn list_binders(&self, base_url: &str, token: &str) -> Result<BinderListResult> {
         self.authorized_json(
             Method::GET,
             base_url,
@@ -319,24 +459,42 @@ impl CloudClient {
         .await
     }
 
-    pub async fn binder(&self, base_url: &str, token: &str, version_id: &str) -> Result<Value> {
-        let response: BinderResponse = self
-            .authorized_json(
-                Method::GET,
-                base_url,
-                &format!(
-                    "/api/desktop/binders/versions/{}",
-                    percent_encoding::utf8_percent_encode(
-                        version_id,
-                        percent_encoding::NON_ALPHANUMERIC
-                    )
-                ),
-                token,
-                None,
-                &[("page", "0".to_string()), ("limit", "1".to_string())],
-            )
-            .await?;
-        serde_json::to_value(response.binder).map_err(Into::into)
+    pub async fn binder(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+    ) -> Result<BinderGetResult> {
+        let encoded =
+            percent_encoding::utf8_percent_encode(version_id, percent_encoding::NON_ALPHANUMERIC);
+        let binder_path = format!("/api/desktop/binders/versions/{encoded}");
+        let shortages_path = format!("{binder_path}/shortages");
+        let binder_query = [("page", "0".to_string()), ("limit", "1".to_string())];
+        let shortages_query = [("offset", "0".to_string()), ("limit", "100".to_string())];
+        let binder_request = self.authorized_json::<BinderResponse>(
+            Method::GET,
+            base_url,
+            &binder_path,
+            token,
+            None,
+            &binder_query,
+        );
+        let shortages_request = self.authorized_json::<BinderShortagesResponse>(
+            Method::GET,
+            base_url,
+            &shortages_path,
+            token,
+            None,
+            &shortages_query,
+        );
+        let (binder, shortages) = tokio::try_join!(binder_request, shortages_request)?;
+        Ok(BinderGetResult {
+            version: binder.binder.version,
+            pages: binder.binder.pages,
+            next_page: binder.binder.next_page,
+            shortages: shortages.shortages,
+            next_offset: shortages.next_offset,
+        })
     }
 
     pub async fn binder_suggestions(
@@ -344,13 +502,13 @@ impl CloudClient {
         base_url: &str,
         token: &str,
         version_id: &str,
-    ) -> Result<Value> {
-        let response: BinderShortagesResponse = self
+    ) -> Result<BinderSuggestionResult> {
+        let response: BinderSuggestionResponse = self
             .authorized_json(
                 Method::GET,
                 base_url,
                 &format!(
-                    "/api/desktop/binders/versions/{}/shortages",
+                    "/api/desktop/binders/versions/{}/suggest",
                     percent_encoding::utf8_percent_encode(
                         version_id,
                         percent_encoding::NON_ALPHANUMERIC
@@ -358,14 +516,14 @@ impl CloudClient {
                 ),
                 token,
                 None,
-                &[("offset", "0".to_string()), ("limit", "100".to_string())],
+                &[],
             )
             .await?;
-        serde_json::to_value(json!({
-            "shortages": response.shortages,
-            "nextOffset": response.next_offset,
-        }))
-        .map_err(Into::into)
+        Ok(BinderSuggestionResult {
+            shortages: response.shortages,
+            next_offset: response.next_offset,
+            empty_slots: response.empty_slots,
+        })
     }
 
     pub async fn set_collection(
@@ -472,7 +630,7 @@ impl CloudClient {
         token: &str,
         name: &str,
         layout: Value,
-    ) -> Result<Value> {
+    ) -> Result<BinderMutationEnvelope> {
         self.authorized_json(
             Method::POST,
             base_url,
@@ -491,7 +649,7 @@ impl CloudClient {
         version_id: &str,
         slot: Value,
         expected_revision: u64,
-    ) -> Result<Value> {
+    ) -> Result<BinderMutationEnvelope> {
         self.authorized_json(
             Method::PUT,
             base_url,
@@ -521,7 +679,7 @@ impl CloudClient {
         expected_revision: u64,
         source: Value,
         target: Value,
-    ) -> Result<Value> {
+    ) -> Result<BinderMutationEnvelope> {
         self.authorized_json(
             Method::POST,
             base_url,
@@ -790,6 +948,7 @@ impl CloudClient {
             let result = self
                 .http
                 .put(url.clone())
+                .bearer_auth(&ticket.token)
                 .header(reqwest::header::CONTENT_TYPE, "image/webp")
                 .header(reqwest::header::CONTENT_LENGTH, bytes)
                 .body(reqwest::Body::wrap_stream(ReaderStream::new(file)))
@@ -797,6 +956,25 @@ impl CloudClient {
                 .await;
             match result {
                 Ok(response) if response.status().is_success() => return Ok(()),
+                Ok(response) if response.status() == StatusCode::CONFLICT && attempt < 2 => {
+                    let delay = retry_delay(&response, attempt);
+                    let error = read_cloud_error(response).await;
+                    if !matches!(
+                        error,
+                        DesktopError::Cloud { ref code, .. } if code == "art_upload_in_progress"
+                    ) {
+                        return Err(error);
+                    }
+                    tracing::warn!(
+                        target: "pokedex.cloud",
+                        operation = "art-upload",
+                        attempt = attempt + 1,
+                        status = StatusCode::CONFLICT.as_u16(),
+                        delay_ms = delay.as_millis(),
+                        "retrying in-progress art upload"
+                    );
+                    tokio::time::sleep(delay).await;
+                }
                 Ok(response) if should_retry(response.status()) && attempt < 2 => {
                     let delay = retry_delay(&response, attempt);
                     tracing::warn!(
@@ -1002,6 +1180,7 @@ mod tests {
         body::Bytes,
         extract::{Path as AxumPath, State},
         http::{HeaderMap, StatusCode},
+        response::{IntoResponse, Response},
         routing::{get, patch, post, put},
         Json, Router,
     };
@@ -1040,6 +1219,20 @@ mod tests {
             axum::serve(listener, app).await.expect("test server");
         });
         format!("http://{address}")
+    }
+
+    fn binder_mutation_value(revision: u64) -> Value {
+        json!({
+            "version": {
+                "id": "version-1", "binderId": "binder-1", "versionNumber": 1,
+                "status": "draft", "layout": { "kind": "3x3", "rows": 3, "columns": 3 },
+                "revision": revision, "pageCount": 1
+            },
+            "pages": [{
+                "id": "page-1", "position": 0,
+                "slots": [{ "pageId": "page-1", "row": 0, "column": 0, "cardId": "card-1" }]
+            }]
+        })
     }
 
     #[tokio::test]
@@ -1143,7 +1336,8 @@ mod tests {
             Json(json!({
                 "ok": true,
                 "shortages": [{ "cardId": "card-1", "required": 2, "owned": 1, "missing": 1 }],
-                "nextOffset": null
+                "nextOffset": null,
+                "emptySlots": [{ "pageId": "page-1", "row": 0, "column": 0, "cardId": null }]
             }))
         }
         let base = spawn(
@@ -1153,7 +1347,7 @@ mod tests {
                     post(increment),
                 )
                 .route(
-                    "/api/desktop/binders/versions/{version_id}/shortages",
+                    "/api/desktop/binders/versions/{version_id}/suggest",
                     get(shortages),
                 ),
         )
@@ -1168,8 +1362,9 @@ mod tests {
             .binder_suggestions(&base, "token", "version-1")
             .await
             .expect("binder suggestions");
-        assert_eq!(suggestions["shortages"][0]["missing"], 1);
-        assert!(suggestions["nextOffset"].is_null());
+        assert_eq!(suggestions.shortages[0].missing, 1);
+        assert!(suggestions.next_offset.is_none());
+        assert_eq!(suggestions.empty_slots.len(), 1);
     }
 
     #[tokio::test]
@@ -1207,13 +1402,13 @@ mod tests {
             assert_eq!(body["row"], 2);
             assert_eq!(body["column"], 0);
             assert_eq!(body["cardId"], "card-1");
-            Json(json!({ "ok": true, "revision": 10 }))
+            Json(json!({ "ok": true, "binder": binder_mutation_value(10) }))
         }
         async fn swap(Json(body): Json<Value>) -> Json<Value> {
             assert_eq!(body["expectedRevision"], 10);
             assert_eq!(body["source"]["column"], 0);
             assert_eq!(body["target"]["column"], 1);
-            Json(json!({ "ok": true, "revision": 11 }))
+            Json(json!({ "ok": true, "binder": binder_mutation_value(11) }))
         }
         let base = spawn(
             Router::new()
@@ -1405,9 +1600,16 @@ mod tests {
                 Some("12")
             );
             assert_eq!(body.as_ref(), b"RIFFxxxxWEBP");
+            assert_eq!(
+                headers
+                    .get(reqwest::header::AUTHORIZATION)
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer secret")
+            );
             Json(json!({ "ok": true }))
         }
-        let base = spawn(Router::new().route("/upload/token", put(upload))).await;
+        let base =
+            spawn(Router::new().route("/api/desktop/art/uploads/ticket-1", put(upload))).await;
         let root = tempdir().expect("temp dir");
         let path = root.path().join("art.webp");
         tokio::fs::write(&path, b"RIFFxxxxWEBP")
@@ -1419,7 +1621,7 @@ mod tests {
                 &base,
                 &UploadTicket {
                     token: "secret".to_string(),
-                    upload_path: "/upload/token".to_string(),
+                    upload_path: "/api/desktop/art/uploads/ticket-1".to_string(),
                 },
                 &path,
                 12,
@@ -1428,6 +1630,183 @@ mod tests {
             .expect("stream upload");
         assert!(upload_url(&base, "https://attacker.example/upload").is_err());
         assert!(upload_url(&base, "//attacker.example/upload").is_err());
+    }
+
+    type RecordedUploads = Vec<(String, Vec<u8>)>;
+
+    #[derive(Clone, Default)]
+    struct UploadAttempts(Arc<Mutex<RecordedUploads>>);
+
+    async fn ambiguous_upload(
+        State(attempts): State<UploadAttempts>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Response {
+        let authorization = headers
+            .get(reqwest::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let attempt = {
+            let mut values = attempts.0.lock().expect("attempt lock");
+            values.push((authorization, body.to_vec()));
+            values.len()
+        };
+        if attempt == 1 {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "ok": false, "error": "upload_response_lost" })),
+            )
+                .into_response();
+        }
+        Json(json!({
+            "ok": true, "cardId": "card-1", "variant": "high",
+            "objectKey": "art/card-1/high.webp", "replayed": true
+        }))
+        .into_response()
+    }
+
+    #[tokio::test]
+    async fn ambiguous_upload_retries_the_same_bearer_and_file_body() {
+        let attempts = UploadAttempts::default();
+        let base = spawn(
+            Router::new()
+                .route("/api/desktop/art/uploads/ticket-1", put(ambiguous_upload))
+                .with_state(attempts.clone()),
+        )
+        .await;
+        let root = tempdir().expect("temp dir");
+        let path = root.path().join("art.webp");
+        tokio::fs::write(&path, b"RIFFxxxxWEBP")
+            .await
+            .expect("art file");
+
+        CloudClient::new()
+            .expect("client")
+            .upload_art_file(
+                &base,
+                &UploadTicket {
+                    token: "same-secret".to_string(),
+                    upload_path: "/api/desktop/art/uploads/ticket-1".to_string(),
+                },
+                &path,
+                12,
+            )
+            .await
+            .expect("replayed upload");
+
+        let values = attempts.0.lock().expect("attempt lock");
+        assert_eq!(values.len(), 2);
+        assert!(values.iter().all(
+            |(authorization, body)| authorization == "Bearer same-secret"
+                && body == b"RIFFxxxxWEBP"
+        ));
+    }
+
+    #[tokio::test]
+    async fn terminal_invalid_upload_token_is_not_retried() {
+        #[derive(Clone, Default)]
+        struct Calls(Arc<Mutex<u32>>);
+        async fn invalid(State(calls): State<Calls>) -> (StatusCode, Json<Value>) {
+            *calls.0.lock().expect("calls lock") += 1;
+            (
+                StatusCode::CONFLICT,
+                Json(json!({ "ok": false, "error": "art_upload_token_invalid" })),
+            )
+        }
+        let calls = Calls::default();
+        let base = spawn(
+            Router::new()
+                .route("/api/desktop/art/uploads/ticket-1", put(invalid))
+                .with_state(calls.clone()),
+        )
+        .await;
+        let root = tempdir().expect("temp dir");
+        let path = root.path().join("art.webp");
+        tokio::fs::write(&path, b"RIFFxxxxWEBP")
+            .await
+            .expect("art file");
+
+        let error = CloudClient::new()
+            .expect("client")
+            .upload_art_file(
+                &base,
+                &UploadTicket {
+                    token: "expired".to_string(),
+                    upload_path: "/api/desktop/art/uploads/ticket-1".to_string(),
+                },
+                &path,
+                12,
+            )
+            .await
+            .expect_err("invalid token");
+
+        assert!(
+            matches!(error, DesktopError::Cloud { status: 409, ref code } if code == "art_upload_token_invalid")
+        );
+        assert_eq!(*calls.0.lock().expect("calls lock"), 1);
+    }
+
+    #[tokio::test]
+    async fn in_progress_upload_honours_retry_after_and_replays_same_token() {
+        #[derive(Clone, Default)]
+        struct Calls(Arc<Mutex<Vec<String>>>);
+        async fn upload(State(calls): State<Calls>, headers: HeaderMap) -> Response {
+            let authorization = headers
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            let attempt = {
+                let mut values = calls.0.lock().expect("calls lock");
+                values.push(authorization);
+                values.len()
+            };
+            if attempt == 1 {
+                return (
+                    StatusCode::CONFLICT,
+                    [(reqwest::header::RETRY_AFTER, "0")],
+                    Json(json!({ "ok": false, "error": "art_upload_in_progress" })),
+                )
+                    .into_response();
+            }
+            Json(json!({
+                "ok": true, "cardId": "card-1", "variant": "high",
+                "objectKey": "art/card-1/high.webp", "replayed": true
+            }))
+            .into_response()
+        }
+        let calls = Calls::default();
+        let base = spawn(
+            Router::new()
+                .route("/api/desktop/art/uploads/ticket-1", put(upload))
+                .with_state(calls.clone()),
+        )
+        .await;
+        let root = tempdir().expect("temp dir");
+        let path = root.path().join("art.webp");
+        tokio::fs::write(&path, b"RIFFxxxxWEBP")
+            .await
+            .expect("art file");
+
+        CloudClient::new()
+            .expect("client")
+            .upload_art_file(
+                &base,
+                &UploadTicket {
+                    token: "same-secret".to_string(),
+                    upload_path: "/api/desktop/art/uploads/ticket-1".to_string(),
+                },
+                &path,
+                12,
+            )
+            .await
+            .expect("replayed upload");
+
+        assert_eq!(
+            *calls.0.lock().expect("calls lock"),
+            ["Bearer same-secret", "Bearer same-secret"]
+        );
     }
 
     #[test]

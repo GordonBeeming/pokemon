@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ExclusiveAction, LatestGeneration } from './ui-controller';
+import { BoundedAsyncQueue, ExclusiveAction, LatestGeneration } from './ui-controller';
 
 describe('desktop async UI controllers', () => {
   it('marks older refresh generations stale', () => {
@@ -25,5 +25,28 @@ describe('desktop async UI controllers', () => {
     release?.();
     await pending;
     await expect(exclusive.run(() => Promise.resolve('done'))).resolves.toBe('done');
+  });
+
+  it('bounds queued preview work', async () => {
+    const queue = new BoundedAsyncQueue(2);
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let running = 0;
+    let peak = 0;
+    const tasks = Array.from({ length: 4 }, () =>
+      queue.run(async () => {
+        running += 1;
+        peak = Math.max(peak, running);
+        await gate;
+        running -= 1;
+      }),
+    );
+    await Promise.resolve();
+    expect(queue.activeCount).toBe(2);
+    release?.();
+    await Promise.all(tasks);
+    expect(peak).toBe(2);
   });
 });

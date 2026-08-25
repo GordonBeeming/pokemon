@@ -1,9 +1,6 @@
-import { DESKTOP_SCOPES, type DesktopScope } from '@pokedex/shared';
 import { z } from 'zod';
 import { newId, nowSeconds } from './db';
 import { ApplicationError } from './log';
-
-export { DESKTOP_SCOPES, type DesktopScope } from '@pokedex/shared';
 
 const LEGACY_BACKUP_VERSION = 2 as const;
 const BACKUP_VERSION = 3 as const;
@@ -14,8 +11,6 @@ const MAX_LEGACY_BACKUP_BYTES = 2_000_000;
 const BACKUP_QUERY_ROWS = 250;
 const BACKUP_RETENTION_COUNT = 10;
 const RESTORE_CHUNK_ROWS = 250;
-const DESKTOP_TOKEN_MAX_AGE = 60 * 60 * 24 * 90;
-const DESKTOP_ACTIVITY_INTERVAL = 60 * 60;
 
 const catalogueRow = z
   .object({
@@ -166,6 +161,18 @@ const backupManifestSchema = z
   .strict();
 type BackupManifest = z.infer<typeof backupManifestSchema>;
 
+interface BackupPageResult {
+  cursor: number;
+  rowCount: number;
+  bytes: number;
+  chunks: BackupManifest['chunks'];
+}
+
+export type BackupPageRunner = (
+  name: string,
+  action: () => Promise<BackupPageResult>,
+) => Promise<BackupPageResult>;
+
 const backupRowSchemas = {
   catalogue: catalogueRow,
   sources: sourceRow,
@@ -260,16 +267,6 @@ async function hashText(value: string): Promise<string> {
   return toHex(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)));
 }
 
-function validScopes(value: unknown): value is DesktopScope[] {
-  return (
-    Array.isArray(value) &&
-    value.length > 0 &&
-    value.every(
-      (scope) => typeof scope === 'string' && DESKTOP_SCOPES.some((known) => known === scope),
-    )
-  );
-}
-
 interface BackupRawRow {
   backup_cursor: number;
   backup_is_custom?: number;
@@ -313,18 +310,27 @@ async function writeBackupRows(
   kind: BackupKind,
   rows: unknown[],
   chunks: BackupManifest['chunks'],
+  indexBase = 0,
 ): Promise<number> {
   const payload = JSON.stringify(rows);
   const bytes = new TextEncoder().encode(payload).byteLength;
   if (bytes > MAX_BACKUP_CHUNK_BYTES && rows.length > 1) {
     const midpoint = Math.ceil(rows.length / 2);
     return (
-      (await writeBackupRows(art, ownerId, backupId, kind, rows.slice(0, midpoint), chunks)) +
-      (await writeBackupRows(art, ownerId, backupId, kind, rows.slice(midpoint), chunks))
+      (await writeBackupRows(
+        art,
+        ownerId,
+        backupId,
+        kind,
+        rows.slice(0, midpoint),
+        chunks,
+        indexBase,
+      )) +
+      (await writeBackupRows(art, ownerId, backupId, kind, rows.slice(midpoint), chunks, indexBase))
     );
   }
   if (bytes > MAX_BACKUP_CHUNK_BYTES) throw new ApplicationError('backup_row_too_large', 413);
-  const index = chunks.filter((chunk) => chunk.kind === kind).length;
+  const index = indexBase + chunks.filter((chunk) => chunk.kind === kind).length;
   const objectKey = `backups/${ownerId}/${backupId}/chunks/${kind}/${index}.json`;
   const checksum = await hashText(payload);
   await art.put(objectKey, payload, {
@@ -371,6 +377,7 @@ export async function createBackup(
   db: D1Database,
   art: R2Bucket,
   ownerId: string,
+  runPage: BackupPageRunner = (_name, action) => action(),
 ): Promise<{ id: string; checksum: string }> {
   const id = newId('backup');
   const objectKey = `backups/${ownerId}/${id}/manifest.json`;
@@ -390,29 +397,53 @@ export async function createBackup(
     let totalBytes = 0;
     for (const query of backupQueries) {
       let cursor = 0;
+      let page = 0;
       while (true) {
-        const result = await db
-          .prepare(query.sql)
-          .bind(ownerId, cursor, BACKUP_QUERY_ROWS)
-          .all<BackupRawRow>();
-        if (result.results.length === 0) break;
-        const last = result.results.at(-1);
-        if (!last || !Number.isInteger(last.backup_cursor) || last.backup_cursor <= cursor)
-          throw new ApplicationError('backup_cursor_invalid', 500);
-        cursor = last.backup_cursor;
-        const rows =
-          query.kind === 'art_manifest'
-            ? await backupArtRows(art, ownerId, id, result.results)
-            : parseBackupRows(
-                query.kind,
-                result.results.map(({ backup_cursor: ignored, ...row }) => {
-                  void ignored;
-                  return row;
-                }),
-              );
-        totalBytes += await writeBackupRows(art, ownerId, id, query.kind, rows, chunks);
+        const pageCursor = cursor;
+        const result = await runPage(`backup-${query.kind}-${page}`, async () => {
+          const selected = await db
+            .prepare(query.sql)
+            .bind(ownerId, pageCursor, BACKUP_QUERY_ROWS)
+            .all<BackupRawRow>();
+          if (selected.results.length === 0)
+            return { cursor: pageCursor, rowCount: 0, bytes: 0, chunks: [] };
+          const last = selected.results.at(-1);
+          if (!last || !Number.isInteger(last.backup_cursor) || last.backup_cursor <= pageCursor)
+            throw new ApplicationError('backup_cursor_invalid', 500);
+          const rows =
+            query.kind === 'art_manifest'
+              ? await backupArtRows(art, ownerId, id, selected.results)
+              : parseBackupRows(
+                  query.kind,
+                  selected.results.map(({ backup_cursor: ignored, ...row }) => {
+                    void ignored;
+                    return row;
+                  }),
+                );
+          const pageChunks: BackupManifest['chunks'] = [];
+          const bytes = await writeBackupRows(
+            art,
+            ownerId,
+            id,
+            query.kind,
+            rows,
+            pageChunks,
+            page * BACKUP_QUERY_ROWS,
+          );
+          return {
+            cursor: last.backup_cursor,
+            rowCount: selected.results.length,
+            bytes,
+            chunks: pageChunks,
+          };
+        });
+        if (result.rowCount === 0) break;
+        cursor = result.cursor;
+        chunks.push(...result.chunks);
+        totalBytes += result.bytes;
         if (totalBytes > MAX_BACKUP_BYTES) throw new ApplicationError('backup_too_large', 413);
-        if (result.results.length < BACKUP_QUERY_ROWS) break;
+        if (result.rowCount < BACKUP_QUERY_ROWS) break;
+        page += 1;
       }
     }
     const currentOwner = await db
@@ -718,160 +749,4 @@ export async function restoreBackup(
       .run();
     throw error;
   }
-}
-
-export async function createPairCode(
-  db: D1Database,
-  ownerId: string,
-  scopes: DesktopScope[],
-): Promise<string> {
-  if (!validScopes(scopes)) throw new ApplicationError('invalid_desktop_scopes', 400);
-  const bytes = crypto.getRandomValues(new Uint8Array(12));
-  const code = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0'))
-    .join('')
-    .toUpperCase();
-  const now = nowSeconds();
-  await db.batch([
-    db
-      .prepare('DELETE FROM desktop_pair_codes WHERE expires_at <= ?1 OR consumed_at IS NOT NULL')
-      .bind(now),
-    db
-      .prepare('DELETE FROM desktop_tokens WHERE expires_at IS NOT NULL AND expires_at <= ?1')
-      .bind(now),
-    db
-      .prepare(
-        'INSERT INTO desktop_pair_codes (code_hash, owner_id, scopes, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)',
-      )
-      .bind(await hashText(code), ownerId, JSON.stringify(scopes), now + 600, now),
-  ]);
-  return code;
-}
-
-export async function redeemPairCode(
-  db: D1Database,
-  code: string,
-  label: string,
-): Promise<{ token: string; scopes: DesktopScope[] }> {
-  const codeHash = await hashText(code.trim().toUpperCase());
-  const row = await db
-    .prepare('SELECT scopes FROM desktop_pair_codes WHERE code_hash = ?1')
-    .bind(codeHash)
-    .first<{ scopes: string }>();
-  const parsedScopes: unknown = row ? JSON.parse(row.scopes) : null;
-  if (!validScopes(parsedScopes)) throw new ApplicationError('pair_code_invalid', 400);
-  const token = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll('-', '');
-  const tokenHash = await hashText(token);
-  const now = nowSeconds();
-  try {
-    const [inserted] = await db.batch([
-      db
-        .prepare(
-          `INSERT INTO desktop_tokens (token_hash, owner_id, label, scopes, pair_code_hash, expires_at, created_at)
-           SELECT ?1, owner_id, ?2, scopes, code_hash, ?3, ?4 FROM desktop_pair_codes
-           WHERE code_hash = ?5 AND consumed_at IS NULL AND expires_at > ?4`,
-        )
-        .bind(tokenHash, label, now + DESKTOP_TOKEN_MAX_AGE, now, codeHash),
-      db
-        .prepare(
-          'UPDATE desktop_pair_codes SET consumed_at = ?1 WHERE code_hash = ?2 AND consumed_at IS NULL AND expires_at > ?1',
-        )
-        .bind(now, codeHash),
-    ]);
-    if (inserted?.meta.changes !== 1) throw new ApplicationError('pair_code_invalid', 400);
-  } catch (error) {
-    if (error instanceof ApplicationError) throw error;
-    throw new ApplicationError('pair_code_already_consumed', 409);
-  }
-  return { token, scopes: parsedScopes };
-}
-
-export async function requireDesktopToken(
-  db: D1Database,
-  token: string,
-  scope: DesktopScope,
-): Promise<string> {
-  const tokenHash = await hashText(token);
-  const now = nowSeconds();
-  const row = await db
-    .prepare(
-      'SELECT owner_id, scopes, expires_at, revoked_at, last_used_at FROM desktop_tokens WHERE token_hash = ?1',
-    )
-    .bind(tokenHash)
-    .first<{
-      owner_id: string;
-      scopes: string;
-      expires_at: number | null;
-      revoked_at: number | null;
-      last_used_at: number | null;
-    }>();
-  if (!row || row.revoked_at !== null || (row.expires_at !== null && row.expires_at <= now))
-    throw new ApplicationError('desktop_token_invalid', 401);
-  const scopesValue: unknown = JSON.parse(row.scopes);
-  if (!validScopes(scopesValue) || !scopesValue.includes(scope))
-    throw new ApplicationError('desktop_token_scope_missing', 403);
-  if (row.last_used_at === null || row.last_used_at <= now - DESKTOP_ACTIVITY_INTERVAL)
-    await db
-      .prepare(
-        'UPDATE desktop_tokens SET last_used_at = ?1 WHERE token_hash = ?2 AND (last_used_at IS NULL OR last_used_at <= ?3)',
-      )
-      .bind(now, tokenHash, now - DESKTOP_ACTIVITY_INTERVAL)
-      .run();
-  return row.owner_id;
-}
-
-export async function listDesktopTokens(
-  db: D1Database,
-  ownerId: string,
-): Promise<
-  Array<{
-    id: string;
-    label: string;
-    scopes: DesktopScope[];
-    expiresAt: string | null;
-    revokedAt: string | null;
-    lastUsedAt: string | null;
-  }>
-> {
-  const result = await db
-    .prepare(
-      'SELECT token_hash, label, scopes, expires_at, revoked_at, last_used_at FROM desktop_tokens WHERE owner_id = ?1 ORDER BY created_at DESC',
-    )
-    .bind(ownerId)
-    .all<{
-      token_hash: string;
-      label: string;
-      scopes: string;
-      expires_at: number | null;
-      revoked_at: number | null;
-      last_used_at: number | null;
-    }>();
-  return result.results.flatMap((row) => {
-    const scopes: unknown = JSON.parse(row.scopes);
-    return validScopes(scopes)
-      ? [
-          {
-            id: row.token_hash,
-            label: row.label,
-            scopes,
-            expiresAt: row.expires_at ? new Date(row.expires_at * 1000).toISOString() : null,
-            revokedAt: row.revoked_at ? new Date(row.revoked_at * 1000).toISOString() : null,
-            lastUsedAt: row.last_used_at ? new Date(row.last_used_at * 1000).toISOString() : null,
-          },
-        ]
-      : [];
-  });
-}
-
-export async function revokeDesktopToken(
-  db: D1Database,
-  ownerId: string,
-  tokenId: string,
-): Promise<boolean> {
-  const result = await db
-    .prepare(
-      'UPDATE desktop_tokens SET revoked_at = ?1 WHERE token_hash = ?2 AND owner_id = ?3 AND revoked_at IS NULL',
-    )
-    .bind(nowSeconds(), tokenId, ownerId)
-    .run();
-  return result.meta.changes === 1;
 }

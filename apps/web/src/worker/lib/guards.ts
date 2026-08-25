@@ -2,6 +2,7 @@ import type { Context, Next } from 'hono';
 import { z } from 'zod';
 import { enrolSecretMatches, getSession } from './auth';
 import { logWarn } from './log';
+import { boundedJson, MAX_AUTH_JSON_BYTES } from './request';
 import type { AuthVars } from './types';
 
 export interface RateLimitResult {
@@ -89,7 +90,8 @@ export async function requireEnrolAuth<Path extends string, Input extends object
 
   let candidate = c.req.header('x-enrol-secret') ?? null;
   if (!candidate && c.req.method === 'POST') {
-    const body: unknown = await c.req.json().catch(() => null);
+    const body = await boundedJson(c.req.raw, MAX_AUTH_JSON_BYTES);
+    c.set('requestBody', body);
     const parsed = enrolBody.safeParse(body);
     candidate = parsed.success ? (parsed.data.enrolSecret ?? null) : null;
   }

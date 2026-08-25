@@ -6,6 +6,10 @@ authors = ["Gordon Beeming"]
 edition = "2021"
 rust-version = "1.85"
 
+[package.metadata.pokedex]
+supported-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+audit-command = "pnpm --dir apps/desktop audit:macos"
+
 [lib]
 name = "pokedex_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

@@ -1,4 +1,5 @@
 import {
+  DESKTOP_SCOPES,
   apiErrorSchema,
   binderLayoutSchema,
   binderMutationResultSchema,
@@ -48,6 +49,7 @@ const dashboardSchema = successSchema.extend({
 const searchSchema = successSchema.extend({
   total: z.number().int().nonnegative(),
   cards: z.array(catalogueCardViewSchema),
+  cursor: z.string().nullable(),
 });
 const detailSchema = successSchema.extend({ card: catalogueDetailViewSchema });
 const collectionSchema = successSchema.merge(collectionMutationResultSchema);
@@ -379,7 +381,7 @@ export const api = {
     request('/api/desktop/pair', pairCodeSchema, {
       method: 'POST',
       body: json({
-        scopes: ['art:read', 'art:write', 'catalogue:read', 'collection:write', 'binders:write'],
+        scopes: [...DESKTOP_SCOPES],
       }),
     }),
   tokens: (signal?: AbortSignal): Promise<DesktopToken[]> =>

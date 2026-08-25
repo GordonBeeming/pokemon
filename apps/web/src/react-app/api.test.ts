@@ -49,7 +49,7 @@ function bodyAt(index: number): unknown {
 describe('API client', () => {
   it('validates paginated catalogue responses with same-origin art', async () => {
     vi.mocked(fetch).mockResolvedValue(
-      new Response(JSON.stringify({ ok: true, total: 1, cards: [card] })),
+      new Response(JSON.stringify({ ok: true, total: 1, cards: [card], cursor: null })),
     );
     const result = await api.search(
       new URLSearchParams({ q: 'bulbasaur', limit: '50', offset: '0' }),

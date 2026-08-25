@@ -14,7 +14,7 @@ import {
   type SaveCapture,
   type SyncReport,
 } from './domain';
-import { ExclusiveAction, LatestGeneration } from './ui-controller';
+import { BoundedAsyncQueue, ExclusiveAction, LatestGeneration } from './ui-controller';
 import './styles.css';
 
 const app = document.querySelector('#app');
@@ -158,6 +158,24 @@ let status: DesktopStatus | null = null;
 let cameraStream: MediaStream | null = null;
 const refreshGenerations = new LatestGeneration();
 const cameraAction = new ExclusiveAction();
+const previewQueue = new BoundedAsyncQueue(2);
+const previewScans = new WeakMap<HTMLImageElement, PendingScan>();
+const previewObserver =
+  typeof IntersectionObserver === 'undefined'
+    ? null
+    : new IntersectionObserver(
+        (entries) => {
+          entries
+            .filter((entry) => entry.isIntersecting && entry.target instanceof HTMLImageElement)
+            .forEach((entry) => {
+              const image = entry.target as HTMLImageElement;
+              previewObserver?.unobserve(image);
+              const scan = previewScans.get(image);
+              if (scan) void loadPendingPreview(image, scan);
+            });
+        },
+        { rootMargin: '160px' },
+      );
 
 const saveLocalCapture: SaveCapture = async (bytes, mimeType, source) =>
   invoke<PendingScan>('save_capture', { bytes, mimeType, source });
@@ -165,11 +183,12 @@ const saveLocalCapture: SaveCapture = async (bytes, mimeType, source) =>
 async function refresh(): Promise<void> {
   const generation = refreshGenerations.next();
   const next = await invoke<DesktopStatus>('desktop_status');
-  const pending = await pendingFragment(next.pendingScans);
+  const pending = pendingFragment(next.pendingScans);
   if (!refreshGenerations.isCurrent(generation)) return;
   status = next;
   renderStatus(next);
   pendingCount.textContent = `${next.pendingScans.length} pending`;
+  pendingList.querySelectorAll('img').forEach((image) => previewObserver?.unobserve(image));
   pendingList.replaceChildren(pending);
 }
 
@@ -187,7 +206,7 @@ function renderStatus(next: DesktopStatus): void {
   deviceLabel.value = next.config.deviceLabel;
 }
 
-async function pendingFragment(scans: PendingScan[]): Promise<DocumentFragment> {
+function pendingFragment(scans: PendingScan[]): DocumentFragment {
   const fragment = document.createDocumentFragment();
   if (scans.length === 0) {
     const empty = document.createElement('p');
@@ -196,20 +215,21 @@ async function pendingFragment(scans: PendingScan[]): Promise<DocumentFragment> 
     fragment.append(empty);
     return fragment;
   }
-  const articles = await Promise.all(scans.map(pendingArticle));
-  fragment.append(...articles);
+  fragment.append(...scans.map(pendingArticle));
   return fragment;
 }
 
-async function pendingArticle(scan: PendingScan): Promise<HTMLElement> {
+function pendingArticle(scan: PendingScan): HTMLElement {
   const article = document.createElement('article');
   article.className = 'pending-item';
   const preview = document.createElement('div');
   preview.className = 'pending-preview';
   const image = document.createElement('img');
   image.alt = `Pending ${scan.source} capture`;
-  const pendingImage = await invoke<PendingScanImage>('pending_scan_image', { scanId: scan.id });
-  image.src = imageDataUrl(pendingImage);
+  image.loading = 'lazy';
+  previewScans.set(image, scan);
+  if (previewObserver) previewObserver.observe(image);
+  else void loadPendingPreview(image, scan);
   preview.append(image);
 
   const detail = document.createElement('div');
@@ -234,6 +254,13 @@ async function pendingArticle(scan: PendingScan): Promise<HTMLElement> {
   });
   article.append(preview, detail, remove);
   return article;
+}
+
+async function loadPendingPreview(image: HTMLImageElement, scan: PendingScan): Promise<void> {
+  await previewQueue.run(async () => {
+    const pendingImage = await invoke<PendingScanImage>('pending_scan_image', { scanId: scan.id });
+    if (image.isConnected) image.src = imageDataUrl(pendingImage);
+  });
 }
 
 cameraToggle.addEventListener('click', () => {

@@ -132,7 +132,10 @@ app.use('*', async (c, next) => {
     evt: 'worker.request.complete',
     requestId,
     method: c.req.method,
-    path: new URL(c.req.url).pathname,
+    path: new URL(c.req.url).pathname.replace(
+      /^\/api\/desktop\/art\/uploads\/[^/]+$/u,
+      '/api/desktop/art/uploads/:ticket',
+    ),
     status: c.res.status,
     durationMs: Date.now() - startedAt,
   });

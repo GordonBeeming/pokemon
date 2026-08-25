@@ -125,7 +125,9 @@ export function CatalogueView({
   const [customName, setCustomName] = useState('');
   const [cards, setCards] = useState<CatalogueCardView[]>([]);
   const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
+  const [page, setPage] = useState(0);
+  const [cursorHistory, setCursorHistory] = useState<Array<string | null>>([null]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [detail, setDetail] = useState<CatalogueDetailView | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -135,7 +137,12 @@ export function CatalogueView({
   const detailController = useRef<AbortController | null>(null);
   const detailHeading = useRef<HTMLElement | null>(null);
 
-  async function search(nextOffset: number, params = initialParams): Promise<void> {
+  async function search(
+    cursor: string | null,
+    nextPage: number,
+    params = initialParams,
+    resetHistory = false,
+  ): Promise<void> {
     const generation = ++searchGeneration.current;
     searchController.current?.abort();
     const controller = new AbortController();
@@ -146,13 +153,22 @@ export function CatalogueView({
     if (query.trim()) next.set('q', query.trim());
     else next.delete('q');
     next.set('limit', String(PAGE_SIZE));
-    next.set('offset', String(nextOffset));
+    next.delete('offset');
+    if (cursor) next.set('cursor', cursor);
+    else next.delete('cursor');
     try {
       const result = await api.search(next, controller.signal);
       if (generation !== searchGeneration.current) return;
       setCards(result.cards);
       setTotal(result.total);
-      setOffset(nextOffset);
+      setPage(nextPage);
+      setNextCursor(result.cursor);
+      setCursorHistory((current) => {
+        if (resetHistory) return [null];
+        const updated = current.slice(0, nextPage + 1);
+        updated[nextPage] = cursor;
+        return updated;
+      });
       setDetail(null);
     } catch (error) {
       const message = userMessage(error);
@@ -164,7 +180,7 @@ export function CatalogueView({
 
   useEffect(() => {
     setQuery(initialParams.get('q') ?? '');
-    void search(0, initialParams);
+    void search(null, 0, initialParams, true);
     return () => {
       searchController.current?.abort();
       detailController.current?.abort();
@@ -263,7 +279,7 @@ export function CatalogueView({
         number: 'custom',
       });
       setCustomName('');
-      await search(0, new URLSearchParams());
+      await search(null, 0, new URLSearchParams(), true);
       onNotice({ kind: 'success', message: 'Custom card added.' });
     } catch (error) {
       const message = userMessage(error);
@@ -273,8 +289,8 @@ export function CatalogueView({
     }
   }
 
-  const first = total === 0 ? 0 : offset + 1;
-  const last = Math.min(total, offset + cards.length);
+  const first = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const last = Math.min(total, page * PAGE_SIZE + cards.length);
   return (
     <>
       <header className="page-heading">
@@ -288,7 +304,7 @@ export function CatalogueView({
         role="search"
         onSubmit={(event) => {
           event.preventDefault();
-          void search(0, new URLSearchParams());
+          void search(null, 0, new URLSearchParams(), true);
         }}
       >
         <label>
@@ -324,7 +340,7 @@ export function CatalogueView({
             <span>
               {first} to {last} of {total}
             </span>
-            <span>Page {Math.floor(offset / PAGE_SIZE) + 1}</span>
+            <span>Page {page + 1}</span>
           </div>
           {cards.length === 0 && !loading ? (
             <div className="empty-state">
@@ -357,16 +373,16 @@ export function CatalogueView({
             <button
               className="quiet-button"
               type="button"
-              disabled={offset === 0 || loading}
-              onClick={() => void search(Math.max(0, offset - PAGE_SIZE))}
+              disabled={page === 0 || loading}
+              onClick={() => void search(cursorHistory[page - 1] ?? null, page - 1)}
             >
               Previous 50
             </button>
             <button
               className="quiet-button"
               type="button"
-              disabled={offset + cards.length >= total || loading}
-              onClick={() => void search(offset + PAGE_SIZE)}
+              disabled={!nextCursor || loading}
+              onClick={() => nextCursor && void search(nextCursor, page + 1)}
             >
               Next 50
             </button>

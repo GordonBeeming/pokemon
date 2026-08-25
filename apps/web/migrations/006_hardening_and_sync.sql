@@ -99,6 +99,8 @@ CREATE TABLE backup_restore_chunks (
   PRIMARY KEY (run_id, kind, chunk_index)
 );
 CREATE INDEX idx_backup_restore_chunks_created ON backup_restore_chunks(created_at);
+CREATE INDEX idx_collection_mutations_created ON collection_mutations(created_at);
+CREATE INDEX idx_audit_created ON audit(created_at);
 
 ALTER TABLE binder_versions ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
 ALTER TABLE collection_cards ADD COLUMN last_mutation_id TEXT;
@@ -262,6 +264,66 @@ BEGIN
   UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = OLD.owner_id;
 END;
 
+-- Custom catalogue rows, their source metadata, and their art are part of every
+-- owner's private backup. They have no owner column, so invalidate every owner
+-- whenever that shared custom-card graph changes.
+CREATE TRIGGER custom_catalogue_epoch_after_insert
+AFTER INSERT ON catalogue_cards
+WHEN NEW.is_custom = 1
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+END;
+CREATE TRIGGER custom_catalogue_epoch_after_update
+AFTER UPDATE ON catalogue_cards
+WHEN OLD.is_custom = 1 OR NEW.is_custom = 1
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+END;
+CREATE TRIGGER custom_catalogue_epoch_after_delete
+AFTER DELETE ON catalogue_cards
+WHEN OLD.is_custom = 1
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+END;
+CREATE TRIGGER custom_source_epoch_after_insert
+AFTER INSERT ON card_sources
+WHEN EXISTS (SELECT 1 FROM catalogue_cards WHERE id = NEW.card_id AND is_custom = 1)
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+END;
+CREATE TRIGGER custom_source_epoch_after_update
+AFTER UPDATE ON card_sources
+WHEN EXISTS (SELECT 1 FROM catalogue_cards WHERE id = OLD.card_id AND is_custom = 1)
+  OR EXISTS (SELECT 1 FROM catalogue_cards WHERE id = NEW.card_id AND is_custom = 1)
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+END;
+CREATE TRIGGER custom_source_epoch_after_delete
+AFTER DELETE ON card_sources
+WHEN EXISTS (SELECT 1 FROM catalogue_cards WHERE id = OLD.card_id AND is_custom = 1)
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+END;
+CREATE TRIGGER custom_art_epoch_after_insert
+AFTER INSERT ON art_manifest
+WHEN EXISTS (SELECT 1 FROM catalogue_cards WHERE id = NEW.card_id AND is_custom = 1)
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+END;
+CREATE TRIGGER custom_art_epoch_after_update
+AFTER UPDATE ON art_manifest
+WHEN EXISTS (SELECT 1 FROM catalogue_cards WHERE id = OLD.card_id AND is_custom = 1)
+  OR EXISTS (SELECT 1 FROM catalogue_cards WHERE id = NEW.card_id AND is_custom = 1)
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+END;
+CREATE TRIGGER custom_art_epoch_after_delete
+AFTER DELETE ON art_manifest
+WHEN EXISTS (SELECT 1 FROM catalogue_cards WHERE id = OLD.card_id AND is_custom = 1)
+BEGIN
+  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+END;
+
 ALTER TABLE catalogue_cards ADD COLUMN number_sort INTEGER;
 ALTER TABLE catalogue_stage_cards ADD COLUMN number_sort INTEGER;
 UPDATE catalogue_cards
@@ -316,7 +378,7 @@ END;
 ALTER TABLE price_snapshots ADD COLUMN native_amount_micros INTEGER;
 ALTER TABLE price_snapshots ADD COLUMN amount_aud_micros INTEGER;
 UPDATE price_snapshots
-SET native_amount_micros = CAST(ROUND(native_amount * 1000000) AS INTEGER),
+SET native_amount_micros = MAX(1, CAST(ROUND(native_amount * 1000000) AS INTEGER)),
   amount_aud_micros = CASE
     WHEN amount_aud IS NULL THEN NULL
     ELSE CAST(ROUND(amount_aud * 1000000) AS INTEGER)
@@ -386,6 +448,20 @@ CREATE TABLE price_sync_runs (
 CREATE INDEX idx_price_sync_runs_retention ON price_sync_runs(status, started_at);
 
 ALTER TABLE price_stage_rows RENAME TO price_stage_rows_legacy;
+CREATE TABLE price_stage_row_migration_archive (
+  run_id TEXT NOT NULL,
+  card_id TEXT NOT NULL,
+  source TEXT NOT NULL,
+  native_amount REAL NOT NULL,
+  native_currency TEXT NOT NULL,
+  source_captured_at INTEGER NOT NULL,
+  disposition TEXT NOT NULL CHECK (disposition IN ('migrated', 'deduplicated')),
+  kept_native_amount REAL NOT NULL,
+  archived_at INTEGER NOT NULL,
+  PRIMARY KEY (run_id, card_id, source, native_amount)
+);
+CREATE INDEX idx_price_stage_migration_archive_run
+  ON price_stage_row_migration_archive(run_id, disposition);
 CREATE TABLE price_stage_rows (
   run_id TEXT NOT NULL REFERENCES price_sync_runs(id) ON DELETE CASCADE,
   card_id TEXT NOT NULL REFERENCES catalogue_cards(id),
@@ -403,11 +479,37 @@ SELECT run_id, MIN(source_captured_at), unixepoch(), 'failed', COUNT(*),
   'legacy_stage_requires_resubmission'
 FROM price_stage_rows_legacy
 GROUP BY run_id;
+WITH ranked AS (
+  SELECT legacy.*,
+    FIRST_VALUE(native_amount) OVER observation AS kept_native_amount,
+    ROW_NUMBER() OVER observation AS observation_rank
+  FROM price_stage_rows_legacy legacy
+  WINDOW observation AS (
+    PARTITION BY run_id, card_id, source, source_captured_at
+    ORDER BY native_amount DESC, native_currency COLLATE BINARY, card_id
+  )
+)
+INSERT INTO price_stage_row_migration_archive
+  (run_id, card_id, source, native_amount, native_currency, source_captured_at,
+   disposition, kept_native_amount, archived_at)
+SELECT run_id, card_id, source, native_amount, native_currency, source_captured_at,
+  CASE WHEN observation_rank = 1 THEN 'migrated' ELSE 'deduplicated' END,
+  kept_native_amount, unixepoch()
+FROM ranked;
 INSERT INTO price_stage_rows
   (run_id, card_id, source, native_amount_micros, native_currency, source_captured_at, created_at)
-SELECT run_id, card_id, source, CAST(ROUND(native_amount * 1000000) AS INTEGER),
+SELECT run_id, card_id, source,
+  MAX(1, CAST(ROUND(native_amount * 1000000) AS INTEGER)),
   upper(native_currency), source_captured_at, unixepoch()
-FROM price_stage_rows_legacy;
+FROM (
+  SELECT legacy.*,
+    ROW_NUMBER() OVER (
+      PARTITION BY run_id, card_id, source, source_captured_at
+      ORDER BY native_amount DESC, native_currency COLLATE BINARY, card_id
+    ) AS observation_rank
+  FROM price_stage_rows_legacy legacy
+)
+WHERE observation_rank = 1;
 DROP TABLE price_stage_rows_legacy;
 CREATE INDEX idx_price_stage_retention ON price_stage_rows(created_at);
 
@@ -442,7 +544,7 @@ WITH latest AS (
 INSERT INTO card_current_prices
   (card_id, source, native_amount_micros, native_currency, source_captured_at,
    fx_date, amount_aud_micros, updated_at)
-SELECT card_id, source, native_amount_micros, native_currency, source_captured_at,
+SELECT card_id, source, native_amount_micros, upper(native_currency), source_captured_at,
   fx_date, amount_aud_micros, unixepoch()
 FROM ranked WHERE card_rank = 1;
 

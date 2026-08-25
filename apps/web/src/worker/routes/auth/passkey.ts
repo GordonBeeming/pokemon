@@ -31,6 +31,7 @@ import {
 } from '../../lib/guards';
 import type { RateLimitResult } from '../../lib/guards';
 import { describeError, logWarn } from '../../lib/log';
+import { boundedJson, MAX_AUTH_JSON_BYTES } from '../../lib/request';
 import type {
   AuthVars,
   AuthenticationResponseShape,
@@ -154,7 +155,9 @@ passkeyRoutes.post('/register/options', requireEnrolAuth, async (c) => {
   return c.json(options);
 });
 passkeyRoutes.post('/register/verify', requireEnrolAuth, async (c) => {
-  const parsed = registrationBody.safeParse(await c.req.json().catch(() => null));
+  const parsed = registrationBody.safeParse(
+    c.get('requestBody') ?? (await boundedJson(c.req.raw, MAX_AUTH_JSON_BYTES)),
+  );
   if (!parsed.success || !registrationResponse(parsed.data.response))
     return c.json({ ok: false, error: 'invalid_body' }, 400);
   const owner = await getOrCreateOwner(c.env.DB, c.env.OWNER_LABEL);
@@ -216,7 +219,7 @@ passkeyRoutes.post('/auth/options', async (c) => {
   return c.json(options);
 });
 passkeyRoutes.post('/auth/verify', async (c) => {
-  const parsed = authenticationBody.safeParse(await c.req.json().catch(() => null));
+  const parsed = authenticationBody.safeParse(await boundedJson(c.req.raw, MAX_AUTH_JSON_BYTES));
   if (!parsed.success || !authenticationResponse(parsed.data.response))
     return c.json({ ok: false, error: 'invalid_body' }, 400);
   const response = parsed.data.response;
@@ -264,7 +267,7 @@ passkeyRoutes.post('/auth/verify', async (c) => {
 });
 passkeyRoutes.patch('/:id', requireSession, async (c) => {
   const session = c.get('session');
-  const parsed = renameBody.safeParse(await c.req.json().catch(() => null));
+  const parsed = renameBody.safeParse(await boundedJson(c.req.raw, MAX_AUTH_JSON_BYTES));
   if (!session) return c.json({ ok: false, error: 'unauthorized' }, 401);
   if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
   if (!(await renamePasskey(c.env.DB, c.req.param('id'), session.sub, parsed.data.name)))

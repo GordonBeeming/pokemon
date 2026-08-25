@@ -2,6 +2,7 @@ import type { Context } from 'hono';
 import { BinderDomainError, type BinderErrorCode } from '../../lib/binders';
 import { CollectionDomainError, type CollectionErrorCode } from '../../lib/collection';
 import { ApplicationError, describeError, logError } from '../../lib/log';
+import { boundedJson } from '../../lib/request';
 import type { AuthVars } from '../../lib/types';
 
 type PublicStatus = 400 | 401 | 403 | 404 | 409 | 413 | 416 | 429 | 500 | 503;
@@ -67,9 +68,5 @@ export function apiFailure(
 }
 
 export async function parsedJson(request: Request): Promise<unknown> {
-  try {
-    return await request.json();
-  } catch {
-    throw new ApplicationError('invalid_json', 400);
-  }
+  return boundedJson(request);
 }

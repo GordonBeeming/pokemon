@@ -13,12 +13,18 @@ use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::LazyLock;
-use std::sync::{Arc, Mutex as StdMutex, Weak};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{Mutex as AsyncMutex, OnceCell, OwnedMutexGuard, RwLock};
+use tokio::sync::{OnceCell, RwLock};
 use url::Url;
+
+mod index;
+mod locking;
+use self::index::{load_source_index, IndexedCard, IndexedVariant, SourceIndex};
+use self::locking::acquire_sync_lock;
+#[cfg(test)]
+use self::locking::SYNC_LOCK_DATABASE;
 
 #[async_trait]
 pub trait ArtRemote: Send + Sync {
@@ -73,11 +79,10 @@ type LanguageCardMap = Arc<HashMap<String, Option<Url>>>;
 
 const INDEX_CHECKPOINT_CARDS: usize = 250;
 const SOURCE_CARD_CONCURRENCY: usize = 4;
+const SOURCE_DISCOVERY_PAGE_CARDS: usize = 500;
 const MAX_ART_BYTES: u64 = 15 * 1024 * 1024;
 const TCGDEX_RETRY_ATTEMPTS: u32 = 4;
 const TCGDEX_RETRY_AFTER_CAP: Duration = Duration::from_secs(10);
-static SYNC_LOCKS: LazyLock<StdMutex<HashMap<PathBuf, Weak<AsyncMutex<()>>>>> =
-    LazyLock::new(|| StdMutex::new(HashMap::new()));
 
 fn is_transient_status(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::TOO_MANY_REQUESTS
@@ -120,34 +125,6 @@ where
         biased;
         () = wait_for_cancellation(cancellation) => Err(DesktopError::Cancelled),
         result = future => result,
-    }
-}
-
-fn sync_lock(root: &Path) -> Arc<AsyncMutex<()>> {
-    let mut locks = SYNC_LOCKS
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    locks.retain(|_, lock| lock.strong_count() > 0);
-    if let Some(lock) = locks.get(root).and_then(Weak::upgrade) {
-        return lock;
-    }
-    let lock = Arc::new(AsyncMutex::new(()));
-    locks.insert(root.to_path_buf(), Arc::downgrade(&lock));
-    lock
-}
-
-async fn acquire_sync_lock(
-    root: &Path,
-    cancellation: Option<&Arc<AtomicBool>>,
-) -> Result<OwnedMutexGuard<()>> {
-    let lock = sync_lock(root);
-    let Some(cancellation) = cancellation else {
-        return Ok(lock.lock_owned().await);
-    };
-    tokio::select! {
-        biased;
-        () = wait_for_cancellation(cancellation) => Err(DesktopError::Cancelled),
-        guard = lock.lock_owned() => Ok(guard),
     }
 }
 
@@ -523,9 +500,9 @@ impl ArtSyncEngine {
 
     pub async fn synchronize(&self) -> Result<SyncReport> {
         validate_library_path(&self.root)?;
+        tokio::fs::create_dir_all(&self.root).await?;
         let _sync_guard = acquire_sync_lock(&self.root, self.cancellation.as_ref()).await?;
         self.check_cancelled()?;
-        tokio::fs::create_dir_all(&self.root).await?;
         self.write_status("running", None, None)?;
         let result = if let Some(source) = self.source.as_ref() {
             self.synchronize_sources(source).await
@@ -606,94 +583,150 @@ impl ArtSyncEngine {
         let legacy_index_path = self.root.join("source-index.json");
         let mut index = load_source_index(&index_path, &legacy_index_path)?;
         index.clear_remote_manifest()?;
+        index.clear_source_queue()?;
         let mut report = SyncReport::default();
-        let mut manifest_cursor: Option<String> = None;
+        let (manifest_entries, source_cards) = tokio::try_join!(
+            self.discover_remote_manifest(&mut index),
+            self.discover_source_queue(&index_path),
+        )?;
+        report.manifest_entries = manifest_entries;
+        report.source_cards = source_cards;
+        let mut after_sequence = None;
+        let mut cards_since_checkpoint = 0_usize;
+        loop {
+            self.check_cancelled()?;
+            let queued = index.source_queue_page(after_sequence, SOURCE_DISCOVERY_PAGE_CARDS)?;
+            if queued.is_empty() {
+                break;
+            }
+            after_sequence = queued.last().map(|(sequence, _entry)| *sequence);
+            let entries = queued.into_iter().map(|(_sequence, entry)| entry).collect();
+            let page_report = self
+                .synchronize_source_page(source, &mut index, entries)
+                .await?;
+            report.downloaded += page_report.downloaded;
+            report.resumed += page_report.resumed;
+            report.skipped += page_report.skipped;
+            report.bytes_written += page_report.bytes_written;
+            report.uploaded += page_report.uploaded;
+            report.missing_images += page_report.missing_images;
+            cards_since_checkpoint += page_report.source_cards as usize;
+            if cards_since_checkpoint >= INDEX_CHECKPOINT_CARDS {
+                index.checkpoint()?;
+                cards_since_checkpoint = 0;
+            }
+        }
+        index.checkpoint()?;
+        Ok(report)
+    }
+
+    async fn discover_remote_manifest(&self, index: &mut SourceIndex) -> Result<u64> {
+        let mut cursor: Option<String> = None;
+        let mut total = 0_u64;
         loop {
             self.check_cancelled()?;
             let page = cancellable(
                 self.cancellation.as_ref(),
-                self.remote.manifest_page(manifest_cursor.as_deref()),
+                self.remote.manifest_page(cursor.as_deref()),
             )
             .await?;
-            report.manifest_entries += page.entries.len() as u64;
+            total += page.entries.len() as u64;
             index.put_remote_entries(&page.entries)?;
             match page.cursor {
-                Some(next) if manifest_cursor.as_deref() != Some(next.as_str()) => {
-                    manifest_cursor = Some(next)
-                }
+                Some(next) if cursor.as_deref() != Some(next.as_str()) => cursor = Some(next),
                 Some(_) => {
                     return Err(DesktopError::InvalidCloudResponse(
                         "art manifest cursor did not advance".to_string(),
                     ))
                 }
-                None => break,
+                None => return Ok(total),
             }
         }
-        let mut cards_since_checkpoint = 0_usize;
-        let mut source_cursor: Option<String> = None;
+    }
+
+    async fn discover_source_queue(&self, index_path: &Path) -> Result<u64> {
+        let mut index = SourceIndex::open(index_path)?;
+        let mut cursor: Option<String> = None;
+        let mut next_sequence = 1_u64;
+        let mut total = 0_u64;
         loop {
             self.check_cancelled()?;
             let page = cancellable(
                 self.cancellation.as_ref(),
-                self.remote.catalogue_source_page(source_cursor.as_deref()),
+                self.remote.catalogue_source_page(cursor.as_deref()),
             )
             .await?;
-            report.source_cards += page.entries.len() as u64;
-            let mut work = Vec::with_capacity(page.entries.len());
-            for source_entry in page.entries {
-                validate_source_entry(&source_entry)?;
-                let indexed = index.get(&source_entry.card_id)?;
-                let remote_entries = [ArtVariant::High, ArtVariant::Low]
-                    .into_iter()
-                    .map(|variant| index.remote_entry(&source_entry.card_id, variant))
-                    .collect::<Result<Vec<_>>>()?
-                    .into_iter()
-                    .flatten()
-                    .collect();
-                work.push(SourceCardWork {
-                    source_entry,
-                    indexed,
-                    remote_entries,
-                });
+            for entry in &page.entries {
+                validate_source_entry(entry)?;
             }
-            let outcomes = futures_util::stream::iter(work)
-                .map(|work| self.synchronize_source_card(source, work))
-                .buffered(SOURCE_CARD_CONCURRENCY)
-                .collect::<Vec<_>>()
-                .await;
-            for outcome in outcomes {
-                let outcome = outcome?;
-                report.downloaded += outcome.report.downloaded;
-                report.resumed += outcome.report.resumed;
-                report.skipped += outcome.report.skipped;
-                report.bytes_written += outcome.report.bytes_written;
-                report.uploaded += outcome.report.uploaded;
-                report.missing_images += outcome.report.missing_images;
-                if !outcome.remote_updates.is_empty() {
-                    index.put_remote_entries(&outcome.remote_updates)?;
-                }
-                if let Some((card_id, card)) = outcome.indexed_card {
-                    index.insert(card_id, card)?;
-                }
-                cards_since_checkpoint += 1;
-                if cards_since_checkpoint >= INDEX_CHECKPOINT_CARDS {
-                    index.checkpoint()?;
-                    cards_since_checkpoint = 0;
-                }
-            }
+            next_sequence = index.stage_source_page(next_sequence, &page.entries)?;
+            total += page.entries.len() as u64;
             match page.cursor {
-                Some(next) if source_cursor.as_deref() != Some(next.as_str()) => {
-                    source_cursor = Some(next)
-                }
+                Some(next) if cursor.as_deref() != Some(next.as_str()) => cursor = Some(next),
                 Some(_) => {
                     return Err(DesktopError::InvalidCloudResponse(
                         "catalogue source cursor did not advance".to_string(),
                     ))
                 }
-                None => break,
+                None => return Ok(total),
             }
         }
-        index.checkpoint()?;
+    }
+
+    async fn synchronize_source_page(
+        &self,
+        source: &Arc<dyn CardArtSource>,
+        index: &mut SourceIndex,
+        entries: Vec<CatalogueSourceEntry>,
+    ) -> Result<SyncReport> {
+        for source_entry in &entries {
+            validate_source_entry(source_entry)?;
+        }
+        let source_cards = entries.len() as u64;
+        let work = index.load_page_work(entries)?;
+        let mut groups: Vec<Vec<SourceCardWork>> = Vec::new();
+        let mut group_by_card = HashMap::<String, usize>::new();
+        for item in work {
+            let card_id = item.source_entry.card_id.clone();
+            let group_index = match group_by_card.get(&card_id) {
+                Some(index) => *index,
+                None => {
+                    let index = groups.len();
+                    groups.push(Vec::new());
+                    group_by_card.insert(card_id, index);
+                    index
+                }
+            };
+            groups[group_index].push(item);
+        }
+        let grouped_outcomes = futures_util::stream::iter(groups)
+            .map(|group| async move {
+                let mut outcomes = Vec::with_capacity(group.len());
+                for work in group {
+                    outcomes.push(self.synchronize_source_card(source, work).await?);
+                }
+                Ok::<_, DesktopError>(outcomes)
+            })
+            .buffered(SOURCE_CARD_CONCURRENCY)
+            .collect::<Vec<_>>()
+            .await;
+        let mut outcomes = Vec::new();
+        for group in grouped_outcomes {
+            outcomes.extend(group?);
+        }
+        index.apply_source_outcomes(&outcomes)?;
+        let mut report = SyncReport {
+            source_cards,
+            ..SyncReport::default()
+        };
+        for outcome in outcomes {
+            report.downloaded += outcome.report.downloaded;
+            report.resumed += outcome.report.resumed;
+            report.skipped += outcome.report.skipped;
+            report.bytes_written += outcome.report.bytes_written;
+            report.uploaded += outcome.report.uploaded;
+            report.missing_images += outcome.report.missing_images;
+        }
         Ok(report)
     }
 
@@ -930,6 +963,8 @@ impl ArtSyncEngine {
         path: &Path,
     ) -> Result<UploadOutcome> {
         validate_library_path(&self.root)?;
+        tokio::fs::create_dir_all(&self.root).await?;
+        let _sync_guard = acquire_sync_lock(&self.root, self.cancellation.as_ref()).await?;
         let WebpFileState::Complete { bytes, sha256 } =
             webp_file_state(path, MAX_ART_BYTES).await?
         else {
@@ -1065,195 +1100,6 @@ struct SourceCardOutcome {
 enum EntryOutcome {
     Downloaded { bytes: u64, resumed: bool },
     Skipped,
-}
-
-struct SourceIndex {
-    connection: rusqlite::Connection,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct LegacySourceIndex {
-    cards: BTreeMap<String, IndexedCard>,
-}
-
-impl SourceIndex {
-    fn open(path: &Path) -> Result<Self> {
-        let connection = rusqlite::Connection::open(path)?;
-        connection.execute_batch(
-            r#"PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
-             CREATE TABLE IF NOT EXISTS source_cards (
-               card_id TEXT PRIMARY KEY NOT NULL,
-               provider TEXT NOT NULL,
-               source_id TEXT NOT NULL,
-               language TEXT NOT NULL,
-               source_updated_at INTEGER NOT NULL,
-               source_checksum TEXT NOT NULL,
-               variants_json TEXT NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS remote_manifest (
-               card_id TEXT NOT NULL,
-               variant TEXT NOT NULL,
-               sha256 TEXT NOT NULL,
-               bytes INTEGER NOT NULL,
-               PRIMARY KEY (card_id, variant)
-             );"#,
-        )?;
-        Ok(Self { connection })
-    }
-
-    fn get(&self, card_id: &str) -> Result<Option<IndexedCard>> {
-        let mut statement = self.connection.prepare(
-            r#"SELECT provider, source_id, language, source_updated_at, source_checksum, variants_json
-             FROM source_cards WHERE card_id = ?1"#,
-        )?;
-        let mut rows = statement.query([card_id])?;
-        let Some(row) = rows.next()? else {
-            return Ok(None);
-        };
-        let variants_json: String = row.get(5)?;
-        Ok(Some(IndexedCard {
-            provider: row.get(0)?,
-            source_id: row.get(1)?,
-            language: row.get(2)?,
-            source_updated_at: row.get(3)?,
-            source_checksum: row.get(4)?,
-            variants: serde_json::from_str(&variants_json)?,
-        }))
-    }
-
-    fn insert(&self, card_id: String, card: IndexedCard) -> Result<()> {
-        self.connection.execute(
-            r#"INSERT INTO source_cards
-              (card_id, provider, source_id, language, source_updated_at, source_checksum, variants_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT(card_id) DO UPDATE SET provider = excluded.provider,
-               source_id = excluded.source_id, language = excluded.language,
-               source_updated_at = excluded.source_updated_at,
-               source_checksum = excluded.source_checksum,
-               variants_json = excluded.variants_json"#,
-            rusqlite::params![
-                card_id,
-                card.provider,
-                card.source_id,
-                card.language,
-                card.source_updated_at,
-                card.source_checksum,
-                serde_json::to_string(&card.variants)?,
-            ],
-        )?;
-        Ok(())
-    }
-
-    fn checkpoint(&self) -> Result<()> {
-        self.connection
-            .execute_batch("PRAGMA wal_checkpoint(PASSIVE);")?;
-        Ok(())
-    }
-
-    fn clear_remote_manifest(&self) -> Result<()> {
-        self.connection.execute("DELETE FROM remote_manifest", [])?;
-        Ok(())
-    }
-
-    fn put_remote_entries(&mut self, entries: &[ArtManifestEntry]) -> Result<()> {
-        let transaction = self.connection.transaction()?;
-        {
-            let mut statement = transaction.prepare(
-                r#"INSERT INTO remote_manifest (card_id, variant, sha256, bytes)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT(card_id, variant) DO UPDATE SET
-                   sha256 = excluded.sha256, bytes = excluded.bytes"#,
-            )?;
-            for entry in entries {
-                statement.execute(rusqlite::params![
-                    entry.card_id,
-                    entry.variant.as_str(),
-                    entry.sha256,
-                    entry.bytes,
-                ])?;
-            }
-        }
-        transaction.commit()?;
-        Ok(())
-    }
-
-    fn remote_entry(&self, card_id: &str, variant: ArtVariant) -> Result<Option<ArtManifestEntry>> {
-        let mut statement = self.connection.prepare(
-            r#"SELECT sha256, bytes FROM remote_manifest WHERE card_id = ?1 AND variant = ?2"#,
-        )?;
-        let mut rows = statement.query(rusqlite::params![card_id, variant.as_str()])?;
-        let Some(row) = rows.next()? else {
-            return Ok(None);
-        };
-        Ok(Some(ArtManifestEntry {
-            card_id: card_id.to_string(),
-            variant,
-            sha256: row.get(0)?,
-            bytes: row.get(1)?,
-        }))
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct IndexedCard {
-    provider: String,
-    source_id: String,
-    language: String,
-    source_updated_at: u64,
-    source_checksum: String,
-    variants: BTreeMap<String, IndexedVariant>,
-}
-
-impl IndexedCard {
-    fn matches_source(&self, source: &CatalogueSourceEntry) -> bool {
-        self.provider == source.provider
-            && self.source_id == source.source_id
-            && self.language == source.language
-            && self.source_updated_at == source.source_updated_at
-            && self.source_checksum == source.source_checksum
-    }
-
-    fn entry(&self, card_id: &str, variant: ArtVariant) -> Option<ArtManifestEntry> {
-        self.variants
-            .get(variant.as_str())
-            .map(|indexed| ArtManifestEntry {
-                card_id: card_id.to_string(),
-                variant,
-                sha256: indexed.sha256.clone(),
-                bytes: indexed.bytes,
-            })
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct IndexedVariant {
-    sha256: String,
-    bytes: u64,
-}
-
-impl From<&ArtManifestEntry> for IndexedVariant {
-    fn from(entry: &ArtManifestEntry) -> Self {
-        Self {
-            sha256: entry.sha256.clone(),
-            bytes: entry.bytes,
-        }
-    }
-}
-
-fn load_source_index(path: &Path, legacy_path: &Path) -> Result<SourceIndex> {
-    let needs_migration = !path.exists() && legacy_path.exists();
-    let index = SourceIndex::open(path)?;
-    if needs_migration {
-        let legacy: LegacySourceIndex = serde_json::from_slice(&std::fs::read(legacy_path)?)?;
-        for (card_id, card) in legacy.cards {
-            index.insert(card_id, card)?;
-        }
-        std::fs::rename(legacy_path, legacy_path.with_extension("json.migrated"))?;
-    }
-    Ok(index)
 }
 
 fn validate_source_entry(source: &CatalogueSourceEntry) -> Result<()> {
@@ -1460,771 +1306,4 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::extract::Path as AxumPath;
-    use axum::extract::State;
-    use axum::routing::get;
-    use axum::{Json, Router};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex as StdMutex;
-    use tempfile::tempdir;
-    use tokio::sync::Notify;
-
-    struct MockRemote {
-        payload: Vec<u8>,
-        entry: ArtManifestEntry,
-        fail_first: StdMutex<bool>,
-        starts: StdMutex<Vec<u64>>,
-        tickets: StdMutex<u32>,
-        uploads: StdMutex<u32>,
-    }
-
-    #[async_trait]
-    impl ArtRemote for MockRemote {
-        async fn manifest_page(&self, _cursor: Option<&str>) -> Result<ArtManifestPage> {
-            Ok(ArtManifestPage {
-                entries: vec![self.entry.clone()],
-                cursor: None,
-            })
-        }
-
-        async fn catalogue_source_page(
-            &self,
-            _cursor: Option<&str>,
-        ) -> Result<CatalogueSourcePage> {
-            Ok(CatalogueSourcePage {
-                entries: Vec::new(),
-                cursor: None,
-            })
-        }
-
-        async fn download_to(
-            &self,
-            _entry: &ArtManifestEntry,
-            start: u64,
-            destination: &Path,
-        ) -> Result<DownloadMode> {
-            self.starts.lock().expect("starts").push(start);
-            let mut options = std::fs::OpenOptions::new();
-            options.create(true).write(true);
-            if start > 0 {
-                options.append(true);
-            } else {
-                options.truncate(true);
-            }
-            use std::io::Write;
-            let mut file = options.open(destination)?;
-            if *self.fail_first.lock().expect("fail flag") {
-                *self.fail_first.lock().expect("fail flag") = false;
-                file.write_all(&self.payload[..self.payload.len() / 2])?;
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionReset,
-                    "interrupted",
-                )
-                .into());
-            }
-            file.write_all(&self.payload[start as usize..])?;
-            Ok(if start > 0 {
-                DownloadMode::Resumed
-            } else {
-                DownloadMode::Restarted
-            })
-        }
-
-        async fn issue_upload_ticket(&self, _entry: &ArtManifestEntry) -> Result<UploadTicket> {
-            *self.tickets.lock().expect("tickets") += 1;
-            Ok(UploadTicket {
-                token: "ticket".to_string(),
-                upload_path: "/upload".to_string(),
-            })
-        }
-
-        async fn upload(&self, _ticket: &UploadTicket, _path: &Path, _bytes: u64) -> Result<()> {
-            *self.uploads.lock().expect("uploads") += 1;
-            Ok(())
-        }
-    }
-
-    fn webp() -> Vec<u8> {
-        b"RIFF\x10\x00\x00\x00WEBPtest-payload".to_vec()
-    }
-
-    fn remote(payload: Vec<u8>, hash: Option<String>, fail_first: bool) -> Arc<MockRemote> {
-        let entry = ArtManifestEntry {
-            card_id: "card/../safe".to_string(),
-            variant: ArtVariant::High,
-            sha256: hash.unwrap_or_else(|| sha256_bytes(&payload)),
-            bytes: payload.len() as u64,
-        };
-        Arc::new(MockRemote {
-            payload,
-            entry,
-            fail_first: StdMutex::new(fail_first),
-            starts: StdMutex::new(Vec::new()),
-            tickets: StdMutex::new(0),
-            uploads: StdMutex::new(0),
-        })
-    }
-
-    struct SourceSyncRemote {
-        manifest: StdMutex<Vec<ArtManifestEntry>>,
-        sources: Vec<CatalogueSourceEntry>,
-        pending: StdMutex<BTreeMap<String, ArtManifestEntry>>,
-        uploads: StdMutex<u32>,
-    }
-
-    #[async_trait]
-    impl ArtRemote for SourceSyncRemote {
-        async fn manifest_page(&self, _cursor: Option<&str>) -> Result<ArtManifestPage> {
-            Ok(ArtManifestPage {
-                entries: self.manifest.lock().expect("manifest").clone(),
-                cursor: None,
-            })
-        }
-
-        async fn catalogue_source_page(
-            &self,
-            _cursor: Option<&str>,
-        ) -> Result<CatalogueSourcePage> {
-            Ok(CatalogueSourcePage {
-                entries: self.sources.clone(),
-                cursor: None,
-            })
-        }
-
-        async fn download_to(
-            &self,
-            _entry: &ArtManifestEntry,
-            _start: u64,
-            _destination: &Path,
-        ) -> Result<DownloadMode> {
-            Err(DesktopError::InvalidCloudResponse(
-                "R2 download was not expected".to_string(),
-            ))
-        }
-
-        async fn issue_upload_ticket(&self, entry: &ArtManifestEntry) -> Result<UploadTicket> {
-            let token = manifest_key(&entry.card_id, entry.variant);
-            self.pending
-                .lock()
-                .expect("pending")
-                .insert(token.clone(), entry.clone());
-            Ok(UploadTicket {
-                token,
-                upload_path: "/upload".to_string(),
-            })
-        }
-
-        async fn upload(&self, ticket: &UploadTicket, _path: &Path, _bytes: u64) -> Result<()> {
-            let entry = self
-                .pending
-                .lock()
-                .expect("pending")
-                .remove(&ticket.token)
-                .expect("issued ticket");
-            self.manifest.lock().expect("manifest").push(entry);
-            *self.uploads.lock().expect("uploads") += 1;
-            Ok(())
-        }
-    }
-
-    struct MockCardSource {
-        image_base_calls: AtomicUsize,
-        downloads: AtomicUsize,
-        fail_once: StdMutex<bool>,
-        starts: StdMutex<Vec<u64>>,
-    }
-
-    #[async_trait]
-    impl CardArtSource for MockCardSource {
-        async fn image_base(&self, _source: &CatalogueSourceEntry) -> Result<Option<Url>> {
-            self.image_base_calls.fetch_add(1, Ordering::SeqCst);
-            Ok(Some(
-                Url::parse("https://assets.tcgdex.net/en/base/base1/4").expect("image URL"),
-            ))
-        }
-
-        async fn download_to(
-            &self,
-            _image_base: &Url,
-            variant: ArtVariant,
-            start: u64,
-            destination: &Path,
-        ) -> Result<SourceDownload> {
-            self.downloads.fetch_add(1, Ordering::SeqCst);
-            self.starts.lock().expect("source starts").push(start);
-            let payload = match variant {
-                ArtVariant::High => b"RIFF\x08\x00\x00\x00WEBPhigh".as_slice(),
-                ArtVariant::Low => b"RIFF\x07\x00\x00\x00WEBPlow".as_slice(),
-            };
-            let mut options = std::fs::OpenOptions::new();
-            options.create(true).write(true);
-            if start > 0 {
-                options.append(true);
-            } else {
-                options.truncate(true);
-            }
-            use std::io::Write;
-            let mut file = options.open(destination)?;
-            let should_fail = {
-                let mut fail_once = self.fail_once.lock().expect("source failure");
-                let should_fail = *fail_once;
-                *fail_once = false;
-                should_fail
-            };
-            if should_fail {
-                file.write_all(&payload[..payload.len() / 2])?;
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::ConnectionReset,
-                    "source interrupted",
-                )
-                .into());
-            }
-            file.write_all(&payload[start as usize..])?;
-            Ok(SourceDownload {
-                mode: if start > 0 {
-                    DownloadMode::Resumed
-                } else {
-                    DownloadMode::Restarted
-                },
-                sha256: sha256_file(destination).await?,
-                bytes: std::fs::metadata(destination)?.len(),
-            })
-        }
-    }
-
-    fn source_entry(card_id: &str, source_id: &str) -> CatalogueSourceEntry {
-        CatalogueSourceEntry {
-            card_id: card_id.to_string(),
-            provider: "tcgdex".to_string(),
-            source_id: source_id.to_string(),
-            language: "en".to_string(),
-            source_updated_at: 1_787_568_000,
-            source_checksum: "a".repeat(64),
-        }
-    }
-
-    #[tokio::test]
-    async fn interrupted_download_resumes_from_the_partial_file() {
-        let root = tempdir().expect("temp dir");
-        let remote = remote(webp(), None, true);
-        let engine = ArtSyncEngine::new(root.path().join("art"), remote.clone());
-
-        engine
-            .synchronize()
-            .await
-            .expect_err("first run interrupted");
-        let report = engine.synchronize().await.expect("resumed sync");
-
-        assert_eq!(report.downloaded, 1);
-        assert_eq!(report.resumed, 1);
-        let starts = remote.starts.lock().expect("starts").clone();
-        assert_eq!(starts[0], 0);
-        assert!(starts[1] > 0);
-    }
-
-    #[tokio::test]
-    async fn completed_partial_is_promoted_without_an_invalid_range_request() {
-        let root = tempdir().expect("temp dir");
-        let payload = webp();
-        let remote = remote(payload.clone(), None, false);
-        let engine = ArtSyncEngine::new(root.path().join("art"), remote.clone());
-        let destination = local_art_path(&engine.root, &remote.entry);
-        tokio::fs::create_dir_all(destination.parent().expect("parent"))
-            .await
-            .expect("parent directory");
-        tokio::fs::write(destination.with_extension("webp.part"), payload)
-            .await
-            .expect("complete partial");
-
-        let report = engine.synchronize().await.expect("promoted partial");
-
-        assert_eq!(report.resumed, 1);
-        assert!(remote.starts.lock().expect("starts").is_empty());
-        assert!(destination.is_file());
-    }
-
-    #[tokio::test]
-    async fn checksum_mismatch_removes_the_untrusted_partial_file() {
-        let root = tempdir().expect("temp dir");
-        let remote = remote(webp(), Some("0".repeat(64)), false);
-        let engine = ArtSyncEngine::new(root.path().join("art"), remote.clone());
-        let error = engine.synchronize().await.expect_err("hash mismatch");
-
-        assert!(matches!(error, DesktopError::ChecksumMismatch { .. }));
-        let destination = local_art_path(&root.path().join("art"), &remote.entry);
-        assert!(!destination.with_extension("webp.part").exists());
-    }
-
-    #[tokio::test]
-    async fn matching_remote_hash_skips_duplicate_upload() {
-        let root = tempdir().expect("temp dir");
-        let payload = webp();
-        let remote = remote(payload.clone(), None, false);
-        let local = root.path().join("card.webp");
-        tokio::fs::write(&local, &payload).await.expect("local art");
-        let engine = ArtSyncEngine::new(root.path().join("art"), remote.clone());
-
-        let outcome = engine
-            .upload_local(&remote.entry.card_id, remote.entry.variant, &local)
-            .await
-            .expect("upload comparison");
-
-        assert_eq!(outcome, UploadOutcome::AlreadyPresent);
-        assert_eq!(*remote.tickets.lock().expect("tickets"), 0);
-        assert_eq!(*remote.uploads.lock().expect("uploads"), 0);
-    }
-
-    #[tokio::test]
-    async fn repository_library_syncs_through_filesystem_only() {
-        let root = tempdir().expect("temp dir");
-        std::fs::create_dir(root.path().join(".git")).expect("git marker");
-        let remote = remote(webp(), None, false);
-        let engine = ArtSyncEngine::new(root.path().join("images"), remote.clone());
-
-        let report = engine.synchronize().await.expect("repository path sync");
-
-        assert_eq!(report.downloaded, 1);
-        assert_eq!(remote.starts.lock().expect("starts").as_slice(), &[0]);
-        assert_eq!(*remote.tickets.lock().expect("tickets"), 0);
-        assert_eq!(*remote.uploads.lock().expect("uploads"), 0);
-    }
-
-    #[tokio::test]
-    async fn empty_r2_is_populated_then_the_incremental_sync_is_a_no_op() {
-        let root = tempdir().expect("temp dir");
-        let remote = Arc::new(SourceSyncRemote {
-            manifest: StdMutex::new(Vec::new()),
-            sources: vec![source_entry("card-1", "base1-4")],
-            pending: StdMutex::new(BTreeMap::new()),
-            uploads: StdMutex::new(0),
-        });
-        let source = Arc::new(MockCardSource {
-            image_base_calls: AtomicUsize::new(0),
-            downloads: AtomicUsize::new(0),
-            fail_once: StdMutex::new(false),
-            starts: StdMutex::new(Vec::new()),
-        });
-        let engine =
-            ArtSyncEngine::with_source(root.path().join("art"), remote.clone(), source.clone());
-
-        let first = engine.synchronize().await.expect("first source sync");
-        let second = engine.synchronize().await.expect("incremental source sync");
-
-        assert_eq!(first.source_cards, 1);
-        assert_eq!(first.downloaded, 2);
-        assert_eq!(first.uploaded, 2);
-        assert_eq!(second.uploaded, 0);
-        assert_eq!(second.downloaded, 0);
-        assert_eq!(second.skipped, 2);
-        assert_eq!(source.image_base_calls.load(Ordering::SeqCst), 1);
-        assert_eq!(source.downloads.load(Ordering::SeqCst), 2);
-        assert_eq!(*remote.uploads.lock().expect("uploads"), 2);
-    }
-
-    #[tokio::test]
-    async fn interrupted_tcgdex_download_resumes_before_upload() {
-        let root = tempdir().expect("temp dir");
-        let remote = Arc::new(SourceSyncRemote {
-            manifest: StdMutex::new(Vec::new()),
-            sources: vec![source_entry("card-1", "base1-4")],
-            pending: StdMutex::new(BTreeMap::new()),
-            uploads: StdMutex::new(0),
-        });
-        let source = Arc::new(MockCardSource {
-            image_base_calls: AtomicUsize::new(0),
-            downloads: AtomicUsize::new(0),
-            fail_once: StdMutex::new(true),
-            starts: StdMutex::new(Vec::new()),
-        });
-        let engine =
-            ArtSyncEngine::with_source(root.path().join("art"), remote.clone(), source.clone());
-
-        engine
-            .synchronize()
-            .await
-            .expect_err("interrupted source download");
-        let report = engine.synchronize().await.expect("resumed source sync");
-
-        assert!((1..=2).contains(&report.resumed));
-        let starts = source.starts.lock().expect("source starts");
-        assert_eq!(starts[0], 0);
-        assert!(starts.iter().skip(1).any(|start| *start > 0));
-        assert_eq!(*remote.uploads.lock().expect("uploads"), 2);
-    }
-
-    #[tokio::test]
-    async fn completed_source_partial_is_promoted_without_an_eof_request() {
-        let root = tempdir().expect("temp dir");
-        let remote = Arc::new(SourceSyncRemote {
-            manifest: StdMutex::new(Vec::new()),
-            sources: vec![source_entry("card-1", "base1-4")],
-            pending: StdMutex::new(BTreeMap::new()),
-            uploads: StdMutex::new(0),
-        });
-        let source = Arc::new(MockCardSource {
-            image_base_calls: AtomicUsize::new(0),
-            downloads: AtomicUsize::new(0),
-            fail_once: StdMutex::new(false),
-            starts: StdMutex::new(Vec::new()),
-        });
-        let engine = ArtSyncEngine::with_source(root.path().join("art"), remote, source.clone());
-        let placeholder = ArtManifestEntry {
-            card_id: "card-1".to_string(),
-            variant: ArtVariant::High,
-            sha256: "0".repeat(64),
-            bytes: 1,
-        };
-        let destination = local_art_path(&engine.root, &placeholder);
-        tokio::fs::create_dir_all(destination.parent().expect("parent"))
-            .await
-            .expect("parent directory");
-        let part = destination.with_extension("webp.source.part");
-        tokio::fs::write(&part, b"RIFF\x08\x00\x00\x00WEBPhigh")
-            .await
-            .expect("completed source partial");
-        tokio::fs::write(
-            part.with_extension("meta.json"),
-            serde_json::to_vec(&SourcePartialIdentity {
-                source_checksum: "a".repeat(64),
-                source_updated_at: 1_787_568_000,
-            })
-            .expect("identity"),
-        )
-        .await
-        .expect("source identity");
-
-        let report = engine.synchronize().await.expect("source sync");
-
-        assert_eq!(report.resumed, 1);
-        assert_eq!(source.downloads.load(Ordering::SeqCst), 1);
-        assert!(destination.is_file());
-        assert!(!part.exists());
-    }
-
-    struct OversizedCardSource;
-
-    #[async_trait]
-    impl CardArtSource for OversizedCardSource {
-        async fn image_base(&self, _source: &CatalogueSourceEntry) -> Result<Option<Url>> {
-            Ok(Some(
-                Url::parse("https://assets.tcgdex.net/en/base/base1/4").expect("image URL"),
-            ))
-        }
-
-        async fn download_to(
-            &self,
-            _image_base: &Url,
-            _variant: ArtVariant,
-            _start: u64,
-            destination: &Path,
-        ) -> Result<SourceDownload> {
-            let file = tokio::fs::File::create(destination).await?;
-            file.set_len(MAX_ART_BYTES + 1).await?;
-            Err(DesktopError::InvalidImage("oversized source".to_string()))
-        }
-    }
-
-    #[tokio::test]
-    async fn oversized_source_failure_removes_partial_and_identity() {
-        let root = tempdir().expect("temp dir");
-        let remote = Arc::new(SourceSyncRemote {
-            manifest: StdMutex::new(Vec::new()),
-            sources: vec![source_entry("card-1", "base1-4")],
-            pending: StdMutex::new(BTreeMap::new()),
-            uploads: StdMutex::new(0),
-        });
-        let engine = ArtSyncEngine::with_source(
-            root.path().join("art"),
-            remote,
-            Arc::new(OversizedCardSource),
-        );
-
-        engine.synchronize().await.expect_err("oversized source");
-
-        let placeholder = ArtManifestEntry {
-            card_id: "card-1".to_string(),
-            variant: ArtVariant::High,
-            sha256: "0".repeat(64),
-            bytes: 1,
-        };
-        let part = local_art_path(&engine.root, &placeholder).with_extension("webp.source.part");
-        assert!(!part.exists());
-        assert!(!part.with_extension("meta.json").exists());
-    }
-
-    struct BlockingCardSource {
-        started: Arc<Notify>,
-    }
-
-    #[async_trait]
-    impl CardArtSource for BlockingCardSource {
-        async fn image_base(&self, _source: &CatalogueSourceEntry) -> Result<Option<Url>> {
-            self.started.notify_one();
-            std::future::pending().await
-        }
-
-        async fn download_to(
-            &self,
-            _image_base: &Url,
-            _variant: ArtVariant,
-            _start: u64,
-            _destination: &Path,
-        ) -> Result<SourceDownload> {
-            unreachable!("image lookup never completes")
-        }
-    }
-
-    #[tokio::test]
-    async fn cancellation_interrupts_an_active_source_operation() {
-        let root = tempdir().expect("temp dir");
-        let cancellation = Arc::new(AtomicBool::new(false));
-        let started = Arc::new(Notify::new());
-        let remote = Arc::new(SourceSyncRemote {
-            manifest: StdMutex::new(Vec::new()),
-            sources: vec![source_entry("card-1", "base1-4")],
-            pending: StdMutex::new(BTreeMap::new()),
-            uploads: StdMutex::new(0),
-        });
-        let engine = ArtSyncEngine::with_source(
-            root.path().join("art"),
-            remote,
-            Arc::new(BlockingCardSource {
-                started: started.clone(),
-            }),
-        )
-        .with_cancellation(cancellation.clone());
-        let sync = engine.synchronize();
-        tokio::pin!(sync);
-        tokio::select! {
-            () = started.notified() => {}
-            result = &mut sync => panic!("sync completed before cancellation: {result:?}"),
-        }
-        cancellation.store(true, Ordering::Relaxed);
-
-        let error = tokio::time::timeout(Duration::from_secs(1), sync)
-            .await
-            .expect("prompt cancellation")
-            .expect_err("cancelled sync");
-        assert!(matches!(error, DesktopError::Cancelled));
-    }
-
-    struct ConcurrentLookupSource {
-        active: AtomicUsize,
-        maximum: AtomicUsize,
-    }
-
-    #[async_trait]
-    impl CardArtSource for ConcurrentLookupSource {
-        async fn image_base(&self, _source: &CatalogueSourceEntry) -> Result<Option<Url>> {
-            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
-            self.maximum.fetch_max(active, Ordering::SeqCst);
-            tokio::time::sleep(Duration::from_millis(25)).await;
-            self.active.fetch_sub(1, Ordering::SeqCst);
-            Ok(None)
-        }
-
-        async fn download_to(
-            &self,
-            _image_base: &Url,
-            _variant: ArtVariant,
-            _start: u64,
-            _destination: &Path,
-        ) -> Result<SourceDownload> {
-            unreachable!("missing image has no download")
-        }
-    }
-
-    #[tokio::test]
-    async fn source_cards_use_bounded_concurrency() {
-        let root = tempdir().expect("temp dir");
-        let source = Arc::new(ConcurrentLookupSource {
-            active: AtomicUsize::new(0),
-            maximum: AtomicUsize::new(0),
-        });
-        let remote = Arc::new(SourceSyncRemote {
-            manifest: StdMutex::new(Vec::new()),
-            sources: (0..12)
-                .map(|index| source_entry(&format!("card-{index}"), &format!("source-{index}")))
-                .collect(),
-            pending: StdMutex::new(BTreeMap::new()),
-            uploads: StdMutex::new(0),
-        });
-        let engine = ArtSyncEngine::with_source(root.path().join("art"), remote, source.clone());
-
-        let report = engine.synchronize().await.expect("bounded source sync");
-
-        assert_eq!(report.missing_images, 12);
-        assert_eq!(
-            source.maximum.load(Ordering::SeqCst),
-            SOURCE_CARD_CONCURRENCY
-        );
-    }
-
-    #[tokio::test]
-    async fn overlapping_syncs_for_one_root_are_serialized() {
-        let root = tempdir().expect("temp dir");
-        let remote = Arc::new(SourceSyncRemote {
-            manifest: StdMutex::new(Vec::new()),
-            sources: vec![source_entry("card-1", "base1-4")],
-            pending: StdMutex::new(BTreeMap::new()),
-            uploads: StdMutex::new(0),
-        });
-        let source = Arc::new(MockCardSource {
-            image_base_calls: AtomicUsize::new(0),
-            downloads: AtomicUsize::new(0),
-            fail_once: StdMutex::new(false),
-            starts: StdMutex::new(Vec::new()),
-        });
-        let first =
-            ArtSyncEngine::with_source(root.path().join("art"), remote.clone(), source.clone());
-        let second =
-            ArtSyncEngine::with_source(root.path().join("art"), remote.clone(), source.clone());
-
-        let (first_result, second_result) = tokio::join!(first.synchronize(), second.synchronize());
-
-        first_result.expect("first sync");
-        second_result.expect("second sync");
-        assert_eq!(*remote.uploads.lock().expect("uploads"), 2);
-    }
-
-    #[derive(Clone)]
-    struct ListRequestState {
-        requests: Arc<AtomicUsize>,
-    }
-
-    async fn tcgdex_card_list(State(state): State<ListRequestState>) -> Json<serde_json::Value> {
-        state.requests.fetch_add(1, Ordering::SeqCst);
-        Json(serde_json::json!([
-            {
-                "id": "base1-4",
-                "image": "https://assets.tcgdex.net/en/base/base1/4"
-            },
-            {
-                "id": "base1-5",
-                "image": "https://assets.tcgdex.net/en/base/base1/5"
-            }
-        ]))
-    }
-
-    async fn tcgdex_empty_card_list(
-        State(state): State<ListRequestState>,
-    ) -> Json<serde_json::Value> {
-        state.requests.fetch_add(1, Ordering::SeqCst);
-        Json(serde_json::json!([]))
-    }
-
-    async fn tcgdex_card_detail(
-        State(state): State<ListRequestState>,
-        AxumPath(id): AxumPath<String>,
-    ) -> Json<serde_json::Value> {
-        state.requests.fetch_add(1, Ordering::SeqCst);
-        Json(serde_json::json!({
-            "id": id,
-            "image": "https://assets.tcgdex.net/en/base/base1/4"
-        }))
-    }
-
-    #[tokio::test]
-    async fn tcgdex_card_list_is_fetched_once_for_multiple_cards_in_one_language() {
-        let requests = Arc::new(AtomicUsize::new(0));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("listener");
-        let address = listener.local_addr().expect("address");
-        let router = Router::new()
-            .route("/en/cards", get(tcgdex_card_list))
-            .with_state(ListRequestState {
-                requests: requests.clone(),
-            });
-        tokio::spawn(async move {
-            axum::serve(listener, router).await.expect("TCGdex mock");
-        });
-        let source = TcgdexArtSource {
-            http: reqwest::Client::new(),
-            api_base: Url::parse(&format!("http://{address}/")).expect("API base"),
-            language_cards: RwLock::new(HashMap::new()),
-        };
-
-        let first_entry = source_entry("card-1", "base1-4");
-        let second_entry = source_entry("card-2", "base1-5");
-        let (first, second) = tokio::join!(
-            source.image_base(&first_entry),
-            source.image_base(&second_entry)
-        );
-        let first = first.expect("first image");
-        let second = second.expect("second image");
-        for _ in 0..100 {
-            source
-                .image_base(&source_entry("card-1", "base1-4"))
-                .await
-                .expect("cached image");
-        }
-
-        assert!(first.is_some());
-        assert!(second.is_some());
-        assert_eq!(requests.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn detail_fallback_has_no_per_language_omission_cap() {
-        let requests = Arc::new(AtomicUsize::new(0));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("listener");
-        let address = listener.local_addr().expect("address");
-        let router = Router::new()
-            .route("/en/cards", get(tcgdex_empty_card_list))
-            .route("/en/cards/{id}", get(tcgdex_card_detail))
-            .with_state(ListRequestState {
-                requests: requests.clone(),
-            });
-        tokio::spawn(async move {
-            axum::serve(listener, router).await.expect("TCGdex mock");
-        });
-        let source = TcgdexArtSource {
-            http: reqwest::Client::new(),
-            api_base: Url::parse(&format!("http://{address}/")).expect("API base"),
-            language_cards: RwLock::new(HashMap::new()),
-        };
-
-        for index in 0..101 {
-            let image = source
-                .image_base(&source_entry("card", &format!("missing-{index}")))
-                .await
-                .expect("detail fallback");
-            assert!(image.is_some());
-        }
-
-        assert_eq!(requests.load(Ordering::SeqCst), 102);
-    }
-
-    #[test]
-    fn retry_after_is_capped_and_backoff_has_bounded_jitter() {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(reqwest::header::RETRY_AFTER, "999".parse().expect("header"));
-        assert_eq!(retry_delay(0, &headers), TCGDEX_RETRY_AFTER_CAP);
-        let delay = retry_delay(2, &reqwest::header::HeaderMap::new());
-        assert!(delay >= Duration::from_secs(1));
-        assert!(delay < Duration::from_millis(1_500));
-    }
-
-    #[test]
-    fn card_identifier_is_encoded_as_one_path_component() {
-        let entry = ArtManifestEntry {
-            card_id: "../../escape".to_string(),
-            variant: ArtVariant::Low,
-            sha256: "a".repeat(64),
-            bytes: 1,
-        };
-        let path = local_art_path(Path::new("/safe"), &entry);
-        assert!(path.starts_with("/safe/cards"));
-        assert!(!path.to_string_lossy().contains("../"));
-    }
-
-    #[test]
-    fn source_index_checkpoint_is_bounded_for_the_full_corpus() {
-        assert!((100..=500).contains(&INDEX_CHECKPOINT_CARDS));
-    }
-}
+mod tests;

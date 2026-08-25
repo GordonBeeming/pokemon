@@ -128,6 +128,102 @@ describe('migration 006 legacy-data safety', () => {
       row_count: 1,
       error: 'legacy_stage_requires_resubmission',
     });
+    expect(
+      database
+        .prepare(
+          "SELECT native_amount, native_currency, disposition, kept_native_amount FROM price_stage_row_migration_archive WHERE run_id = 'legacy-run'",
+        )
+        .get(),
+    ).toEqual({
+      native_amount: 12,
+      native_currency: 'usd',
+      disposition: 'migrated',
+      kept_native_amount: 12,
+    });
+  });
+
+  it('normalizes every migration-002 currency case and retains positive sub-micro prices', () => {
+    const database = databaseAtMigrationFive();
+    database.exec(`
+      INSERT INTO price_snapshots
+        (id, card_id, source, native_amount, native_currency, source_captured_at, created_at)
+      VALUES ('tiny', 'card-1', 'tcgplayer', 0.0000001, 'u$d', 100, 100);
+      INSERT INTO price_stage_rows
+        (run_id, card_id, source, native_amount, native_currency, source_captured_at)
+      VALUES ('tiny-run', 'card-1', 'tcgplayer', 0.0000001, 'u$d', 100);
+    `);
+
+    applyMigrationSix(database);
+
+    expect(
+      database
+        .prepare(
+          "SELECT native_amount, native_currency, native_amount_micros FROM price_snapshots WHERE id = 'tiny'",
+        )
+        .get(),
+    ).toEqual({ native_amount: 0.0000001, native_currency: 'u$d', native_amount_micros: 1 });
+    expect(
+      database
+        .prepare(
+          "SELECT native_currency, native_amount_micros FROM card_current_prices WHERE card_id = 'card-1'",
+        )
+        .get(),
+    ).toEqual({ native_currency: 'U$D', native_amount_micros: 1 });
+    expect(
+      database
+        .prepare(
+          "SELECT native_amount_micros, native_currency FROM price_stage_rows WHERE run_id = 'tiny-run'",
+        )
+        .get(),
+    ).toEqual({ native_amount_micros: 1, native_currency: 'U$D' });
+    expect(
+      database
+        .prepare(
+          "SELECT native_amount, native_currency FROM price_stage_row_migration_archive WHERE run_id = 'tiny-run'",
+        )
+        .get(),
+    ).toEqual({ native_amount: 0.0000001, native_currency: 'u$d' });
+  });
+
+  it('archives every staged collision and chooses the highest amount deterministically', () => {
+    const database = databaseAtMigrationFive();
+    database.exec(`
+      INSERT INTO price_stage_rows
+        (run_id, card_id, source, native_amount, native_currency, source_captured_at)
+      VALUES
+        ('duplicate-run', 'card-1', 'tcgplayer', 1, 'usd', 100),
+        ('duplicate-run', 'card-1', 'tcgplayer', 2, 'USD', 100);
+    `);
+
+    applyMigrationSix(database);
+
+    expect(
+      database
+        .prepare(
+          "SELECT native_amount_micros, native_currency FROM price_stage_rows WHERE run_id = 'duplicate-run'",
+        )
+        .all(),
+    ).toEqual([{ native_amount_micros: 2_000_000, native_currency: 'USD' }]);
+    expect(
+      database
+        .prepare(
+          "SELECT native_amount, native_currency, disposition, kept_native_amount FROM price_stage_row_migration_archive WHERE run_id = 'duplicate-run' ORDER BY native_amount",
+        )
+        .all(),
+    ).toEqual([
+      {
+        native_amount: 1,
+        native_currency: 'usd',
+        disposition: 'deduplicated',
+        kept_native_amount: 2,
+      },
+      {
+        native_amount: 2,
+        native_currency: 'USD',
+        disposition: 'migrated',
+        kept_native_amount: 2,
+      },
+    ]);
   });
 
   it('chooses one active binder version deterministically and synchronizes the binder pointer', () => {
@@ -176,5 +272,54 @@ describe('migration 006 legacy-data safety', () => {
     expect(database.prepare("SELECT mutation_epoch FROM users WHERE id = 'owner-b'").get()).toEqual(
       { mutation_epoch: 2 },
     );
+  });
+
+  it('invalidates every owner backup when the custom catalogue graph changes', () => {
+    const database = databaseAtMigrationFive();
+    applyMigrationSix(database);
+    const epochs = () => database.prepare('SELECT id, mutation_epoch FROM users ORDER BY id').all();
+
+    database.exec(`
+      INSERT INTO catalogue_cards
+        (id, name, language, category, set_id, set_name, number, is_custom, created_at, updated_at)
+      VALUES ('custom-1', 'Custom', 'en', 'special', 'custom', 'Custom', '1', 1, 1, 1);
+    `);
+    expect(epochs()).toEqual([
+      { id: 'owner-a', mutation_epoch: 1 },
+      { id: 'owner-b', mutation_epoch: 1 },
+    ]);
+
+    database.exec(`
+      INSERT INTO card_sources
+        (provider, source_id, card_id, language, source_updated_at, checksum, imported_at)
+      VALUES ('manual', 'custom-source', 'custom-1', 'en', 1, 'checksum', 1);
+      INSERT INTO art_manifest
+        (card_id, variant, object_key, sha256, bytes, version, updated_at)
+      VALUES ('custom-1', 'high', 'cards/custom-1/high/hash.webp', '${'a'.repeat(64)}', 20, 1, 1);
+    `);
+    expect(epochs()).toEqual([
+      { id: 'owner-a', mutation_epoch: 3 },
+      { id: 'owner-b', mutation_epoch: 3 },
+    ]);
+
+    database.exec(`
+      UPDATE catalogue_cards SET name = 'Custom updated' WHERE id = 'custom-1';
+      UPDATE card_sources SET checksum = 'updated' WHERE source_id = 'custom-source';
+      UPDATE art_manifest SET updated_at = 2 WHERE card_id = 'custom-1';
+    `);
+    expect(epochs()).toEqual([
+      { id: 'owner-a', mutation_epoch: 6 },
+      { id: 'owner-b', mutation_epoch: 6 },
+    ]);
+
+    database.exec(`
+      DELETE FROM art_manifest WHERE card_id = 'custom-1';
+      DELETE FROM card_sources WHERE source_id = 'custom-source';
+      DELETE FROM catalogue_cards WHERE id = 'custom-1';
+    `);
+    expect(epochs()).toEqual([
+      { id: 'owner-a', mutation_epoch: 9 },
+      { id: 'owner-b', mutation_epoch: 9 },
+    ]);
   });
 });

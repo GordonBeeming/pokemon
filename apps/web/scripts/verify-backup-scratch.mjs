@@ -1,4 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
+import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -135,6 +137,47 @@ try {
   const login = await json('/api/auth/dev-login', { method: 'POST' });
   let cookie = login.response.headers.get('set-cookie')?.split(';', 1)[0];
   if (!cookie) throw new Error('development login did not return a session cookie');
+  const pair = await json('/api/desktop/pair', {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ scopes: ['art:read', 'art:write'] }),
+  });
+  const redeemed = await json('/api/desktop/pair/redeem', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code: pair.body.code, label: 'Backup verifier' }),
+  });
+  const webp = Buffer.alloc(20);
+  webp.write('RIFF', 0, 'ascii');
+  webp.writeUInt32LE(12, 4);
+  webp.write('WEBPVP8 ', 8, 'ascii');
+  webp.writeUInt32LE(0, 16);
+  const checksum = createHash('sha256').update(webp).digest('hex');
+  const ticket = await json('/api/desktop/art/upload-tokens', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${redeemed.body.token}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      cardId: 'custom_fixture',
+      variant: 'high',
+      sha256: checksum,
+      maxBytes: webp.byteLength,
+    }),
+  });
+  await json(ticket.body.uploadPath, {
+    method: 'PUT',
+    headers: {
+      authorization: `Bearer ${ticket.body.token}`,
+      'content-type': 'image/webp',
+      'content-length': String(webp.byteLength),
+    },
+    body: webp,
+  });
+  const postArtLogin = await json('/api/auth/dev-login', { method: 'POST' });
+  cookie = postArtLogin.response.headers.get('set-cookie')?.split(';', 1)[0];
+  if (!cookie) throw new Error('post-art login did not return a session cookie');
   const firstCataloguePage = await json('/api/catalogue/search?limit=100&offset=0', {
     headers: { cookie },
   });
@@ -158,7 +201,7 @@ try {
       fetch(`${base}/api/backups`, { method: 'POST', headers: { cookie } }),
     ),
   );
-  const createdBackups = backupResponses.filter((response) => response.status === 201);
+  const createdBackups = backupResponses.filter((response) => response.status === 202);
   const limitedBackups = backupResponses.filter((response) => response.status === 429);
   if (createdBackups.length !== 1 || limitedBackups.length !== 4)
     throw new Error(
@@ -167,13 +210,31 @@ try {
   if (limitedBackups.some((response) => !response.headers.has('retry-after')))
     throw new Error('rate-limited backup response omitted Retry-After');
   const backup = await createdBackups[0].json();
-  const backupId = backup.id;
+  if (typeof backup.workflowId !== 'string')
+    throw new Error('backup response did not contain a workflow id');
+  let backupId;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const status = await fetch(
+      `${base}/api/backups/workflows/${encodeURIComponent(backup.workflowId)}`,
+      { headers: { cookie } },
+    );
+    const body = await status.json();
+    if (status.status === 200) {
+      backupId = body.id;
+      break;
+    }
+    if (status.status !== 202)
+      throw new Error(`backup workflow failed (${status.status}): ${JSON.stringify(body)}`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   if (typeof backupId !== 'string') throw new Error('backup response did not contain an id');
 
   await d1(
     `DELETE FROM collection_mutations WHERE owner_id='owner';
      DELETE FROM collection_cards WHERE owner_id='owner';
      DELETE FROM binders WHERE owner_id='owner';
+     DELETE FROM art_upload_tokens WHERE card_id='custom_fixture';
+     DELETE FROM art_manifest WHERE card_id='custom_fixture';
      DELETE FROM catalogue_cards WHERE is_custom=1;`,
   );
   const restoreLogin = await json('/api/auth/dev-login', { method: 'POST' });
@@ -203,6 +264,15 @@ try {
   const revokedSession = await fetch(`${base}/api/auth/me`, { headers: { cookie } });
   if (revokedSession.status !== 401)
     throw new Error(`restore did not revoke the previous session: ${revokedSession.status}`);
+  const artLogin = await json('/api/auth/dev-login', { method: 'POST' });
+  const artCookie = artLogin.response.headers.get('set-cookie')?.split(';', 1)[0];
+  if (!artCookie) throw new Error('art verification login did not return a session cookie');
+  const restoredArt = await fetch(`${base}/api/art/custom_fixture/high`, {
+    headers: { cookie: artCookie },
+  });
+  const restoredBytes = Buffer.from(await restoredArt.arrayBuffer());
+  if (!restoredArt.ok || !restoredBytes.equals(webp))
+    throw new Error(`custom art did not survive backup restore: ${restoredArt.status}`);
   process.stdout.write('real D1/R2 backup round-trip passed\n');
 } finally {
   worker?.kill('SIGTERM');

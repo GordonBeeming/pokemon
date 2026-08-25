@@ -12,8 +12,9 @@ import {
   type PriceCandidate,
   type StagedPriceRow,
 } from '../lib/pricing';
-import { describeError, logInfo, logWarn } from '../lib/log';
+import { describeError, logInfo } from '../lib/log';
 import { nowSeconds } from '../lib/db';
+import { recordWorkflowFailure } from '../lib/workflow-failure';
 
 const PRICE_SOURCE_PAGE = 250;
 const OUTBOUND_CONCURRENCY = 5;
@@ -160,11 +161,14 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
     step: WorkflowStep,
   ): Promise<void> {
     const runId = `price_sync_${event.instanceId}`;
-    await step.do('begin-price-run', () => beginPriceSyncRun(this.env.DB, runId));
+    const startedAt = Date.now();
+    let currentStep = 'begin-price-run';
     try {
+      await step.do('begin-price-run', () => beginPriceSyncRun(this.env.DB, runId));
       let rows: StagedPriceRow[];
       let cursor: string | null = null;
       if (event.payload.objectKey) {
+        currentStep = 'read-price-object';
         rows = await step.do('read-price-object', async () => {
           const object = await this.env.ART.get(event.payload.objectKey ?? '');
           if (!object) throw new Error('price_stage_missing');
@@ -174,8 +178,10 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
           return parsed.data;
         });
       } else {
+        currentStep = 'select-price-sources';
         const page = await step.do('select-price-sources', () => sourcePage(this.env.DB));
         cursor = page.cursor;
+        currentStep = 'fetch-price-sources';
         const prices = await step.do('fetch-price-sources', () =>
           mapConcurrent(page.ids, async (sourceId) =>
             extractTcgdexPrices(
@@ -183,10 +189,12 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
             ),
           ),
         );
+        currentStep = 'map-price-sources';
         rows = await step.do('map-price-sources', () => cardRowsForSources(this.env.DB, prices));
       }
 
       if (rows.length === 0) {
+        currentStep = 'complete-empty-price-run';
         await step.do('complete-empty-price-run', async () => {
           await this.env.DB.prepare(
             `UPDATE price_sync_runs SET completed_at = ?1, status = 'complete', row_count = 0
@@ -202,19 +210,25 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
 
       const fxDate =
         event.payload.fxDate ??
-        (await step.do('refresh-price-fx', () =>
-          ensureFxRates(
-            this.env.DB,
-            rows.map((row) => row.nativeCurrency),
-          ),
-        ));
+        (await (async () => {
+          currentStep = 'refresh-price-fx';
+          return step.do('refresh-price-fx', () =>
+            ensureFxRates(
+              this.env.DB,
+              rows.map((row) => row.nativeCurrency),
+            ),
+          );
+        })());
+      currentStep = 'stage-prices';
       await step.do('stage-prices', async () => {
         await stagePrices(this.env.DB, runId, rows);
         return rows.length;
       });
+      currentStep = 'apply-prices';
       const applied = await step.do('apply-prices', () =>
         applyStagedPrices(this.env.DB, runId, fxDate),
       );
+      currentStep = 'cleanup-prices';
       await step.do('cleanup-prices', async () => {
         if (!event.payload.objectKey) await setPriceSyncCursor(this.env.DB, cursor);
         if (event.payload.objectKey?.startsWith('staged/prices/'))
@@ -222,16 +236,36 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
         await prunePricingData(this.env.DB);
         return null;
       });
-      logInfo({ evt: 'workflow.pricing.complete', runId, rows: applied, fxDate, cursor });
+      logInfo({
+        evt: 'workflow.pricing.complete',
+        workflowInstanceId: event.instanceId,
+        runId,
+        rows: applied,
+        fxDate,
+        cursor,
+        durationMs: Date.now() - startedAt,
+      });
     } catch (error) {
       const message = describeError(error);
-      await this.env.DB.prepare(
-        `UPDATE price_sync_runs SET completed_at = ?1, status = 'failed', error = ?2
-         WHERE id = ?3 AND status = 'running'`,
-      )
-        .bind(nowSeconds(), message, runId)
-        .run();
-      logWarn({ evt: 'workflow.pricing.failed', runId, err: message });
+      await recordWorkflowFailure(
+        {
+          evt: 'workflow.pricing.failed',
+          workflowInstanceId: event.instanceId,
+          runId,
+          step: currentStep,
+          durationMs: Date.now() - startedAt,
+          err: message,
+          stack: error instanceof Error ? error.stack : undefined,
+        },
+        async () => {
+          await this.env.DB.prepare(
+            `UPDATE price_sync_runs SET completed_at = ?1, status = 'failed', error = ?2
+           WHERE id = ?3 AND status = 'running'`,
+          )
+            .bind(nowSeconds(), message, runId)
+            .run();
+        },
+      );
       throw error;
     }
   }

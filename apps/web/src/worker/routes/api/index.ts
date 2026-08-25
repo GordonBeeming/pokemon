@@ -14,16 +14,15 @@ import {
 } from '@pokedex/shared';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { createArtUploadToken, uploadArt } from '../../lib/art';
+import { createArtUploadToken, createArtUploadTokens, uploadArt } from '../../lib/art';
+import { restoreBackup } from '../../lib/backup';
 import {
-  createBackup,
   createPairCode,
   listDesktopTokens,
   redeemPairCode,
   requireDesktopToken,
   revokeDesktopToken,
-  restoreBackup,
-} from '../../lib/backup';
+} from '../../lib/desktop-auth';
 import { activeBinderShortages } from '../../lib/binders';
 import {
   createCustomCard,
@@ -135,17 +134,6 @@ const syncRunBody = z.object({ language: languageSchema }).strict();
 const syncFinalizeBody = z.object({ allowDestructiveDrop: z.boolean().optional() }).strict();
 const BACKUP_CREATE_WINDOW_SECONDS = 15 * 60;
 
-export async function mapConcurrent<T, U>(
-  values: readonly T[],
-  concurrency: number,
-  mapper: (value: T) => Promise<U>,
-): Promise<U[]> {
-  const mapped: U[] = [];
-  for (let offset = 0; offset < values.length; offset += concurrency)
-    mapped.push(...(await Promise.all(values.slice(offset, offset + concurrency).map(mapper))));
-  return mapped;
-}
-
 function sessionOwner(c: { get: (key: 'session') => AuthVars['session'] }): string {
   const session = c.get('session');
   if (!session) throw new ApplicationError('unauthorized', 401);
@@ -153,6 +141,11 @@ function sessionOwner(c: { get: (key: 'session') => AuthVars['session'] }): stri
 }
 
 export function parseDesktopBearer(header: string | undefined): string | null {
+  const matched = header?.match(/^Bearer ([a-f0-9]{64})$/iu);
+  return matched?.[1] ?? null;
+}
+
+function uploadBearer(header: string | undefined): string | null {
   const matched = header?.match(/^Bearer ([a-f0-9]{64})$/iu);
   return matched?.[1] ?? null;
 }
@@ -201,7 +194,7 @@ desktop.post('/desktop/art/upload-tokens', async (c) => {
     const ownerId = await desktopOwner(c, 'art:write');
     const parsed = uploadRequestBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
-    const token = await createArtUploadToken(
+    const ticket = await createArtUploadToken(
       c.env.DB,
       ownerId,
       parsed.data.cardId,
@@ -209,7 +202,14 @@ desktop.post('/desktop/art/upload-tokens', async (c) => {
       parsed.data.sha256,
       parsed.data.maxBytes,
     );
-    return c.json({ ok: true, token, uploadPath: `/api/desktop/art/uploads/${token}` }, 201);
+    return c.json(
+      {
+        ok: true,
+        token: ticket.token,
+        uploadPath: `/api/desktop/art/uploads/${ticket.ticketId}`,
+      },
+      201,
+    );
   } catch (error) {
     return apiFailure(c, error);
   }
@@ -219,22 +219,13 @@ desktop.post('/desktop/art/upload-tokens/bulk', async (c) => {
     const ownerId = await desktopOwner(c, 'art:write');
     const parsed = bulkUploadRequestBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
-    const uploads = await mapConcurrent(parsed.data.uploads, 8, async (item) => {
-      const token = await createArtUploadToken(
-        c.env.DB,
-        ownerId,
-        item.cardId,
-        item.variant,
-        item.sha256,
-        item.maxBytes,
-      );
-      return {
-        cardId: item.cardId,
-        variant: item.variant,
-        token,
-        uploadPath: `/api/desktop/art/uploads/${token}`,
-      };
-    });
+    const tickets = await createArtUploadTokens(c.env.DB, ownerId, parsed.data.uploads);
+    const uploads = tickets.map((ticket) => ({
+      cardId: ticket.cardId,
+      variant: ticket.variant,
+      token: ticket.token,
+      uploadPath: `/api/desktop/art/uploads/${ticket.ticketId}`,
+    }));
     return c.json({ ok: true, uploads }, 201);
   } catch (error) {
     return apiFailure(c, error);
@@ -243,11 +234,22 @@ desktop.post('/desktop/art/upload-tokens/bulk', async (c) => {
 
 desktopPublic.put('/desktop/art/uploads/:token', async (c) => {
   try {
+    const pathTicket = c.req.param('token');
+    const token =
+      uploadBearer(c.req.header('authorization')) ??
+      (/^[a-f0-9]{64}$/iu.test(pathTicket) ? pathTicket : null);
+    if (!token)
+      return c.json(
+        { ok: false, error: 'art_upload_token_invalid', requestId: c.get('requestId') },
+        401,
+      );
     return c.json({
       ok: true,
-      ...(await uploadArt(c.env.DB, c.env.ART, c.req.param('token'), c.req.raw)),
+      ...(await uploadArt(c.env.DB, c.env.ART, token, pathTicket, c.req.raw)),
     });
   } catch (error) {
+    if (error instanceof ApplicationError && error.code === 'art_upload_in_progress')
+      c.header('retry-after', '2');
     return apiFailure(c, error);
   }
 });
@@ -904,7 +906,30 @@ browser.post('/backups', async (c) => {
       c.header('retry-after', String(rate.retryAfter));
       return c.json({ ok: false, error: 'rate_limited', requestId: c.get('requestId') }, 429);
     }
-    return c.json({ ok: true, ...(await createBackup(c.env.DB, c.env.ART, ownerId)) }, 201);
+    const workflow = await c.env.BACKUP.create({
+      id: `backup-${crypto.randomUUID()}`,
+      params: { ownerId },
+    });
+    return c.json({ ok: true, workflowId: workflow.id }, 202);
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browser.get('/backups/workflows/:id', async (c) => {
+  try {
+    const workflow = await c.env.BACKUP.get(c.req.param('id'));
+    const status = await workflow.status();
+    if (status.status === 'complete') {
+      const output = z
+        .object({ id: z.string().min(1), checksum: z.string().regex(/^[a-f0-9]{64}$/u) })
+        .strict()
+        .safeParse(status.output);
+      if (!output.success) throw new ApplicationError('backup_workflow_output_invalid', 500);
+      return c.json({ ok: true, status: status.status, ...output.data });
+    }
+    if (status.status === 'errored' || status.status === 'terminated')
+      return c.json({ ok: false, error: 'backup_failed', requestId: c.get('requestId') }, 503);
+    return c.json({ ok: true, status: status.status }, 202);
   } catch (error) {
     return apiFailure(c, error);
   }

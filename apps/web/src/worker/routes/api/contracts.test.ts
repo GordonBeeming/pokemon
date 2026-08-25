@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { arrangementBody, mapConcurrent, pageOrderBody } from './index';
+import { arrangementBody, pageOrderBody } from './index';
 
 describe('API contracts', () => {
   it('requires a revision for page reordering and rejects extra fields', () => {
@@ -22,20 +22,5 @@ describe('API contracts', () => {
     expect(
       arrangementBody.safeParse({ mode: 'set-number', expectedRevision: 4, ignored: true }).success,
     ).toBe(false);
-  });
-
-  it('bounds concurrent bulk work while preserving input order', async () => {
-    let active = 0;
-    let maximum = 0;
-    const values = Array.from({ length: 25 }, (_, index) => index);
-    const mapped = await mapConcurrent(values, 8, async (value) => {
-      active += 1;
-      maximum = Math.max(maximum, active);
-      await Promise.resolve();
-      active -= 1;
-      return value * 2;
-    });
-    expect(maximum).toBe(8);
-    expect(mapped).toEqual(values.map((value) => value * 2));
   });
 });

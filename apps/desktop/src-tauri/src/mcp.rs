@@ -9,7 +9,9 @@ use axum::Router;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -129,7 +131,9 @@ pub async fn start(
     token: String,
     backend: Arc<dyn McpBackend>,
     live_status: Arc<RwLock<McpStatus>>,
-) -> Result<JoinHandle<()>> {
+    generation: u64,
+    active_generation: Arc<AtomicU64>,
+) -> Result<(JoinHandle<()>, McpStatus)> {
     let listener = tokio::net::TcpListener::bind(bind_address(port)).await?;
     let address = listener.local_addr()?;
     let endpoint = format!("http://127.0.0.1:{}/mcp", address.port());
@@ -139,19 +143,30 @@ pub async fn start(
         running: true,
         error: None,
     };
-    *live_status.write().await = status;
     let router = router(token, backend);
-    Ok(tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         let result = axum::serve(listener, router).await;
         let error = result.err().map_or_else(
             || "MCP server stopped".to_string(),
             |error| error.to_string(),
         );
         tracing::error!(error = %error, "local MCP server stopped");
-        let mut status = live_status.write().await;
+        publish_stopped_status(&live_status, &active_generation, generation, error).await;
+    });
+    Ok((task, status))
+}
+
+async fn publish_stopped_status(
+    live_status: &RwLock<McpStatus>,
+    active_generation: &AtomicU64,
+    generation: u64,
+    error: String,
+) {
+    let mut status = live_status.write().await;
+    if active_generation.load(Ordering::Acquire) == generation {
         status.running = false;
         status.error = Some(error);
-    }))
+    }
 }
 
 pub fn unavailable_status(port: u16, token: String, error: String) -> McpStatus {
@@ -255,7 +270,36 @@ async fn call_tool(state: &McpState, id: Value, params: Option<Value>) -> Value 
     let arguments = params
         .and_then(|value| value.get("arguments").cloned())
         .unwrap_or_else(|| json!({}));
-    match state.backend.call_tool(name, arguments).await {
+    let operation_id = uuid::Uuid::new_v4();
+    let started = Instant::now();
+    tracing::debug!(
+        target: "pokedex.mcp",
+        event = "mcp.tool.started",
+        operation_id = %operation_id,
+        tool = name.as_str(),
+        "MCP tool started"
+    );
+    let result = state.backend.call_tool(name, arguments).await;
+    match &result {
+        Ok(_) => tracing::debug!(
+            target: "pokedex.mcp",
+            event = "mcp.tool.completed",
+            operation_id = %operation_id,
+            tool = name.as_str(),
+            duration_ms = started.elapsed().as_millis(),
+            "MCP tool completed"
+        ),
+        Err(error) => tracing::warn!(
+            target: "pokedex.mcp",
+            event = "mcp.tool.failed",
+            operation_id = %operation_id,
+            tool = name.as_str(),
+            duration_ms = started.elapsed().as_millis(),
+            error_class = std::any::type_name_of_val(error),
+            "MCP tool failed"
+        ),
+    }
+    match result {
         Ok(ToolPayload::Structured(value)) => rpc_success(id, structured_tool_result(value)),
         Ok(ToolPayload::Image {
             mime_type,
@@ -917,18 +961,41 @@ mod tests {
             error: None,
         };
         let live_status = Arc::new(RwLock::new(original.clone()));
+        let generation = Arc::new(AtomicU64::new(1));
 
         let error = start(
             port,
             "secret".to_string(),
             Arc::new(FakeBackend),
             live_status.clone(),
+            2,
+            generation,
         )
         .await
         .expect_err("occupied port must fail");
 
         assert_eq!(*live_status.read().await, original);
         assert!(error.to_string().contains("Address already in use"));
+    }
+
+    #[tokio::test]
+    async fn stale_server_generation_cannot_overwrite_replacement_status() {
+        let replacement = McpStatus {
+            endpoint: "http://127.0.0.1:47838/mcp".to_string(),
+            config_snippet: "replacement".to_string(),
+            running: true,
+            error: None,
+        };
+        let status = RwLock::new(replacement.clone());
+        let generation = AtomicU64::new(2);
+
+        publish_stopped_status(&status, &generation, 1, "old server stopped".to_string()).await;
+        assert_eq!(*status.read().await, replacement);
+
+        publish_stopped_status(&status, &generation, 2, "new server stopped".to_string()).await;
+        let stopped = status.read().await;
+        assert!(!stopped.running);
+        assert_eq!(stopped.error.as_deref(), Some("new server stopped"));
     }
 
     #[test]

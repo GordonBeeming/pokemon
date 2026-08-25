@@ -10,7 +10,8 @@ import {
   type ImportedCard,
 } from '../lib/catalogue';
 import { nowSeconds } from '../lib/db';
-import { describeError, logError, logInfo } from '../lib/log';
+import { describeError, logInfo } from '../lib/log';
+import { recordWorkflowFailure } from '../lib/workflow-failure';
 
 const LIST_MAX_BYTES = 25 * 1024 * 1024;
 const DETAIL_MAX_BYTES = 2 * 1024 * 1024;
@@ -248,22 +249,26 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
       });
     } catch (error) {
       const message = describeError(error);
-      await this.env.DB.prepare(
-        `UPDATE sync_runs SET completed_at = ?1, status = 'failed', refusal_reason = ?2
-         WHERE id = ?3 AND status = 'running'`,
-      )
-        .bind(nowSeconds(), message, runId)
-        .run();
-      logError({
-        evt: 'workflow.catalogue.failed',
-        workflowInstanceId: event.instanceId,
-        runId,
-        language,
-        step: currentStep,
-        durationMs: Date.now() - startedAt,
-        err: message,
-        stack: error instanceof Error ? error.stack : undefined,
-      });
+      await recordWorkflowFailure(
+        {
+          evt: 'workflow.catalogue.failed',
+          workflowInstanceId: event.instanceId,
+          runId,
+          language,
+          step: currentStep,
+          durationMs: Date.now() - startedAt,
+          err: message,
+          stack: error instanceof Error ? error.stack : undefined,
+        },
+        async () => {
+          await this.env.DB.prepare(
+            `UPDATE sync_runs SET completed_at = ?1, status = 'failed', refusal_reason = ?2
+           WHERE id = ?3 AND status = 'running'`,
+          )
+            .bind(nowSeconds(), message, runId)
+            .run();
+        },
+      );
       throw error;
     }
   }

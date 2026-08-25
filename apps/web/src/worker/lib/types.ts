@@ -62,6 +62,7 @@ export interface AuthVars {
   enrolMethod?: 'session' | 'bootstrap';
   requestId?: string;
   desktopBearer?: string;
+  requestBody?: unknown;
 }
 
 export interface RegistrationResponseShape {

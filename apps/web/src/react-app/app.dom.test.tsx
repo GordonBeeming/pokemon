@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './app';
+import { CatalogueView } from './catalogue-view';
 import { DevicesView } from './ui';
 
 const apiMocks = vi.hoisted(() => ({
@@ -14,6 +15,7 @@ const apiMocks = vi.hoisted(() => ({
   tokens: vi.fn(),
   pair: vi.fn(),
   revokeToken: vi.fn(),
+  search: vi.fn(),
 }));
 
 vi.mock('./api', async (importOriginal) => {
@@ -88,6 +90,32 @@ describe('async frontend announcements', () => {
     expect(container.querySelector('[aria-busy="true"]')).toBeNull();
   });
 
+  it('replaces failed route loading with an announced retry state', async () => {
+    apiMocks.me.mockResolvedValue({ user: { id: 'owner' } });
+    apiMocks.tokens
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValueOnce([]);
+
+    act(() => root.render(<App />));
+    await waitFor(() => container.textContent?.includes('Devices could not load.') === true);
+
+    expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(
+      Array.from(container.querySelectorAll('[role="status"]')).some(
+        (element) => element.textContent === 'Devices could not load.',
+      ),
+    ).toBe(true);
+    const retry = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Try again',
+    );
+    act(() => retry?.click());
+    await waitFor(() => container.textContent?.includes('No scanner is paired.') === true);
+
+    expect(apiMocks.tokens).toHaveBeenCalledTimes(2);
+    expect(container.textContent).not.toContain('Devices could not load.');
+    expect(container.textContent).not.toContain('The request could not be completed.');
+  });
+
   it('reports clipboard rejection and leaves the visible code available', async () => {
     const copyFailed = vi.fn();
     const clipboard = { writeText: vi.fn().mockRejectedValue(new Error('clipboard denied')) };
@@ -115,5 +143,57 @@ describe('async frontend announcements', () => {
     expect(clipboard.writeText).toHaveBeenCalledWith('A1B2-C3D4');
     expect(copyFailed).toHaveBeenCalledOnce();
     expect(container.textContent).toContain('A1B2-C3D4');
+  });
+
+  it('uses keyset cursors for catalogue next and previous navigation', async () => {
+    const firstPage = deferred<{ ok: true; total: number; cards: []; cursor: string }>();
+    const secondPage = deferred<{ ok: true; total: number; cards: []; cursor: null }>();
+    const previousPage = deferred<{ ok: true; total: number; cards: []; cursor: string }>();
+    apiMocks.search
+      .mockReturnValueOnce(firstPage.promise)
+      .mockReturnValueOnce(secondPage.promise)
+      .mockReturnValueOnce(previousPage.promise);
+
+    act(() =>
+      root.render(
+        <CatalogueView initialParams={new URLSearchParams()} onNotice={() => undefined} />,
+      ),
+    );
+    await waitFor(() => apiMocks.search.mock.calls.length === 1);
+    const first = apiMocks.search.mock.calls[0]?.[0] as URLSearchParams;
+    expect(first.has('offset')).toBe(false);
+    expect(first.has('cursor')).toBe(false);
+    await act(async () => {
+      firstPage.resolve({ ok: true, total: 100, cards: [], cursor: 'cursor-2' });
+      await firstPage.promise;
+    });
+
+    const next = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Next 50',
+    );
+    expect(next?.disabled).toBe(false);
+    act(() => next?.click());
+    await waitFor(() => apiMocks.search.mock.calls.length === 2);
+    const second = apiMocks.search.mock.calls[1]?.[0] as URLSearchParams;
+    expect(second.get('cursor')).toBe('cursor-2');
+    expect(second.has('offset')).toBe(false);
+    await act(async () => {
+      secondPage.resolve({ ok: true, total: 100, cards: [], cursor: null });
+      await secondPage.promise;
+    });
+
+    const previous = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Previous 50',
+    );
+    expect(previous?.disabled).toBe(false);
+    act(() => previous?.click());
+    await waitFor(() => apiMocks.search.mock.calls.length === 3);
+    const third = apiMocks.search.mock.calls[2]?.[0] as URLSearchParams;
+    expect(third.has('cursor')).toBe(false);
+    expect(third.has('offset')).toBe(false);
+    await act(async () => {
+      previousPage.resolve({ ok: true, total: 100, cards: [], cursor: 'cursor-2' });
+      await previousPage.promise;
+    });
   });
 });

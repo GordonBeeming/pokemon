@@ -15,6 +15,19 @@ interface UploadTokenRow {
   max_bytes: number;
   expires_at: number;
   consumed_at: number | null;
+  committed_object_key: string | null;
+}
+
+export interface ArtUploadRequest {
+  cardId: string;
+  variant: ArtVariant;
+  sha256: string;
+  maxBytes: number;
+}
+
+export interface ArtUploadTicket extends ArtUploadRequest {
+  token: string;
+  ticketId: string;
 }
 
 function hex(bytes: Uint8Array): string {
@@ -56,29 +69,73 @@ async function hashToken(token: string): Promise<string> {
   return sha256(new TextEncoder().encode(token));
 }
 
-async function readBoundedBody(request: Request, maximum: number): Promise<ArrayBuffer> {
-  if (!request.body) throw new ApplicationError('art_upload_size_invalid', 400);
-  const reader = request.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
+function ticketId(tokenHash: string): string {
+  return tokenHash.slice(0, 24);
+}
+
+async function isWebpObject(object: R2ObjectBody): Promise<boolean> {
+  const reader = object.body.getReader();
+  const header = new Uint8Array(12);
+  const chunkHeader = new Uint8Array(8);
+  let headerBytes = 0;
+  let chunkHeaderBytes = 0;
+  let chunkRemaining = 0;
+  let position = 0;
+  let imageChunk = false;
   while (true) {
     const next = await reader.read();
     if (next.done) break;
-    total += next.value.byteLength;
-    if (total > maximum) {
-      await reader.cancel('art upload exceeded maximum size');
-      throw new ApplicationError('art_upload_size_invalid', 413);
+    const value: unknown = next.value;
+    if (!(value instanceof Uint8Array)) return false;
+    let offset = 0;
+    while (offset < value.byteLength) {
+      if (headerBytes < header.byteLength) {
+        const length = Math.min(header.byteLength - headerBytes, value.byteLength - offset);
+        header.set(value.subarray(offset, offset + length), headerBytes);
+        headerBytes += length;
+        offset += length;
+        position += length;
+        if (headerBytes === header.byteLength) {
+          const view = new DataView(header.buffer);
+          if (
+            ascii(header, 0, 4) !== 'RIFF' ||
+            ascii(header, 8, 4) !== 'WEBP' ||
+            view.getUint32(4, true) !== object.size - 8
+          )
+            return false;
+        }
+        continue;
+      }
+      if (chunkRemaining > 0) {
+        const length = Math.min(chunkRemaining, value.byteLength - offset);
+        chunkRemaining -= length;
+        offset += length;
+        position += length;
+        continue;
+      }
+      const length = Math.min(chunkHeader.byteLength - chunkHeaderBytes, value.byteLength - offset);
+      chunkHeader.set(value.subarray(offset, offset + length), chunkHeaderBytes);
+      chunkHeaderBytes += length;
+      offset += length;
+      position += length;
+      if (chunkHeaderBytes === chunkHeader.byteLength) {
+        const kind = ascii(chunkHeader, 0, 4);
+        const size = new DataView(chunkHeader.buffer).getUint32(4, true);
+        chunkRemaining = size + (size % 2);
+        if (position + chunkRemaining > object.size) return false;
+        if (kind === 'VP8 ' || kind === 'VP8L' || kind === 'VP8X' || kind === 'ANMF')
+          imageChunk = true;
+        chunkHeaderBytes = 0;
+      }
     }
-    chunks.push(next.value);
   }
-  if (total < 1) throw new ApplicationError('art_upload_size_invalid', 400);
-  const combined = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    combined.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return combined.buffer;
+  return (
+    position === object.size &&
+    headerBytes === header.byteLength &&
+    chunkHeaderBytes === 0 &&
+    chunkRemaining === 0 &&
+    imageChunk
+  );
 }
 
 async function recordOrphan(db: D1Database, objectKey: string, reason: string): Promise<void> {
@@ -126,120 +183,219 @@ export async function createArtUploadToken(
   variant: ArtVariant,
   expectedSha256: string,
   maxBytes: number,
-): Promise<string> {
-  if (!/^[a-f0-9]{64}$/u.test(expectedSha256) || maxBytes < 1 || maxBytes > MAX_ART_BYTES)
+): Promise<ArtUploadTicket> {
+  const tickets = await createArtUploadTokens(db, ownerId, [
+    { cardId, variant, sha256: expectedSha256, maxBytes },
+  ]);
+  const ticket = tickets.at(0);
+  if (!ticket) throw new ApplicationError('invalid_art_upload_request', 400);
+  return ticket;
+}
+
+export async function createArtUploadTokens(
+  db: D1Database,
+  ownerId: string,
+  requests: ArtUploadRequest[],
+): Promise<ArtUploadTicket[]> {
+  if (
+    requests.length < 1 ||
+    requests.length > 100 ||
+    requests.some(
+      (request) =>
+        !request.cardId ||
+        !/^[a-f0-9]{64}$/u.test(request.sha256) ||
+        request.maxBytes < 1 ||
+        request.maxBytes > MAX_ART_BYTES,
+    ) ||
+    new Set(requests.map((request) => `${request.cardId}\u0000${request.variant}`)).size !==
+      requests.length
+  )
     throw new ApplicationError('invalid_art_upload_request', 400);
-  const card = await db
+  const requested = JSON.stringify(requests);
+  const versions = await db
     .prepare(
-      `SELECT c.id, COALESCE(m.version, 0) AS current_version FROM catalogue_cards c
-       LEFT JOIN art_manifest m ON m.card_id = c.id AND m.variant = ?2 WHERE c.id = ?1`,
+      `SELECT CAST(input.key AS INTEGER) AS request_index,
+        COALESCE(manifest.version, 0) + 1 AS expected_version
+       FROM json_each(?1) input
+       JOIN catalogue_cards card ON card.id = json_extract(input.value, '$.cardId')
+       LEFT JOIN art_manifest manifest
+         ON manifest.card_id = card.id
+         AND manifest.variant = json_extract(input.value, '$.variant')
+       ORDER BY CAST(input.key AS INTEGER)`,
     )
-    .bind(cardId, variant)
-    .first<{ id: string; current_version: number }>();
-  if (!card) throw new ApplicationError('card_not_found', 404);
-  const token = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll('-', '');
+    .bind(requested)
+    .all<{ request_index: number; expected_version: number }>();
+  if (versions.results.length !== requests.length)
+    throw new ApplicationError('card_not_found', 404);
   const now = nowSeconds();
+  const tickets = await Promise.all(
+    requests.map(
+      async (
+        request,
+        index,
+      ): Promise<ArtUploadTicket & { tokenHash: string; expectedVersion: number }> => {
+        const version = versions.results[index];
+        if (!version || version.request_index !== index)
+          throw new ApplicationError('invalid_art_upload_request', 400);
+        const token = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll('-', '');
+        const tokenHash = await hashToken(token);
+        return {
+          ...request,
+          token,
+          tokenHash,
+          ticketId: ticketId(tokenHash),
+          expectedVersion: version.expected_version,
+        };
+      },
+    ),
+  );
   await db
     .prepare(
-      'INSERT INTO art_upload_tokens (token_hash, owner_id, card_id, variant, expected_sha256, expected_version, max_bytes, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)',
+      `INSERT INTO art_upload_tokens
+        (token_hash, owner_id, card_id, variant, expected_sha256, expected_version,
+         max_bytes, expires_at, created_at)
+       SELECT json_extract(value, '$.tokenHash'), ?1, json_extract(value, '$.cardId'),
+         json_extract(value, '$.variant'), json_extract(value, '$.sha256'),
+         json_extract(value, '$.expectedVersion'), json_extract(value, '$.maxBytes'), ?2, ?3
+       FROM json_each(?4)`,
     )
-    .bind(
-      await hashToken(token),
-      ownerId,
-      cardId,
-      variant,
-      expectedSha256,
-      card.current_version + 1,
-      maxBytes,
-      now + 900,
-      now,
-    )
+    .bind(ownerId, now + 900, now, JSON.stringify(tickets))
     .run();
-  return token;
+  return tickets.map(({ tokenHash: ignoredHash, expectedVersion: ignoredVersion, ...ticket }) => {
+    void ignoredHash;
+    void ignoredVersion;
+    return ticket;
+  });
 }
 
 export async function uploadArt(
   db: D1Database,
   art: R2Bucket,
   token: string,
+  suppliedTicketId: string,
   request: Request,
-): Promise<{ cardId: string; variant: ArtVariant; objectKey: string }> {
+): Promise<{ cardId: string; variant: ArtVariant; objectKey: string; replayed: boolean }> {
   const tokenHash = await hashToken(token);
+  if (ticketId(tokenHash) !== suppliedTicketId && token !== suppliedTicketId)
+    throw new ApplicationError('art_upload_token_invalid', 400);
   const upload = await db
     .prepare(
-      'SELECT owner_id, card_id, variant, expected_sha256, expected_version, max_bytes, expires_at, consumed_at FROM art_upload_tokens WHERE token_hash = ?1',
+      `SELECT token.owner_id, token.card_id, token.variant, token.expected_sha256,
+        token.expected_version, token.max_bytes, token.expires_at, token.consumed_at,
+        CASE WHEN manifest.sha256 = token.expected_sha256
+          AND manifest.version >= token.expected_version THEN manifest.object_key END
+          AS committed_object_key
+       FROM art_upload_tokens token
+       LEFT JOIN art_manifest manifest
+         ON manifest.card_id = token.card_id AND manifest.variant = token.variant
+       WHERE token.token_hash = ?1`,
     )
     .bind(tokenHash)
     .first<UploadTokenRow>();
-  if (!upload || upload.consumed_at !== null || upload.expires_at <= nowSeconds())
-    throw new ApplicationError('art_upload_token_invalid', 400);
-  const claimedAt = nowSeconds();
-  const claim = await db
-    .prepare(
-      'UPDATE art_upload_tokens SET consumed_at = ?1 WHERE token_hash = ?2 AND consumed_at IS NULL AND expires_at > ?1',
-    )
-    .bind(claimedAt, tokenHash)
-    .run();
-  if (claim.meta.changes !== 1) throw new ApplicationError('art_upload_token_invalid', 409);
-
-  const declaredLength = Number(request.headers.get('content-length'));
-  if (!Number.isInteger(declaredLength) || declaredLength < 1 || declaredLength > upload.max_bytes)
-    throw new ApplicationError('art_upload_size_invalid', 413);
-  const buffer = await readBoundedBody(request, Math.min(upload.max_bytes, MAX_ART_BYTES));
-  if (buffer.byteLength !== declaredLength)
-    throw new ApplicationError('art_upload_size_invalid', 400);
-  const data = new Uint8Array(buffer);
-  if (!isWebp(data)) throw new ApplicationError('art_upload_not_webp', 400);
-  const checksum = await sha256(buffer);
-  if (checksum !== upload.expected_sha256)
-    throw new ApplicationError('art_upload_checksum_mismatch', 400);
-
-  const previous = await db
-    .prepare('SELECT object_key, version FROM art_manifest WHERE card_id = ?1 AND variant = ?2')
-    .bind(upload.card_id, upload.variant)
-    .first<{ object_key: string; version: number }>();
-  const objectKey = artObjectKey(upload.card_id, upload.variant, checksum);
-  const object = await art.put(objectKey, buffer, {
-    httpMetadata: {
-      contentType: 'image/webp',
-      cacheControl: 'public, max-age=31536000, immutable',
-    },
-    customMetadata: {
+  if (!upload) throw new ApplicationError('art_upload_token_invalid', 400);
+  if (upload.committed_object_key)
+    return {
       cardId: upload.card_id,
       variant: upload.variant,
-      sha256: checksum,
-      version: String(upload.expected_version),
-    },
-    sha256: checksum,
-  });
-  const now = nowSeconds();
-  const manifest = await db
+      objectKey: upload.committed_object_key,
+      replayed: true,
+    };
+  const claimedAt = nowSeconds();
+  if (upload.expires_at <= claimedAt) throw new ApplicationError('art_upload_token_invalid', 400);
+  const claim = await db
     .prepare(
-      `INSERT INTO art_manifest (card_id, variant, object_key, sha256, bytes, version, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-       ON CONFLICT(card_id, variant) DO UPDATE SET object_key = excluded.object_key,
-         sha256 = excluded.sha256, bytes = excluded.bytes, version = excluded.version,
-         updated_at = excluded.updated_at WHERE art_manifest.version < excluded.version`,
+      `UPDATE art_upload_tokens SET consumed_at = ?1
+       WHERE token_hash = ?2 AND expires_at > ?1
+         AND (consumed_at IS NULL OR consumed_at <= ?3)`,
     )
-    .bind(
-      upload.card_id,
-      upload.variant,
-      objectKey,
-      checksum,
-      object.size,
-      upload.expected_version,
-      now,
-    )
+    .bind(claimedAt, tokenHash, claimedAt - 120)
     .run();
-  if (manifest.meta.changes !== 1) {
-    await recordOrphan(db, objectKey, 'manifest_version_conflict');
-    await cleanupArtOrphans(db, art, now);
-    throw new ApplicationError('art_upload_version_conflict', 409);
+  if (claim.meta.changes !== 1) throw new ApplicationError('art_upload_in_progress', 409);
+
+  let committed = false;
+  const objectKey = artObjectKey(upload.card_id, upload.variant, upload.expected_sha256);
+  try {
+    const declaredLength = Number(request.headers.get('content-length'));
+    if (
+      !request.body ||
+      !Number.isInteger(declaredLength) ||
+      declaredLength < 1 ||
+      declaredLength > upload.max_bytes
+    )
+      throw new ApplicationError('art_upload_size_invalid', 413);
+    const previous = await db
+      .prepare('SELECT object_key FROM art_manifest WHERE card_id = ?1 AND variant = ?2')
+      .bind(upload.card_id, upload.variant)
+      .first<{ object_key: string }>();
+    const fixedLength = new FixedLengthStream(declaredLength);
+    const writeBody = request.body.pipeTo(fixedLength.writable);
+    let object: R2Object;
+    try {
+      object = await art.put(objectKey, fixedLength.readable, {
+        httpMetadata: {
+          contentType: 'image/webp',
+          cacheControl: 'public, max-age=31536000, immutable',
+        },
+        customMetadata: {
+          cardId: upload.card_id,
+          variant: upload.variant,
+          sha256: upload.expected_sha256,
+          version: String(upload.expected_version),
+        },
+        sha256: upload.expected_sha256,
+      });
+      await writeBody;
+    } catch (error) {
+      await writeBody.catch(() => undefined);
+      throw error;
+    }
+    if (object.size !== declaredLength) throw new ApplicationError('art_upload_size_invalid', 400);
+    const stored = await art.get(objectKey);
+    if (!stored || !(await isWebpObject(stored)))
+      throw new ApplicationError('art_upload_not_webp', 400);
+    const now = nowSeconds();
+    const manifest = await db
+      .prepare(
+        `INSERT INTO art_manifest (card_id, variant, object_key, sha256, bytes, version, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(card_id, variant) DO UPDATE SET object_key = excluded.object_key,
+           sha256 = excluded.sha256, bytes = excluded.bytes, version = excluded.version,
+           updated_at = excluded.updated_at WHERE art_manifest.version < excluded.version`,
+      )
+      .bind(
+        upload.card_id,
+        upload.variant,
+        objectKey,
+        upload.expected_sha256,
+        object.size,
+        upload.expected_version,
+        now,
+      )
+      .run();
+    if (manifest.meta.changes < 1) {
+      await recordOrphan(db, objectKey, 'manifest_version_conflict');
+      throw new ApplicationError('art_upload_version_conflict', 409);
+    }
+    committed = true;
+    if (previous && previous.object_key !== objectKey)
+      await recordOrphan(db, previous.object_key, 'manifest_superseded');
+    await cleanupArtOrphans(db, art);
+    return { cardId: upload.card_id, variant: upload.variant, objectKey, replayed: false };
+  } catch (error) {
+    if (!committed) {
+      await Promise.all([
+        recordOrphan(db, objectKey, 'upload_failed'),
+        db
+          .prepare(
+            'UPDATE art_upload_tokens SET consumed_at = NULL WHERE token_hash = ?1 AND consumed_at = ?2',
+          )
+          .bind(tokenHash, claimedAt)
+          .run(),
+      ]);
+      await cleanupArtOrphans(db, art, nowSeconds());
+    }
+    throw error;
   }
-  if (previous && previous.object_key !== objectKey)
-    await recordOrphan(db, previous.object_key, 'manifest_superseded');
-  await cleanupArtOrphans(db, art);
-  return { cardId: upload.card_id, variant: upload.variant, objectKey };
 }
 
 function validRangeHeader(value: string | null): boolean {

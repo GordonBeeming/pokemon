@@ -42,6 +42,17 @@ function LoadingRoute({ message }: { message: string }): ReactElement {
   );
 }
 
+function RouteLoadError({ route, retry }: { route: string; retry: () => void }): ReactElement {
+  return (
+    <section className="empty-state" role="alert">
+      <h1>{route} could not load.</h1>
+      <button className="quiet-button" type="button" onClick={retry}>
+        Try again
+      </button>
+    </section>
+  );
+}
+
 export function App(): ReactElement {
   const [auth, setAuth] = useState<AuthState>('checking');
   const [route, setRoute] = useState<Route>(
@@ -55,6 +66,8 @@ export function App(): ReactElement {
   const [pairCode, setPairCode] = useState<PairingCode | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [routeStatus, setRouteStatus] = useState('');
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const [routeReload, setRouteReload] = useState(0);
   const [pairPending, setPairPending] = useState(false);
   const [catalogueParams, setCatalogueParams] = useState(new URLSearchParams());
   const loadGeneration = useRef(0);
@@ -91,6 +104,7 @@ export function App(): ReactElement {
     loadController.current = controller;
     setRouteLoading(true);
     const routeLabel = routes.find(([key]) => key === route)?.[1] ?? 'Page';
+    setRouteError(null);
     setRouteStatus(`Loading ${routeLabel}.`);
     const load =
       route === 'dashboard'
@@ -120,13 +134,22 @@ export function App(): ReactElement {
       })
       .catch((error: unknown) => {
         const message = userMessage(error);
-        if (message && generation === loadGeneration.current) setNotice({ kind: 'error', message });
+        if (message && generation === loadGeneration.current) {
+          setNotice({ kind: 'error', message });
+          setRouteError(routeLabel);
+          setRouteStatus(`${routeLabel} could not load.`);
+        }
       })
       .finally(() => {
         if (generation === loadGeneration.current) setRouteLoading(false);
       });
     return () => controller.abort();
-  }, [auth, route]);
+  }, [auth, route, routeReload]);
+
+  const retryRoute = (): void => {
+    setNotice(null);
+    setRouteReload((current) => current + 1);
+  };
 
   function navigate(next: Route): void {
     if (location.hash !== `#${next}`) location.hash = next;
@@ -171,6 +194,8 @@ export function App(): ReactElement {
           navigate('catalogue');
         }}
       />
+    ) : routeError ? (
+      <RouteLoadError route={routeError} retry={retryRoute} />
     ) : (
       <LoadingRoute message="Loading set checklists…" />
     );
@@ -188,6 +213,8 @@ export function App(): ReactElement {
           navigate('catalogue');
         }}
       />
+    ) : routeError ? (
+      <RouteLoadError route={routeError} retry={retryRoute} />
     ) : (
       <LoadingRoute message="Loading National Pokédex…" />
     );
@@ -232,12 +259,16 @@ export function App(): ReactElement {
           })
         }
       />
+    ) : routeError ? (
+      <RouteLoadError route={routeError} retry={retryRoute} />
     ) : (
       <LoadingRoute message="Loading paired devices…" />
     );
   else
     content = dashboard ? (
       <DashboardView data={dashboard} />
+    ) : routeError ? (
+      <RouteLoadError route={routeError} retry={retryRoute} />
     ) : (
       <section className="empty-state" aria-busy={routeLoading}>
         <h1>Loading dashboard…</h1>
