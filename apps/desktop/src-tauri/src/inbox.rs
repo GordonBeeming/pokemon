@@ -3,17 +3,46 @@ use crate::error::{DesktopError, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 const MAX_CAPTURE_BYTES: usize = 25 * 1024 * 1024;
 const MAX_PREVIEW_BYTES: usize = 256 * 1024;
 const DELETE_TOMBSTONE_PREFIX: &str = ".pokedex-delete-";
+const DELETE_LOCK_DATABASE: &str = ".pokedex-delete-lock.sqlite3";
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DeleteEntry {
-    label: &'static str,
-    source: PathBuf,
-    tombstone: PathBuf,
+    label: String,
+    original: String,
+    tombstone: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum DeleteJournalState {
+    Pending,
+    Committed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteJournal {
+    operation_id: Uuid,
+    scan_id: Uuid,
+    state: DeleteJournalState,
+    entries: Vec<DeleteEntry>,
+}
+
+struct DeleteLock {
+    connection: rusqlite::Connection,
+}
+
+impl Drop for DeleteLock {
+    fn drop(&mut self) {
+        let _ = self.connection.execute_batch("ROLLBACK");
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,8 +95,18 @@ pub struct PendingInbox {
 impl PendingInbox {
     pub fn new(root: PathBuf) -> Self {
         let inbox = Self { root };
-        if let Err(error) = inbox.scavenge_tombstones() {
-            tracing::warn!(error = %error, "could not scan pending-delete tombstones");
+        match inbox.try_delete_lock() {
+            Ok(Some(_lock)) => {
+                if let Err(error) = inbox.recover_delete_journals() {
+                    tracing::warn!(error = %error, "could not recover pending-delete journals");
+                }
+            }
+            Ok(None) => tracing::debug!(
+                "pending-delete recovery skipped because another process holds the lock"
+            ),
+            Err(error) => {
+                tracing::warn!(error = %error, "could not acquire the pending-delete recovery lock")
+            }
         }
         inbox
     }
@@ -147,6 +186,13 @@ impl PendingInbox {
         let mut scans = Vec::new();
         for entry in std::fs::read_dir(&self.root)? {
             let path = entry?.path();
+            if path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| value.starts_with(DELETE_TOMBSTONE_PREFIX))
+            {
+                continue;
+            }
             if path.extension().and_then(|value| value.to_str()) != Some("json") {
                 continue;
             }
@@ -285,14 +331,15 @@ impl PendingInbox {
     }
 
     fn delete_scan(&self, scan: &PendingScan) -> Result<()> {
-        self.delete_scan_with(
+        let _lock = self.acquire_delete_lock()?;
+        self.delete_scan_locked_with(
             scan,
             |source, tombstone| std::fs::rename(source, tombstone),
             |tombstone| std::fs::remove_file(tombstone),
         )
     }
 
-    fn delete_scan_with<R, C>(
+    fn delete_scan_locked_with<R, C>(
         &self,
         scan: &PendingScan,
         mut rename: R,
@@ -302,37 +349,32 @@ impl PendingInbox {
         R: FnMut(&Path, &Path) -> std::io::Result<()>,
         C: FnMut(&Path) -> std::io::Result<()>,
     {
-        let operation_id = Uuid::new_v4();
-        let entries = [
-            DeleteEntry {
-                label: "capture",
-                source: self.image_path(scan.id, &scan.mime_type),
-                tombstone: self.delete_tombstone_path(operation_id, "capture"),
-            },
-            DeleteEntry {
-                label: "preview",
-                source: self.thumbnail_path(scan.id),
-                tombstone: self.delete_tombstone_path(operation_id, "preview"),
-            },
-            DeleteEntry {
-                label: "metadata",
-                source: self.metadata_path(scan.id),
-                tombstone: self.delete_tombstone_path(operation_id, "metadata"),
-            },
-        ];
-        let mut staged = Vec::new();
-        for entry in entries.iter().filter(|entry| entry.source.exists()) {
-            if let Err(error) = rename(&entry.source, &entry.tombstone) {
-                return Err(rollback_delete_staging(error, &staged, &mut rename));
+        let mut journal = self.new_delete_journal(scan)?;
+        self.write_delete_journal(&journal)?;
+        for entry in &journal.entries {
+            let (original, tombstone) = self.delete_entry_paths(entry)?;
+            if let Err(error) = rename(&original, &tombstone) {
+                let primary = DesktopError::Io(error);
+                return Err(self.rollback_pending_journal(&journal, primary, &mut rename));
             }
-            staged.push(entry);
+            if let Err(error) = sync_directory(&self.root) {
+                let primary = error;
+                return Err(self.rollback_pending_journal(&journal, primary, &mut rename));
+            }
         }
-        for entry in staged {
-            if let Err(error) = cleanup(&entry.tombstone) {
+        journal.state = DeleteJournalState::Committed;
+        if let Err(error) = self.write_delete_journal(&journal) {
+            return Err(self.rollback_pending_journal(&journal, error, &mut rename));
+        }
+        let mut cleanup_complete = true;
+        for entry in &journal.entries {
+            let (_, tombstone) = self.delete_entry_paths(entry)?;
+            if let Err(error) = cleanup(&tombstone) {
                 if error.kind() != std::io::ErrorKind::NotFound {
+                    cleanup_complete = false;
                     tracing::warn!(
                         scan_id = %scan.id,
-                        operation_id = %operation_id,
+                        operation_id = %journal.operation_id,
                         file = entry.label,
                         error = %error,
                         "pending-delete tombstone cleanup deferred to startup"
@@ -340,36 +382,239 @@ impl PendingInbox {
                 }
             }
         }
+        if cleanup_complete {
+            if let Err(error) = remove_if_exists(&self.delete_journal_path(journal.operation_id)) {
+                tracing::warn!(
+                    scan_id = %scan.id,
+                    operation_id = %journal.operation_id,
+                    error = %error,
+                    "committed delete journal cleanup deferred to startup"
+                );
+            } else if let Err(error) = sync_directory(&self.root) {
+                tracing::warn!(
+                    scan_id = %scan.id,
+                    operation_id = %journal.operation_id,
+                    error = %error,
+                    "committed delete journal durability check failed"
+                );
+            }
+        }
         Ok(())
     }
 
-    fn delete_tombstone_path(&self, operation_id: Uuid, label: &str) -> PathBuf {
-        self.root
-            .join(format!("{DELETE_TOMBSTONE_PREFIX}{operation_id}-{label}"))
+    fn new_delete_journal(&self, scan: &PendingScan) -> Result<DeleteJournal> {
+        let operation_id = Uuid::new_v4();
+        let mut entries = Vec::new();
+        for (label, original) in [
+            ("capture", self.image_path(scan.id, &scan.mime_type)),
+            ("preview", self.thumbnail_path(scan.id)),
+            ("metadata", self.metadata_path(scan.id)),
+        ] {
+            if !original.exists() {
+                continue;
+            }
+            let original = original
+                .file_name()
+                .and_then(|value| value.to_str())
+                .ok_or_else(|| DesktopError::InvalidPath(original.clone()))?;
+            let tombstone = format!(
+                "{DELETE_TOMBSTONE_PREFIX}{operation_id}-{}-{label}.tombstone",
+                scan.id
+            );
+            entries.push(DeleteEntry {
+                label: label.to_string(),
+                original: original.to_string(),
+                tombstone,
+            });
+        }
+        Ok(DeleteJournal {
+            operation_id,
+            scan_id: scan.id,
+            state: DeleteJournalState::Pending,
+            entries,
+        })
     }
 
-    fn scavenge_tombstones(&self) -> Result<usize> {
+    fn delete_journal_path(&self, operation_id: Uuid) -> PathBuf {
+        self.root.join(format!(
+            "{DELETE_TOMBSTONE_PREFIX}{operation_id}.journal.json"
+        ))
+    }
+
+    fn write_delete_journal(&self, journal: &DeleteJournal) -> Result<()> {
+        let path = self.delete_journal_path(journal.operation_id);
+        let temporary = path.with_extension("json.tmp");
+        write_private(&temporary, &serde_json::to_vec_pretty(journal)?)?;
+        std::fs::rename(temporary, path)?;
+        sync_directory(&self.root)
+    }
+
+    fn delete_entry_paths(&self, entry: &DeleteEntry) -> Result<(PathBuf, PathBuf)> {
+        Ok((
+            self.root.join(validate_delete_filename(&entry.original)?),
+            self.root.join(validate_delete_filename(&entry.tombstone)?),
+        ))
+    }
+
+    fn rollback_pending_journal<R>(
+        &self,
+        journal: &DeleteJournal,
+        primary: DesktopError,
+        rename: &mut R,
+    ) -> DesktopError
+    where
+        R: FnMut(&Path, &Path) -> std::io::Result<()>,
+    {
+        let mut failures = Vec::new();
+        for entry in journal.entries.iter().rev() {
+            let Ok((original, tombstone)) = self.delete_entry_paths(entry) else {
+                failures.push(format!("{}: invalid journal path", entry.label));
+                continue;
+            };
+            if !tombstone.exists() {
+                if !original.exists() {
+                    failures.push(format!(
+                        "{}: original and tombstone are both missing",
+                        entry.label
+                    ));
+                }
+                continue;
+            }
+            if original.exists() {
+                failures.push(format!(
+                    "{}: original and tombstone both exist",
+                    entry.label
+                ));
+                continue;
+            }
+            if let Err(error) = rename(&tombstone, &original) {
+                failures.push(format!("{}: {error}", entry.label));
+            }
+        }
+        if failures.is_empty() {
+            if let Err(error) = remove_if_exists(&self.delete_journal_path(journal.operation_id)) {
+                return DesktopError::Rollback {
+                    operation: "pending delete staging",
+                    primary: Box::new(primary),
+                    cleanup: format!("journal: {error}"),
+                };
+            }
+            if let Err(error) = sync_directory(&self.root) {
+                return DesktopError::Rollback {
+                    operation: "pending delete staging",
+                    primary: Box::new(primary),
+                    cleanup: format!("journal directory sync: {error}"),
+                };
+            }
+            primary
+        } else {
+            DesktopError::Rollback {
+                operation: "pending delete staging",
+                primary: Box::new(primary),
+                cleanup: failures.join("; "),
+            }
+        }
+    }
+
+    fn recover_delete_journals(&self) -> Result<usize> {
         if !self.root.exists() {
             return Ok(0);
         }
-        let mut removed = 0;
+        let mut recovered = 0;
         for entry in std::fs::read_dir(&self.root)? {
             let entry = entry?;
             let name = entry.file_name();
-            if !name.to_string_lossy().starts_with(DELETE_TOMBSTONE_PREFIX) {
+            let name = name.to_string_lossy();
+            if !name.starts_with(DELETE_TOMBSTONE_PREFIX) || !name.ends_with(".journal.json") {
                 continue;
             }
-            match std::fs::remove_file(entry.path()) {
-                Ok(()) => removed += 1,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => tracing::warn!(
-                    tombstone = %name.to_string_lossy(),
-                    error = %error,
-                    "pending-delete tombstone cleanup remains deferred"
-                ),
+            let journal: DeleteJournal = serde_json::from_slice(&std::fs::read(entry.path())?)?;
+            if entry.path() != self.delete_journal_path(journal.operation_id) {
+                return Err(DesktopError::InvalidImage(
+                    "pending-delete journal name does not match its operation".to_string(),
+                ));
             }
+            match journal.state {
+                DeleteJournalState::Pending => {
+                    let primary = DesktopError::InvalidImage(
+                        "recovering interrupted pending delete".to_string(),
+                    );
+                    let error = self.rollback_pending_journal(
+                        &journal,
+                        primary,
+                        &mut |tombstone, original| std::fs::rename(tombstone, original),
+                    );
+                    if matches!(error, DesktopError::Rollback { .. }) {
+                        return Err(error);
+                    }
+                    tracing::warn!(
+                        scan_id = %journal.scan_id,
+                        operation_id = %journal.operation_id,
+                        "restored an interrupted pending delete"
+                    );
+                }
+                DeleteJournalState::Committed => {
+                    let mut complete = true;
+                    for delete_entry in &journal.entries {
+                        let (original, tombstone) = self.delete_entry_paths(delete_entry)?;
+                        if original.exists() {
+                            return Err(DesktopError::InvalidImage(format!(
+                                "committed delete {} still has an original {}",
+                                journal.operation_id, delete_entry.label
+                            )));
+                        }
+                        if let Err(error) = remove_if_exists(&tombstone) {
+                            complete = false;
+                            tracing::warn!(
+                                scan_id = %journal.scan_id,
+                                operation_id = %journal.operation_id,
+                                file = %delete_entry.label,
+                                error = %error,
+                                "committed delete cleanup remains deferred"
+                            );
+                        }
+                    }
+                    if !complete {
+                        continue;
+                    }
+                    remove_if_exists(&self.delete_journal_path(journal.operation_id))?;
+                    sync_directory(&self.root)?;
+                    tracing::info!(
+                        scan_id = %journal.scan_id,
+                        operation_id = %journal.operation_id,
+                        "finished committed delete cleanup"
+                    );
+                }
+            }
+            recovered += 1;
         }
-        Ok(removed)
+        Ok(recovered)
+    }
+
+    fn try_delete_lock(&self) -> Result<Option<DeleteLock>> {
+        std::fs::create_dir_all(&self.root)?;
+        let connection = rusqlite::Connection::open(self.root.join(DELETE_LOCK_DATABASE))?;
+        connection.busy_timeout(Duration::ZERO)?;
+        match connection.execute_batch("BEGIN EXCLUSIVE") {
+            Ok(()) => Ok(Some(DeleteLock { connection })),
+            Err(error)
+                if matches!(
+                    error.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                ) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn acquire_delete_lock(&self) -> Result<DeleteLock> {
+        self.try_delete_lock()?.ok_or_else(|| {
+            DesktopError::InvalidImage(
+                "pending scan deletion is already running in another process".to_string(),
+            )
+        })
     }
 }
 
@@ -444,33 +689,25 @@ fn rollback_save(
     }
 }
 
-fn rollback_delete_staging<R>(
-    error: std::io::Error,
-    staged: &[&DeleteEntry],
-    rename: &mut R,
-) -> DesktopError
-where
-    R: FnMut(&Path, &Path) -> std::io::Result<()>,
-{
-    let primary = DesktopError::Io(error);
-    let cleanup = staged
-        .iter()
-        .rev()
-        .filter_map(|entry| {
-            rename(&entry.tombstone, &entry.source)
-                .err()
-                .map(|error| format!("{}: {error}", entry.label))
-        })
-        .collect::<Vec<_>>();
-    if cleanup.is_empty() {
-        primary
+fn validate_delete_filename(value: &str) -> Result<&str> {
+    let path = Path::new(value);
+    if path.components().count() == 1
+        && matches!(
+            path.components().next(),
+            Some(std::path::Component::Normal(_))
+        )
+    {
+        Ok(value)
     } else {
-        DesktopError::Rollback {
-            operation: "pending delete staging",
-            primary: Box::new(primary),
-            cleanup: cleanup.join("; "),
-        }
+        Err(DesktopError::InvalidImage(
+            "pending-delete journal contains an invalid filename".to_string(),
+        ))
     }
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    std::fs::File::open(path)?.sync_all()?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -570,9 +807,10 @@ mod tests {
                 .save(&webp(), &preview(), "image/webp", CaptureSource::File)
                 .expect("scan");
             let mut stage = 0;
+            let _lock = inbox.acquire_delete_lock().expect("delete lock");
 
             let error = inbox
-                .delete_scan_with(
+                .delete_scan_locked_with(
                     &scan,
                     |source, tombstone| {
                         stage += 1;
@@ -592,12 +830,12 @@ mod tests {
             assert!(inbox.thumbnail_path(scan.id).is_file());
             assert!(inbox.metadata_path(scan.id).is_file());
             assert_eq!(inbox.list().expect("list after rollback"), vec![scan]);
-            assert_eq!(inbox.scavenge_tombstones().expect("no tombstones"), 0);
+            assert_eq!(inbox.recover_delete_journals().expect("no journals"), 0);
         }
     }
 
     #[test]
-    fn startup_scavenges_cleanup_failures_after_logical_deletion() {
+    fn startup_finishes_cleanup_for_a_committed_delete() {
         let root = tempdir().expect("temp dir");
         let inbox_root = root.path().join("inbox");
         let inbox = PendingInbox::new(inbox_root.clone());
@@ -605,9 +843,10 @@ mod tests {
             .save(&webp(), &preview(), "image/webp", CaptureSource::Camera)
             .expect("scan");
         let mut cleanup = 0;
+        let delete_lock = inbox.acquire_delete_lock().expect("delete lock");
 
         inbox
-            .delete_scan_with(
+            .delete_scan_locked_with(
                 &scan,
                 |source, tombstone| std::fs::rename(source, tombstone),
                 |tombstone| {
@@ -620,23 +859,155 @@ mod tests {
                 },
             )
             .expect("logical deletion succeeds");
+        drop(delete_lock);
 
         assert!(inbox.list().expect("scan is logically gone").is_empty());
         assert_eq!(
             std::fs::read_dir(&inbox_root)
                 .expect("inbox")
                 .filter_map(|entry| entry.ok())
-                .filter(|entry| {
-                    entry
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with(DELETE_TOMBSTONE_PREFIX)
-                })
+                .filter(|entry| { entry.file_name().to_string_lossy().ends_with(".tombstone") })
                 .count(),
             1
         );
         let restarted = PendingInbox::new(inbox_root);
-        assert_eq!(restarted.scavenge_tombstones().expect("clean restart"), 0);
+        assert_eq!(
+            restarted.recover_delete_journals().expect("clean restart"),
+            0
+        );
+    }
+
+    #[test]
+    fn startup_rolls_back_a_pending_delete_after_every_rename_boundary() {
+        for moved in 1..=3 {
+            let root = tempdir().expect("temp dir");
+            let inbox_root = root.path().join("inbox");
+            let inbox = PendingInbox::new(inbox_root.clone());
+            let scan = inbox
+                .save(&webp(), &preview(), "image/webp", CaptureSource::File)
+                .expect("scan");
+            let delete_lock = inbox.acquire_delete_lock().expect("delete lock");
+            let journal = inbox.new_delete_journal(&scan).expect("journal");
+            inbox
+                .write_delete_journal(&journal)
+                .expect("pending journal");
+            for entry in journal.entries.iter().take(moved) {
+                let (original, tombstone) = inbox.delete_entry_paths(entry).expect("paths");
+                std::fs::rename(original, tombstone).expect("stage rename");
+                sync_directory(&inbox.root).expect("durable rename");
+            }
+            drop(delete_lock);
+
+            let restarted = PendingInbox::new(inbox_root);
+            assert!(restarted.image_path(scan.id, &scan.mime_type).is_file());
+            assert!(restarted.thumbnail_path(scan.id).is_file());
+            assert!(restarted.metadata_path(scan.id).is_file());
+            assert_eq!(restarted.list().expect("restored scan"), vec![scan]);
+            assert_eq!(restarted.recover_delete_journals().expect("no journal"), 0);
+        }
+    }
+
+    #[test]
+    fn startup_finalizes_a_committed_journal_after_a_crash() {
+        let root = tempdir().expect("temp dir");
+        let inbox_root = root.path().join("inbox");
+        let inbox = PendingInbox::new(inbox_root.clone());
+        let scan = inbox
+            .save(&webp(), &preview(), "image/webp", CaptureSource::Camera)
+            .expect("scan");
+        let delete_lock = inbox.acquire_delete_lock().expect("delete lock");
+        let mut journal = inbox.new_delete_journal(&scan).expect("journal");
+        inbox
+            .write_delete_journal(&journal)
+            .expect("pending journal");
+        for entry in &journal.entries {
+            let (original, tombstone) = inbox.delete_entry_paths(entry).expect("paths");
+            std::fs::rename(original, tombstone).expect("stage rename");
+        }
+        sync_directory(&inbox.root).expect("durable staging");
+        journal.state = DeleteJournalState::Committed;
+        inbox
+            .write_delete_journal(&journal)
+            .expect("committed journal");
+        drop(delete_lock);
+
+        let restarted = PendingInbox::new(inbox_root);
+        assert!(restarted.list().expect("deleted scan").is_empty());
+        assert!(!restarted.image_path(scan.id, &scan.mime_type).exists());
+        assert!(!restarted.thumbnail_path(scan.id).exists());
+        assert!(!restarted.metadata_path(scan.id).exists());
+        assert_eq!(restarted.recover_delete_journals().expect("no journal"), 0);
+    }
+
+    #[test]
+    fn delete_lock_holder() {
+        let Ok(root) = std::env::var("POKEDEX_TEST_DELETE_LOCK_ROOT") else {
+            return;
+        };
+        let ready =
+            PathBuf::from(std::env::var("POKEDEX_TEST_DELETE_LOCK_READY").expect("ready marker"));
+        let release = PathBuf::from(
+            std::env::var("POKEDEX_TEST_DELETE_LOCK_RELEASE").expect("release marker"),
+        );
+        std::fs::create_dir_all(&root).expect("inbox root");
+        let connection = rusqlite::Connection::open(Path::new(&root).join(DELETE_LOCK_DATABASE))
+            .expect("lock DB");
+        connection
+            .execute_batch("BEGIN EXCLUSIVE")
+            .expect("exclusive lock");
+        std::fs::write(&ready, b"ready").expect("ready marker");
+        while !release.exists() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn second_process_cannot_scavenge_an_inflight_delete() {
+        let temp = tempdir().expect("temp dir");
+        let inbox_root = temp.path().join("inbox");
+        let inbox = PendingInbox::new(inbox_root.clone());
+        let scan = inbox
+            .save(&webp(), &preview(), "image/webp", CaptureSource::File)
+            .expect("scan");
+        let delete_lock = inbox.acquire_delete_lock().expect("delete lock");
+        let journal = inbox.new_delete_journal(&scan).expect("journal");
+        inbox
+            .write_delete_journal(&journal)
+            .expect("pending journal");
+        let (capture, capture_tombstone) = inbox
+            .delete_entry_paths(&journal.entries[0])
+            .expect("capture paths");
+        std::fs::rename(&capture, &capture_tombstone).expect("first staging rename");
+        sync_directory(&inbox.root).expect("durable rename");
+        drop(delete_lock);
+
+        let ready = temp.path().join("ready");
+        let release = temp.path().join("release");
+        let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .arg("--exact")
+            .arg("inbox::tests::delete_lock_holder")
+            .arg("--nocapture")
+            .env("POKEDEX_TEST_DELETE_LOCK_ROOT", &inbox_root)
+            .env("POKEDEX_TEST_DELETE_LOCK_READY", &ready)
+            .env("POKEDEX_TEST_DELETE_LOCK_RELEASE", &release)
+            .spawn()
+            .expect("lock-holder process");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !ready.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready.exists(), "lock holder became ready");
+
+        let _second_process = PendingInbox::new(inbox_root.clone());
+        assert!(!capture.exists());
+        assert!(capture_tombstone.exists());
+        assert!(inbox.delete_journal_path(journal.operation_id).is_file());
+
+        std::fs::write(&release, b"release").expect("release marker");
+        assert!(child.wait().expect("child exit").success());
+        let recovered = PendingInbox::new(inbox_root);
+        assert!(recovered.image_path(scan.id, &scan.mime_type).is_file());
+        assert_eq!(recovered.list().expect("restored scan"), vec![scan]);
     }
 
     #[test]
