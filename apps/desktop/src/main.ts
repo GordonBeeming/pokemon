@@ -185,11 +185,13 @@ const previewObserver =
 const saveLocalCapture: SaveCapture = async (bytes, mimeType, source, previewBytes) =>
   invoke<PendingScan>('save_capture', { bytes, mimeType, source, previewBytes });
 
-async function refresh(): Promise<void> {
+type RefreshOutcome = 'accepted' | 'stale';
+
+async function refresh(): Promise<RefreshOutcome> {
   const generation = refreshGenerations.next();
   const next = await invoke<DesktopStatus>('desktop_status');
   const pending = pendingFragment(next.pendingScans);
-  if (!refreshGenerations.isCurrent(generation)) return;
+  if (!refreshGenerations.isCurrent(generation)) return 'stale';
   status = next;
   renderStatus(next);
   pendingCount.textContent = `${next.pendingScans.length} pending`;
@@ -197,6 +199,7 @@ async function refresh(): Promise<void> {
   pendingList.querySelectorAll('img').forEach((image) => previewObserver?.unobserve(image));
   pendingList.replaceChildren(pending);
   if (focusCandidates) restorePendingFocus(focusCandidates);
+  return 'accepted';
 }
 
 function renderStatus(next: DesktopStatus): void {
@@ -389,16 +392,38 @@ async function deletePendingCapture(
 }
 
 async function refreshAfterDelete(): Promise<string | null> {
-  try {
-    await refresh();
-    return null;
-  } catch {
+  const maximumAttempts = 3;
+  let staleAttempts = 0;
+  const failures: string[] = [];
+  for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
+    if (attempt > 0) preserveCurrentPendingFocusForRefresh();
     try {
-      await refresh();
-      return null;
+      if ((await refresh()) === 'accepted') return null;
+      staleAttempts += 1;
     } catch (error) {
-      return actionErrorMessage(error);
+      failures.push(actionErrorMessage(error));
     }
+  }
+  const reasons: string[] = [];
+  if (staleAttempts > 0) {
+    reasons.push(
+      `Inbox refresh was superseded before it could be rendered (${staleAttempts} ${staleAttempts === 1 ? 'attempt' : 'attempts'}).`,
+    );
+  }
+  if (failures.length > 0) {
+    reasons.push(
+      `Inbox refresh failed (${failures.length} ${failures.length === 1 ? 'attempt' : 'attempts'}); latest error: ${failures.at(-1)}`,
+    );
+  }
+  return reasons.join(' ');
+}
+
+function preserveCurrentPendingFocusForRefresh(): void {
+  if (pendingFocusIntent) return;
+  const owner = document.activeElement?.closest<HTMLElement>('.pending-item');
+  const ownerScanId = owner?.dataset.scanId;
+  if (ownerScanId) {
+    pendingFocusIntent = { ownerScanId, candidates: [ownerScanId], phase: 'completion' };
   }
 }
 
@@ -749,4 +774,6 @@ function requireElement<T extends Element>(selector: string, constructor: new ()
   return element;
 }
 
-void runAction(refresh);
+void runAction(async () => {
+  await refresh();
+});

@@ -455,9 +455,13 @@ describe('desktop main DOM', () => {
       );
       const acceptedFocus = document.activeElement;
       actionRefresh.resolve(status(outcome === 'success' ? [] : [first, second]));
+      if (outcome === 'success') await waitFor(() => statusCalls === 4);
       await settle();
       await settle();
-      expect(document.activeElement).toBe(acceptedFocus);
+      expect(document.activeElement?.closest<HTMLElement>('.pending-item')?.dataset.scanId).toBe(
+        expectedScan,
+      );
+      if (outcome === 'failure') expect(document.activeElement).toBe(acceptedFocus);
     },
   );
 
@@ -560,6 +564,58 @@ describe('desktop main DOM', () => {
     expect(document.querySelector('#notice')?.textContent).not.toContain('Couldn’t delete');
   });
 
+  it('retries when a stale delete refresh resolves after its superseding refresh rejects', async () => {
+    const first: PendingScan = {
+      id: '01909a91-2fd5-77e0-b7e9-962c6f8b57ec',
+      createdAt: 1,
+      source: 'file',
+      mimeType: 'image/webp',
+      bytes: 16,
+      mutationId: '319e23de-1648-460e-8a82-a1379428357d',
+      state: 'pending',
+      confirmedCardId: null,
+    };
+    const second: PendingScan = {
+      ...first,
+      id: '02909a91-2fd5-77e0-b7e9-962c6f8b57ec',
+      mutationId: '419e23de-1648-460e-8a82-a1379428357d',
+    };
+    const deleteRefresh = deferred<DesktopStatus>();
+    const supersedingRefresh = deferred<DesktopStatus>();
+    let statusCalls = 0;
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'desktop_status') {
+        statusCalls += 1;
+        if (statusCalls === 1) return Promise.resolve(status([first, second]));
+        if (statusCalls === 2) return deleteRefresh.promise;
+        if (statusCalls === 3) return supersedingRefresh.promise;
+        return Promise.resolve(status([second]));
+      }
+      if (command === 'pending_scan_preview_path') {
+        return Promise.resolve('/tmp/pending.preview.jpg');
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await import('./main');
+    await waitFor(() => document.querySelectorAll('.pending-item button').length === 2);
+    document.querySelector<HTMLButtonElement>('.pending-item button')?.click();
+    await waitFor(() => statusCalls === 2);
+    document
+      .querySelector<HTMLFormElement>('#settings-form')
+      ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await waitFor(() => statusCalls === 3);
+    supersedingRefresh.reject(new Error('Superseding refresh failed.'));
+    deleteRefresh.resolve(status([second]));
+    await waitFor(
+      () => statusCalls === 4 && document.querySelectorAll('.pending-item').length === 1,
+    );
+
+    expect(document.querySelector('.pending-item button')?.textContent).toBe('Delete');
+    expect(document.querySelector('#notice')?.textContent).toBe('Superseding refresh failed.');
+    expect(document.querySelector('#notice')?.textContent).not.toContain('Local capture deleted');
+  });
+
   it('distinguishes deletion success when the inbox cannot be reloaded', async () => {
     const scan: PendingScan = {
       id: '01909a91-2fd5-77e0-b7e9-962c6f8b57ec',
@@ -587,7 +643,7 @@ describe('desktop main DOM', () => {
     await import('./main');
     await waitFor(() => document.querySelector('.pending-item button')?.textContent === 'Delete');
     document.querySelector<HTMLButtonElement>('.pending-item button')?.click();
-    await waitFor(() => statusCalls === 3);
+    await waitFor(() => statusCalls === 4);
 
     expect(document.querySelector('#notice')?.textContent).toContain(
       'Capture deleted, but inbox refresh failed.',
