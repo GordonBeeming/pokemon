@@ -5,11 +5,39 @@ use axum::http::Method;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
+use std::io::Write;
 use std::sync::Mutex;
 use std::time::Duration;
 use tempfile::tempdir;
 
 struct MemoryTokenStore(Mutex<Option<String>>);
+
+#[derive(Clone, Default)]
+struct CapturedTrace(Arc<Mutex<Vec<u8>>>);
+
+struct CapturedTraceWriter(Arc<Mutex<Vec<u8>>>);
+
+impl Write for CapturedTraceWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .expect("trace output")
+            .extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedTrace {
+    type Writer = CapturedTraceWriter;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        CapturedTraceWriter(self.0.clone())
+    }
+}
 
 impl DesktopTokenStore for MemoryTokenStore {
     fn get(&self, _origin: &str) -> Result<Option<String>> {
@@ -595,6 +623,44 @@ async fn terminal_confirmation_failure_classification_is_exact() {
             expected,
             "classification for {name}"
         );
+    }
+}
+
+#[test]
+fn completed_finalization_failure_emits_correlated_structured_diagnostics() {
+    let scan_id = Uuid::new_v4();
+    let mutation_id = Uuid::new_v4();
+    let captured = CapturedTrace::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .without_time()
+        .with_writer(captured.clone())
+        .finish();
+
+    let error = tracing::subscriber::with_default(subscriber, || {
+        finish_completed_with_diagnostics(scan_id, mutation_id, false, || {
+            Err(DesktopError::InvalidImage(
+                "injected finalization failure".to_string(),
+            ))
+        })
+        .expect_err("injected finalization failure")
+    });
+
+    assert!(matches!(error, DesktopError::InvalidImage(_)));
+    let output = String::from_utf8(captured.0.lock().expect("trace output").clone())
+        .expect("UTF-8 trace output");
+    for expected in [
+        "scan.confirmation.cleanup_failed".to_string(),
+        "operation=\"confirm_scan\"".to_string(),
+        format!("scan_id={scan_id}"),
+        format!("mutation_id={mutation_id}"),
+        "state=\"completed\"".to_string(),
+        "replayed=false".to_string(),
+        "phase=\"local_cleanup\"".to_string(),
+        "retryable=true".to_string(),
+        "error_class=\"invalid_image\"".to_string(),
+    ] {
+        assert!(output.contains(&expected), "missing {expected} in {output}");
     }
 }
 

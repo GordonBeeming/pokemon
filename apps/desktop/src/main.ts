@@ -160,7 +160,11 @@ const cameraAction = new ExclusiveAction();
 const previewQueue = new BoundedAsyncQueue(2);
 const previewScans = new WeakMap<HTMLImageElement, PendingScan>();
 const pendingActionStates = new Map<string, { state: 'working' | 'error'; message: string }>();
-let pendingFocusIntent: { ownerScanId: string; candidates: string[] } | null = null;
+let pendingFocusIntent: {
+  ownerScanId: string;
+  candidates: string[];
+  phase: 'in-flight' | 'completion';
+} | null = null;
 const previewObserver =
   typeof IntersectionObserver === 'undefined'
     ? null
@@ -254,8 +258,10 @@ function pendingArticle(scan: PendingScan): HTMLElement {
   const detail = document.createElement('div');
   detail.className = 'pending-detail';
   const title = document.createElement('strong');
+  title.id = `pending-title-${scan.id}`;
   title.textContent = scan.source === 'camera' ? 'Camera capture' : 'Imported image';
   const metadata = document.createElement('span');
+  metadata.id = `pending-metadata-${scan.id}`;
   metadata.textContent = `${formatBytes(scan.bytes)} · ${new Date(scan.createdAt * 1000).toLocaleString()}`;
   const guidance = document.createElement('span');
   guidance.className = 'pending-state-guidance';
@@ -267,6 +273,8 @@ function pendingArticle(scan: PendingScan): HTMLElement {
   actionStatus.setAttribute('aria-live', 'polite');
   actionStatus.setAttribute('aria-atomic', 'true');
   actionStatus.hidden = true;
+  article.setAttribute('aria-labelledby', title.id);
+  article.setAttribute('aria-describedby', `${metadata.id} ${guidance.id} ${actionStatus.id}`);
   const currentAction = pendingActionStates.get(scan.id);
   if (currentAction) {
     actionStatus.hidden = false;
@@ -284,6 +292,7 @@ function pendingArticle(scan: PendingScan): HTMLElement {
     remove.textContent = 'Delete';
     remove.setAttribute('aria-label', `Delete pending capture ${scan.id}`);
     remove.addEventListener('click', () => {
+      seedPendingFocusOwnership(scan.id);
       void deletePendingCapture(scan, article, remove, actionStatus);
     });
     renderPendingActionState(scan, article, remove, actionStatus, true);
@@ -346,15 +355,24 @@ async function deletePendingCapture(
   try {
     await invoke('delete_pending_scan', { scanId: scan.id });
     pendingActionStates.delete(scan.id);
-    queuePendingFocusIntent(scan.id, article, focusCandidates);
-    await refresh();
-    finishNotice(noticeGeneration, 'ok', 'Local capture deleted.');
+    replacePendingFocusIntent(scan.id, focusCandidates);
+    const refreshError = await refreshAfterDelete();
+    if (!refreshError) {
+      finishNotice(noticeGeneration, 'ok', 'Local capture deleted.');
+      return;
+    }
+    const message = `Capture deleted, but inbox refresh failed. ${refreshError}`;
+    pendingActionStates.set(scan.id, { state: 'error', message });
+    if (article.isConnected) {
+      renderPendingActionState(scan, article, remove, actionStatus, false);
+    }
+    finishNotice(noticeGeneration, 'error', message);
   } catch (error) {
     const message = `Couldn’t delete this capture. ${actionErrorMessage(error)}`;
     pendingActionStates.set(scan.id, { state: 'error', message });
     renderPendingActionState(scan, article, remove, actionStatus, false);
     try {
-      queuePendingFocusIntent(scan.id, article, [scan.id, ...focusCandidates]);
+      replacePendingFocusIntent(scan.id, [scan.id, ...focusCandidates]);
       await refresh();
       if (!status?.pendingScans.some((pending) => pending.id === scan.id)) {
         pendingActionStates.delete(scan.id);
@@ -370,32 +388,64 @@ async function deletePendingCapture(
   }
 }
 
-function queuePendingFocusIntent(
-  ownerScanId: string,
-  article: HTMLElement,
-  candidates: string[],
-): void {
-  if (article.contains(document.activeElement)) {
-    pendingFocusIntent = { ownerScanId, candidates };
-  } else if (pendingFocusIntent?.ownerScanId === ownerScanId) {
-    pendingFocusIntent = null;
+async function refreshAfterDelete(): Promise<string | null> {
+  try {
+    await refresh();
+    return null;
+  } catch {
+    try {
+      await refresh();
+      return null;
+    } catch (error) {
+      return actionErrorMessage(error);
+    }
   }
+}
+
+function pendingRow(scanId: string): HTMLElement | null {
+  return pendingList.querySelector<HTMLElement>(`.pending-item[data-scan-id="${scanId}"]`);
+}
+
+function seedPendingFocusOwnership(ownerScanId: string): void {
+  const owner = pendingRow(ownerScanId);
+  if (owner?.contains(document.activeElement)) {
+    pendingFocusIntent = { ownerScanId, candidates: [ownerScanId], phase: 'in-flight' };
+  }
+}
+
+function replacePendingFocusIntent(ownerScanId: string, candidates: string[]): void {
+  if (pendingFocusIntent?.ownerScanId !== ownerScanId) return;
+  const owner = pendingRow(ownerScanId);
+  if (!owner?.contains(document.activeElement)) {
+    pendingFocusIntent = null;
+    return;
+  }
+  pendingFocusIntent = { ownerScanId, candidates, phase: 'completion' };
 }
 
 function acceptedPendingFocusCandidates(): string[] | undefined {
   const intent = pendingFocusIntent;
   if (!intent) return undefined;
-  const owner = pendingList.querySelector<HTMLElement>(
-    `.pending-item[data-scan-id="${intent.ownerScanId}"]`,
-  );
+  const owner = pendingRow(intent.ownerScanId);
   const active = document.activeElement;
   if (active && active !== document.body && !owner?.contains(active)) {
     pendingFocusIntent = null;
     return undefined;
   }
-  pendingFocusIntent = null;
+  if (intent.phase === 'completion') pendingFocusIntent = null;
   return intent.candidates;
 }
+
+pendingList.addEventListener('focusout', (event) => {
+  const intent = pendingFocusIntent;
+  if (!intent || !(event.relatedTarget instanceof Element)) return;
+  if (
+    event.relatedTarget !== document.body &&
+    !pendingRow(intent.ownerScanId)?.contains(event.relatedTarget)
+  ) {
+    pendingFocusIntent = null;
+  }
+});
 
 function pendingFocusCandidates(scanId: string): string[] {
   const rows = Array.from(pendingList.querySelectorAll<HTMLElement>('.pending-item'));

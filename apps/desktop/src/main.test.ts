@@ -300,9 +300,13 @@ describe('desktop main DOM', () => {
     expect(document.querySelector('.pending-state-guidance')?.textContent).toContain(
       'retry the same confirmation from Codex',
     );
-    expect(document.activeElement?.closest<HTMLElement>('.pending-item')?.dataset.scanId).toBe(
-      claimed.id,
+    const focusedRow = document.activeElement?.closest<HTMLElement>('.pending-item');
+    expect(focusedRow?.dataset.scanId).toBe(claimed.id);
+    expect(focusedRow?.getAttribute('aria-labelledby')).toBe(`pending-title-${claimed.id}`);
+    expect(focusedRow?.getAttribute('aria-describedby')).toContain(
+      `pending-guidance-${claimed.id}`,
     );
+    expect(focusedRow?.getAttribute('aria-describedby')).toContain(`pending-action-${claimed.id}`);
   });
 
   it('moves focus to the next inbox action after a successful delete', async () => {
@@ -456,6 +460,141 @@ describe('desktop main DOM', () => {
       expect(document.activeElement).toBe(acceptedFocus);
     },
   );
+
+  it.each(['success', 'failure'])(
+    'preserves %s focus when an unrelated accepted refresh finishes before Delete settles',
+    async (outcome) => {
+      const first: PendingScan = {
+        id: '01909a91-2fd5-77e0-b7e9-962c6f8b57ec',
+        createdAt: 1,
+        source: 'file',
+        mimeType: 'image/webp',
+        bytes: 16,
+        mutationId: '319e23de-1648-460e-8a82-a1379428357d',
+        state: 'pending',
+        confirmedCardId: null,
+      };
+      const second: PendingScan = {
+        ...first,
+        id: '02909a91-2fd5-77e0-b7e9-962c6f8b57ec',
+        mutationId: '419e23de-1648-460e-8a82-a1379428357d',
+      };
+      const claimed: PendingScan = {
+        ...first,
+        state: 'claimed',
+        confirmedCardId: 'card-1',
+      };
+      const deletion = deferred<void>();
+      let statusCalls = 0;
+      mocks.invoke.mockImplementation((command: string) => {
+        if (command === 'desktop_status') {
+          statusCalls += 1;
+          if (statusCalls < 3) return Promise.resolve(status([first, second]));
+          return Promise.resolve(status(outcome === 'success' ? [second] : [claimed, second]));
+        }
+        if (command === 'pending_scan_preview_path') {
+          return Promise.resolve('/tmp/pending.preview.jpg');
+        }
+        if (command === 'delete_pending_scan') return deletion.promise;
+        return Promise.resolve(undefined);
+      });
+
+      await import('./main');
+      await waitFor(() => document.querySelectorAll('.pending-item button').length === 2);
+      const firstButton = document.querySelector<HTMLButtonElement>('.pending-item button');
+      firstButton?.focus();
+      firstButton?.click();
+      document
+        .querySelector<HTMLFormElement>('#settings-form')
+        ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      await waitFor(() => statusCalls === 2);
+      expect(document.activeElement?.closest<HTMLElement>('.pending-item')?.dataset.scanId).toBe(
+        first.id,
+      );
+
+      if (outcome === 'success') deletion.resolve();
+      else deletion.reject(new Error('claimed while waiting'));
+      await waitFor(() => statusCalls === 3);
+      const expectedScan = outcome === 'success' ? second.id : first.id;
+      await waitFor(
+        () =>
+          document.activeElement?.closest<HTMLElement>('.pending-item')?.dataset.scanId ===
+          expectedScan,
+      );
+    },
+  );
+
+  it('keeps deletion success when only the first post-delete refresh rejects', async () => {
+    const scan: PendingScan = {
+      id: '01909a91-2fd5-77e0-b7e9-962c6f8b57ec',
+      createdAt: 1,
+      source: 'file',
+      mimeType: 'image/webp',
+      bytes: 16,
+      mutationId: '319e23de-1648-460e-8a82-a1379428357d',
+      state: 'pending',
+      confirmedCardId: null,
+    };
+    let statusCalls = 0;
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'desktop_status') {
+        statusCalls += 1;
+        if (statusCalls === 1) return Promise.resolve(status([scan]));
+        if (statusCalls === 2) return Promise.reject(new Error('Status temporarily unavailable.'));
+        return Promise.resolve(status([]));
+      }
+      if (command === 'pending_scan_preview_path') {
+        return Promise.resolve('/tmp/pending.preview.jpg');
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await import('./main');
+    await waitFor(() => document.querySelector('.pending-item button')?.textContent === 'Delete');
+    document.querySelector<HTMLButtonElement>('.pending-item button')?.click();
+    await waitFor(
+      () => statusCalls === 3 && document.querySelectorAll('.pending-item').length === 0,
+    );
+
+    expect(document.querySelector('#notice')?.textContent).toBe('Local capture deleted.');
+    expect(document.querySelector('#notice')?.textContent).not.toContain('Couldn’t delete');
+  });
+
+  it('distinguishes deletion success when the inbox cannot be reloaded', async () => {
+    const scan: PendingScan = {
+      id: '01909a91-2fd5-77e0-b7e9-962c6f8b57ec',
+      createdAt: 1,
+      source: 'file',
+      mimeType: 'image/webp',
+      bytes: 16,
+      mutationId: '319e23de-1648-460e-8a82-a1379428357d',
+      state: 'pending',
+      confirmedCardId: null,
+    };
+    let statusCalls = 0;
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'desktop_status') {
+        statusCalls += 1;
+        if (statusCalls === 1) return Promise.resolve(status([scan]));
+        return Promise.reject(new Error('Status unavailable.'));
+      }
+      if (command === 'pending_scan_preview_path') {
+        return Promise.resolve('/tmp/pending.preview.jpg');
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await import('./main');
+    await waitFor(() => document.querySelector('.pending-item button')?.textContent === 'Delete');
+    document.querySelector<HTMLButtonElement>('.pending-item button')?.click();
+    await waitFor(() => statusCalls === 3);
+
+    expect(document.querySelector('#notice')?.textContent).toContain(
+      'Capture deleted, but inbox refresh failed.',
+    );
+    expect(document.querySelector('#notice')?.textContent).not.toContain('Couldn’t delete');
+    expect(document.querySelector<HTMLButtonElement>('.pending-item button')?.disabled).toBe(true);
+  });
 
   it('keeps the newest concurrent action outcome in the global live region', async () => {
     const first: PendingScan = {

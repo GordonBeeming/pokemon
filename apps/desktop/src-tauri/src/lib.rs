@@ -563,10 +563,9 @@ impl DesktopServices {
                 DesktopError::Mcp("completed scan is missing its stored result".to_string())
             })?;
             let _delete_guard = self.acquire_delete_phase_lock().await;
-            if let Err(error) = transaction.finish_completed() {
-                log_completed_cleanup_failure(scan.id, scan.mutation_id, true, &error);
-                return Err(error);
-            }
+            finish_completed_with_diagnostics(scan.id, scan.mutation_id, true, || {
+                transaction.finish_completed()
+            })?;
             tracing::info!(
                 target: "pokedex.scan",
                 event = "scan.confirmation.completed",
@@ -634,10 +633,9 @@ impl DesktopServices {
         });
         transaction.complete(result.clone())?;
         let _delete_guard = self.acquire_delete_phase_lock().await;
-        if let Err(error) = transaction.finish_completed() {
-            log_completed_cleanup_failure(claimed.id, claimed.mutation_id, replayed, &error);
-            return Err(error);
-        }
+        finish_completed_with_diagnostics(claimed.id, claimed.mutation_id, replayed, || {
+            transaction.finish_completed()
+        })?;
         tracing::info!(
             target: "pokedex.scan",
             event = "scan.confirmation.completed",
@@ -772,6 +770,20 @@ fn log_completed_cleanup_failure(
         error_class = desktop_error_class(error),
         "collection mutation completed but local scan cleanup must be retried"
     );
+}
+
+fn finish_completed_with_diagnostics<F>(
+    scan_id: Uuid,
+    mutation_id: Uuid,
+    replayed: bool,
+    finish: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    finish().inspect_err(|error| {
+        log_completed_cleanup_failure(scan_id, mutation_id, replayed, error);
+    })
 }
 
 fn object(value: Value) -> Result<Map<String, Value>> {
