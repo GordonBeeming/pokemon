@@ -455,13 +455,13 @@ describe('desktop main DOM', () => {
       );
       const acceptedFocus = document.activeElement;
       actionRefresh.resolve(status(outcome === 'success' ? [] : [first, second]));
-      if (outcome === 'success') await waitFor(() => statusCalls === 4);
       await settle();
       await settle();
+      expect(statusCalls).toBe(3);
       expect(document.activeElement?.closest<HTMLElement>('.pending-item')?.dataset.scanId).toBe(
         expectedScan,
       );
-      if (outcome === 'failure') expect(document.activeElement).toBe(acceptedFocus);
+      expect(document.activeElement).toBe(acceptedFocus);
     },
   );
 
@@ -614,6 +614,57 @@ describe('desktop main DOM', () => {
     expect(document.querySelector('.pending-item button')?.textContent).toBe('Delete');
     expect(document.querySelector('#notice')?.textContent).toBe('Superseding refresh failed.');
     expect(document.querySelector('#notice')?.textContent).not.toContain('Local capture deleted');
+  });
+
+  it('uses an accepted empty status instead of replacing its focused empty state after stale Delete', async () => {
+    const scan: PendingScan = {
+      id: '01909a91-2fd5-77e0-b7e9-962c6f8b57ec',
+      createdAt: 1,
+      source: 'file',
+      mimeType: 'image/webp',
+      bytes: 16,
+      mutationId: '319e23de-1648-460e-8a82-a1379428357d',
+      state: 'pending',
+      confirmedCardId: null,
+    };
+    const settingsSave = deferred<void>();
+    const deleteRefresh = deferred<DesktopStatus>();
+    let statusCalls = 0;
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'desktop_status') {
+        statusCalls += 1;
+        if (statusCalls === 1) return Promise.resolve(status([scan]));
+        if (statusCalls === 2) return deleteRefresh.promise;
+        return Promise.resolve(status([]));
+      }
+      if (command === 'save_settings') return settingsSave.promise;
+      if (command === 'pending_scan_preview_path') {
+        return Promise.resolve('/tmp/pending.preview.jpg');
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await import('./main');
+    await waitFor(() => document.querySelector('.pending-item button')?.textContent === 'Delete');
+    document
+      .querySelector<HTMLFormElement>('#settings-form')
+      ?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    const deleteButton = document.querySelector<HTMLButtonElement>('.pending-item button');
+    deleteButton?.focus();
+    deleteButton?.click();
+    await waitFor(() => statusCalls === 2);
+    settingsSave.resolve();
+    await waitFor(
+      () => statusCalls === 3 && document.querySelector('.empty-state') === document.activeElement,
+    );
+    const focusedEmptyState = document.activeElement;
+    deleteRefresh.resolve(status([]));
+    await settle();
+    await settle();
+
+    expect(statusCalls).toBe(3);
+    expect(document.activeElement).toBe(focusedEmptyState);
+    expect(document.querySelector('#notice')?.textContent).toBe('Local capture deleted.');
   });
 
   it('distinguishes deletion success when the inbox cannot be reloaded', async () => {

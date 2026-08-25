@@ -153,6 +153,7 @@ const copyMcp = requireElement('#copy-mcp', HTMLButtonElement);
 const notice = requireElement('#notice', HTMLDivElement);
 
 let status: DesktopStatus | null = null;
+let acceptedStatusVersion = 0;
 let cameraStream: MediaStream | null = null;
 const refreshGenerations = new LatestGeneration();
 const noticeGenerations = new LatestGeneration();
@@ -192,6 +193,7 @@ async function refresh(): Promise<RefreshOutcome> {
   const next = await invoke<DesktopStatus>('desktop_status');
   const pending = pendingFragment(next.pendingScans);
   if (!refreshGenerations.isCurrent(generation)) return 'stale';
+  acceptedStatusVersion += 1;
   status = next;
   renderStatus(next);
   pendingCount.textContent = `${next.pendingScans.length} pending`;
@@ -349,6 +351,7 @@ async function deletePendingCapture(
   actionStatus: HTMLSpanElement,
 ): Promise<void> {
   const focusCandidates = pendingFocusCandidates(scan.id);
+  const acceptedStatusVersionAtStart = acceptedStatusVersion;
   const noticeGeneration = beginNotice();
   pendingActionStates.set(scan.id, {
     state: 'working',
@@ -359,7 +362,7 @@ async function deletePendingCapture(
     await invoke('delete_pending_scan', { scanId: scan.id });
     pendingActionStates.delete(scan.id);
     replacePendingFocusIntent(scan.id, focusCandidates);
-    const refreshError = await refreshAfterDelete();
+    const refreshError = await refreshAfterDelete(scan.id, acceptedStatusVersionAtStart);
     if (!refreshError) {
       finishNotice(noticeGeneration, 'ok', 'Local capture deleted.');
       return;
@@ -391,7 +394,10 @@ async function deletePendingCapture(
   }
 }
 
-async function refreshAfterDelete(): Promise<string | null> {
+async function refreshAfterDelete(
+  deletedScanId: string,
+  acceptedStatusVersionAtStart: number,
+): Promise<string | null> {
   const maximumAttempts = 3;
   let staleAttempts = 0;
   const failures: string[] = [];
@@ -399,6 +405,13 @@ async function refreshAfterDelete(): Promise<string | null> {
     if (attempt > 0) preserveCurrentPendingFocusForRefresh();
     try {
       if ((await refresh()) === 'accepted') return null;
+      if (
+        acceptedStatusVersion > acceptedStatusVersionAtStart &&
+        status &&
+        !status.pendingScans.some((scan) => scan.id === deletedScanId)
+      ) {
+        return null;
+      }
       staleAttempts += 1;
     } catch (error) {
       failures.push(actionErrorMessage(error));
