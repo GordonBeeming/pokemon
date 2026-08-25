@@ -225,11 +225,15 @@ fn pending_scan_image(
 }
 
 #[tauri::command]
-fn delete_pending_scan(
+async fn delete_pending_scan(
     state: tauri::State<'_, TauriState>,
     scan_id: Uuid,
 ) -> std::result::Result<(), String> {
-    state.services.inbox.delete(scan_id).map_err(display_error)
+    state
+        .services
+        .delete_scan(scan_id)
+        .await
+        .map_err(display_error)
 }
 
 #[tauri::command]
@@ -465,15 +469,16 @@ impl DesktopServices {
         }
         let scan_id = required_uuid(arguments, "scanId")?;
         let card_id = required_string(arguments, "cardId", 128)?;
-        let claimed = self.inbox.claim(scan_id, card_id)?;
+        let transaction = self.inbox.begin_scan_transaction()?;
+        let claimed = transaction.claim(scan_id, card_id)?;
         if claimed.state == ScanState::Completed {
             let completed = claimed.completed_result.ok_or_else(|| {
                 DesktopError::Mcp("completed scan is missing its stored result".to_string())
             })?;
-            self.inbox.finish_completed(scan_id)?;
+            transaction.finish_completed(scan_id)?;
             return Ok(ToolPayload::Structured(completed));
         }
-        self.inbox.read_image(scan_id)?;
+        transaction.read_image(scan_id)?;
         let (base, token) = self.cloud_context().await?;
         let mutation = self
             .cloud
@@ -485,9 +490,14 @@ impl DesktopServices {
             "collection": mutation,
             "deletedScanId": scan_id
         });
-        self.inbox.complete(scan_id, result.clone())?;
-        self.inbox.finish_completed(scan_id)?;
+        transaction.complete(scan_id, result.clone())?;
+        transaction.finish_completed(scan_id)?;
         Ok(ToolPayload::Structured(result))
+    }
+
+    async fn delete_scan(&self, scan_id: Uuid) -> Result<()> {
+        let _guard = self.scan_lock.lock().await;
+        self.inbox.delete(scan_id)
     }
 
     async fn set_collection_tool(&self, arguments: &Map<String, Value>) -> Result<ToolPayload> {
@@ -685,6 +695,7 @@ mod tests {
     use axum::routing::{get, patch, post, put};
     use axum::{Json, Router};
     use std::sync::Mutex;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     struct MemoryTokenStore(Mutex<Option<String>>);
@@ -955,6 +966,61 @@ mod tests {
     }
 
     #[derive(Clone)]
+    struct DelayedMutationState {
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        mutation_ids: Arc<Mutex<Vec<String>>>,
+    }
+
+    async fn delayed_collection(
+        State(state): State<DelayedMutationState>,
+        AxumPath(card_id): AxumPath<String>,
+        Json(body): Json<Value>,
+    ) -> Json<Value> {
+        state.mutation_ids.lock().expect("mutation IDs").push(
+            body["mutationId"]
+                .as_str()
+                .expect("mutation ID")
+                .to_string(),
+        );
+        state.started.notify_one();
+        state.release.notified().await;
+        Json(json!({
+            "ok": true,
+            "state": {
+                "cardId": card_id,
+                "quantity": 1,
+                "notes": null,
+                "revision": 1,
+                "updatedAt": "2026-08-25T00:00:00Z"
+            },
+            "replayed": false
+        }))
+    }
+
+    async fn delayed_mutation_cloud() -> (String, DelayedMutationState) {
+        let state = DelayedMutationState {
+            started: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+            mutation_ids: Arc::new(Mutex::new(Vec::new())),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("mutation listener");
+        let address = listener.local_addr().expect("mutation address");
+        let router = Router::new()
+            .route(
+                "/api/desktop/collection/{card_id}/increment",
+                post(delayed_collection),
+            )
+            .with_state(state.clone());
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("mutation cloud");
+        });
+        (format!("http://{address}"), state)
+    }
+
+    #[derive(Clone)]
     struct DelayedPairing {
         started: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
@@ -1098,6 +1164,70 @@ mod tests {
         let mutation_ids = requests.0.lock().expect("mutation requests");
         assert_eq!(mutation_ids.len(), 2);
         assert_eq!(mutation_ids[0], mutation_ids[1]);
+    }
+
+    #[tokio::test]
+    async fn confirmation_serializes_ui_delete_through_remote_mutation_and_cleanup() {
+        let root = tempdir().expect("temp dir");
+        let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
+        let (cloud, mutation) = delayed_mutation_cloud().await;
+        let mut config = AppConfig::defaults(&paths);
+        config.cloud_base_url = cloud;
+        let services = Arc::new(
+            DesktopServices::new(
+                paths,
+                config,
+                Arc::new(MemoryTokenStore(Mutex::new(Some("token".to_string())))),
+            )
+            .expect("services"),
+        );
+        let scan = services
+            .inbox
+            .save(
+                b"RIFF\x04\x00\x00\x00WEBPdata",
+                b"\xff\xd8\xffpreview",
+                "image/webp",
+                CaptureSource::Camera,
+            )
+            .expect("scan");
+        let confirm_services = services.clone();
+        let confirm = tokio::spawn(async move {
+            confirm_services
+                .call_tool(
+                    ToolName::ConfirmScan,
+                    json!({"scanId":scan.id,"cardId":"card-1","confirmed":true}),
+                )
+                .await
+        });
+        mutation.started.notified().await;
+
+        let delete_services = services.clone();
+        let mut delete = tokio::spawn(async move { delete_services.delete_scan(scan.id).await });
+        assert!(tokio::time::timeout(Duration::from_millis(50), &mut delete)
+            .await
+            .is_err());
+        mutation.release.notify_one();
+
+        assert!(matches!(
+            confirm.await.expect("confirm task").expect("confirmation"),
+            ToolPayload::Structured(_)
+        ));
+        let delete_error = delete
+            .await
+            .expect("delete task")
+            .expect_err("serialized delete observes completed removal");
+        assert!(delete_error
+            .to_string()
+            .contains("outside the permitted local directory"));
+        assert!(services.inbox.list().expect("empty inbox").is_empty());
+        assert_eq!(
+            mutation
+                .mutation_ids
+                .lock()
+                .expect("mutation IDs")
+                .as_slice(),
+            &[scan.mutation_id.to_string()]
+        );
     }
 
     #[tokio::test]

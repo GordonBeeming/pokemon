@@ -33,12 +33,19 @@ enum DeleteJournalState {
 struct DeleteJournal {
     operation_id: Uuid,
     scan_id: Uuid,
+    capture_mime_type: String,
+    capture_original: String,
     state: DeleteJournalState,
     entries: Vec<DeleteEntry>,
 }
 
 struct DeleteLock {
     connection: rusqlite::Connection,
+}
+
+pub(crate) struct ScanTransaction<'a> {
+    inbox: &'a PendingInbox,
+    _lock: DeleteLock,
 }
 
 #[derive(Debug, Default)]
@@ -69,6 +76,13 @@ pub(super) fn is_delete_artifact(path: &Path) -> bool {
 }
 
 impl PendingInbox {
+    pub(crate) fn begin_scan_transaction(&self) -> Result<ScanTransaction<'_>> {
+        Ok(ScanTransaction {
+            inbox: self,
+            _lock: self.acquire_delete_lock()?,
+        })
+    }
+
     pub(super) fn recover_deletes_at_startup(&self) {
         match self.try_delete_lock() {
             Ok(Some(_lock)) => match self.recover_delete_journals() {
@@ -95,8 +109,7 @@ impl PendingInbox {
         }
     }
 
-    pub(super) fn delete_scan(&self, scan: &PendingScan) -> Result<()> {
-        let _lock = self.acquire_delete_lock()?;
+    fn delete_scan_locked(&self, scan: &PendingScan) -> Result<()> {
         self.delete_scan_locked_with(
             scan,
             |source, tombstone| std::fs::rename(source, tombstone),
@@ -169,9 +182,15 @@ impl PendingInbox {
 
     fn new_delete_journal(&self, scan: &PendingScan) -> Result<DeleteJournal> {
         let operation_id = Uuid::new_v4();
+        let capture_path = self.image_path(scan.id, &scan.mime_type);
+        let capture_original = capture_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .ok_or_else(|| DesktopError::InvalidPath(capture_path.clone()))?
+            .to_string();
         let mut entries = Vec::new();
         for (label, original) in [
-            ("capture", self.image_path(scan.id, &scan.mime_type)),
+            ("capture", capture_path),
             ("preview", self.thumbnail_path(scan.id)),
             ("metadata", self.metadata_path(scan.id)),
         ] {
@@ -197,6 +216,8 @@ impl PendingInbox {
         Ok(DeleteJournal {
             operation_id,
             scan_id: scan.id,
+            capture_mime_type: scan.mime_type.clone(),
+            capture_original,
             state: DeleteJournalState::Pending,
             entries,
         })
@@ -366,26 +387,8 @@ impl PendingInbox {
         suffix: &str,
         report: &mut DeleteRecoveryReport,
     ) -> Result<Vec<PathBuf>> {
-        let mut paths = Vec::new();
-        for entry in std::fs::read_dir(&self.root)? {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(error) => {
-                    report.deferred += 1;
-                    report
-                        .diagnostics
-                        .push(format!("inbox directory entry could not be read: {error}"));
-                    continue;
-                }
-            };
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with(DELETE_TOMBSTONE_PREFIX) && name.ends_with(suffix) {
-                paths.push(entry.path());
-            }
-        }
-        paths.sort();
-        Ok(paths)
+        let entries = std::fs::read_dir(&self.root)?.map(|entry| entry.map(|entry| entry.path()));
+        Ok(collect_delete_journal_paths(entries, suffix, report))
     }
 
     fn read_delete_journal(&self, path: &Path, temporary: bool) -> Result<DeleteJournal> {
@@ -412,6 +415,24 @@ impl PendingInbox {
             ));
         }
         let mut labels = HashSet::new();
+        if !matches!(
+            journal.capture_mime_type.as_str(),
+            "image/jpeg" | "image/png" | "image/webp" | "image/heic"
+        ) {
+            return Err(DesktopError::InvalidImage(
+                "pending-delete journal contains an invalid capture MIME type".to_string(),
+            ));
+        }
+        let expected_capture = format!(
+            "{}.{}",
+            journal.scan_id,
+            super::extension(&journal.capture_mime_type)
+        );
+        if journal.capture_original != expected_capture {
+            return Err(DesktopError::InvalidImage(
+                "pending-delete journal capture identity does not match its MIME type".to_string(),
+            ));
+        }
         for entry in &journal.entries {
             if !labels.insert(entry.label.as_str()) {
                 return Err(DesktopError::InvalidImage(
@@ -420,15 +441,7 @@ impl PendingInbox {
             }
             self.delete_entry_paths(entry)?;
             let valid_original = match entry.label.as_str() {
-                "capture" => {
-                    let prefix = format!("{}.", journal.scan_id);
-                    entry
-                        .original
-                        .strip_prefix(&prefix)
-                        .is_some_and(|extension| {
-                            matches!(extension, "jpg" | "png" | "webp" | "heic")
-                        })
-                }
+                "capture" => entry.original == journal.capture_original,
                 "preview" => entry.original == format!("{}.preview.jpg", journal.scan_id),
                 "metadata" => entry.original == format!("{}.json", journal.scan_id),
                 _ => {
@@ -571,9 +584,36 @@ impl PendingInbox {
     fn acquire_delete_lock(&self) -> Result<DeleteLock> {
         self.try_delete_lock()?.ok_or_else(|| {
             DesktopError::InvalidImage(
-                "pending scan deletion is already running in another process".to_string(),
+                "pending scan transaction is already running in another process".to_string(),
             )
         })
+    }
+}
+
+impl ScanTransaction<'_> {
+    pub(crate) fn claim(&self, id: Uuid, card_id: &str) -> Result<PendingScan> {
+        self.inbox.claim_unlocked(id, card_id)
+    }
+
+    pub(crate) fn read_image(&self, id: Uuid) -> Result<super::PendingScanImage> {
+        self.inbox.read_image(id)
+    }
+
+    pub(crate) fn complete(&self, id: Uuid, result: serde_json::Value) -> Result<PendingScan> {
+        self.inbox.complete_unlocked(id, result)
+    }
+
+    pub(crate) fn delete(&self, id: Uuid) -> Result<()> {
+        let scan = self.inbox.read_metadata(id)?;
+        self.inbox.delete_scan_locked(&scan)
+    }
+
+    pub(crate) fn finish_completed(&self, id: Uuid) -> Result<()> {
+        let scan = self.inbox.read_metadata(id)?;
+        if scan.state != super::ScanState::Completed {
+            return Err(DesktopError::Mcp("scan is not complete".to_string()));
+        }
+        self.inbox.delete_scan_locked(&scan)
     }
 }
 
@@ -597,6 +637,35 @@ fn delete_file_name(path: &Path) -> String {
     path.file_name()
         .map(|value| value.to_string_lossy().into_owned())
         .unwrap_or_else(|| "unknown-journal".to_string())
+}
+
+fn collect_delete_journal_paths<I>(
+    entries: I,
+    suffix: &str,
+    report: &mut DeleteRecoveryReport,
+) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = std::io::Result<PathBuf>>,
+{
+    let mut paths = Vec::new();
+    for entry in entries {
+        let path = match entry {
+            Ok(path) => path,
+            Err(error) => {
+                report.deferred += 1;
+                report
+                    .diagnostics
+                    .push(format!("inbox directory entry could not be read: {error}"));
+                continue;
+            }
+        };
+        let name = delete_file_name(&path);
+        if name.starts_with(DELETE_TOMBSTONE_PREFIX) && name.ends_with(suffix) {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    paths
 }
 
 fn desktop_error_to_io(error: DesktopError) -> std::io::Error {

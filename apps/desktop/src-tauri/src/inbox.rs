@@ -199,11 +199,15 @@ impl PendingInbox {
     }
 
     pub fn delete(&self, id: Uuid) -> Result<()> {
-        let scan = self.read_metadata(id)?;
-        self.delete_scan(&scan)
+        self.begin_scan_transaction()?.delete(id)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn claim(&self, id: Uuid, card_id: &str) -> Result<PendingScan> {
+        self.begin_scan_transaction()?.claim(id, card_id)
+    }
+
+    fn claim_unlocked(&self, id: Uuid, card_id: &str) -> Result<PendingScan> {
         let mut scan = self.read_metadata(id)?;
         match scan.state {
             ScanState::Pending => {
@@ -222,7 +226,12 @@ impl PendingInbox {
         Ok(scan)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn complete(&self, id: Uuid, result: serde_json::Value) -> Result<PendingScan> {
+        self.begin_scan_transaction()?.complete(id, result)
+    }
+
+    fn complete_unlocked(&self, id: Uuid, result: serde_json::Value) -> Result<PendingScan> {
         let mut scan = self.read_metadata(id)?;
         if scan.state != ScanState::Claimed {
             return Err(DesktopError::Mcp(
@@ -235,12 +244,9 @@ impl PendingInbox {
         Ok(scan)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn finish_completed(&self, id: Uuid) -> Result<()> {
-        let scan = self.read_metadata(id)?;
-        if scan.state != ScanState::Completed {
-            return Err(DesktopError::Mcp("scan is not complete".to_string()));
-        }
-        self.delete_scan(&scan)
+        self.begin_scan_transaction()?.finish_completed(id)
     }
 
     fn read_metadata(&self, id: Uuid) -> Result<PendingScan> {
@@ -481,5 +487,9 @@ mod tests {
                 .completed_result,
             Some(serde_json::json!({ "ok": true }))
         );
+        inbox
+            .finish_completed(scan.id)
+            .expect("standalone completion cleanup");
+        assert!(inbox.list().expect("empty inbox").is_empty());
     }
 }

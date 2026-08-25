@@ -316,6 +316,57 @@ fn canonical_validation_rejects_duplicate_unknown_missing_and_cross_scan_entries
         .expect_err("cross-scan original")
         .to_string()
         .contains("does not belong to its scan"));
+
+    for (mime_type, wrong_extension) in [
+        ("image/jpeg", "png"),
+        ("image/png", "webp"),
+        ("image/webp", "heic"),
+        ("image/heic", "jpg"),
+    ] {
+        let mut mismatch = inbox.new_delete_journal(&scan).expect("journal");
+        mismatch.capture_mime_type = mime_type.to_string();
+        mismatch.capture_original = format!("{}.{}", scan.id, wrong_extension);
+        mismatch
+            .entries
+            .iter_mut()
+            .find(|entry| entry.label == "capture")
+            .expect("capture entry")
+            .original = mismatch.capture_original.clone();
+        assert!(inbox
+            .validate_delete_journal(&mismatch)
+            .expect_err("same-scan extension mismatch")
+            .to_string()
+            .contains("capture identity"));
+    }
+}
+
+#[test]
+fn directory_entry_errors_are_reported_without_hiding_later_journals() {
+    let root = tempdir().expect("temp dir");
+    let first = root
+        .path()
+        .join(format!("{DELETE_TOMBSTONE_PREFIX}a.journal.json"));
+    let later = root
+        .path()
+        .join(format!("{DELETE_TOMBSTONE_PREFIX}b.journal.json"));
+    let unrelated = root.path().join("capture.webp");
+    let mut report = DeleteRecoveryReport::default();
+
+    let paths = collect_delete_journal_paths(
+        vec![
+            Ok(first.clone()),
+            Err(std::io::Error::other("injected entry failure")),
+            Ok(unrelated),
+            Ok(later.clone()),
+        ],
+        ".journal.json",
+        &mut report,
+    );
+
+    assert_eq!(paths, vec![first, later]);
+    assert_eq!(report.deferred, 1);
+    assert_eq!(report.diagnostics.len(), 1);
+    assert!(report.diagnostics[0].contains("injected entry failure"));
 }
 
 #[test]
@@ -453,6 +504,12 @@ fn second_process_cannot_scavenge_an_inflight_delete() {
     assert!(!capture.exists());
     assert!(capture_tombstone.exists());
     assert!(inbox.delete_journal_path(journal.operation_id).is_file());
+    let claim_error = inbox
+        .claim(scan.id, "card-1")
+        .expect_err("second process cannot claim during a transaction");
+    assert!(claim_error
+        .to_string()
+        .contains("pending scan transaction is already running"));
 
     std::fs::write(&release, b"release").expect("release marker");
     assert!(child.wait().expect("child exit").success());
