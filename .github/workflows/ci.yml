@@ -47,8 +47,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.1 --locked
       - run: pnpm --dir apps/desktop lint
       - run: pnpm --dir apps/desktop typecheck
       - run: pnpm --dir apps/desktop test
+      - run: pnpm --dir apps/desktop audit:macos
       - run: pnpm --dir apps/desktop build
       - run: pnpm --dir apps/desktop tauri:debug

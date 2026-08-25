@@ -58,21 +58,28 @@ export interface CaptureInput {
 export interface EncodedFrame {
   mimeType: string;
   bytes: Uint8Array;
+  previewBytes: Uint8Array;
 }
 
 export type SaveCapture = (
   bytes: number[],
   mimeType: string,
   source: CaptureSource,
+  previewBytes: number[],
 ) => Promise<PendingScan>;
 
 const allowedCaptureTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic']);
 const maxCaptureBytes = 25 * 1024 * 1024;
 
-export async function importCapture(input: CaptureInput, save: SaveCapture): Promise<PendingScan> {
+export async function importCapture(
+  input: CaptureInput,
+  previewBytes: Uint8Array,
+  save: SaveCapture,
+): Promise<PendingScan> {
   validateCapture(input.type, input.size);
+  validatePreview(previewBytes);
   const bytes = new Uint8Array(await input.arrayBuffer());
-  return save(Array.from(bytes), input.type, 'file');
+  return save(Array.from(bytes), input.type, 'file', Array.from(previewBytes));
 }
 
 export async function captureCameraFrame(
@@ -81,7 +88,14 @@ export async function captureCameraFrame(
 ): Promise<PendingScan> {
   const frame = await encode();
   validateCapture(frame.mimeType, frame.bytes.byteLength);
-  return save(Array.from(frame.bytes), frame.mimeType, 'camera');
+  validatePreview(frame.previewBytes);
+  return save(Array.from(frame.bytes), frame.mimeType, 'camera', Array.from(frame.previewBytes));
+}
+
+function validatePreview(bytes: Uint8Array): void {
+  if (bytes.byteLength < 4 || bytes.byteLength > 256 * 1024) {
+    throw new Error('The capture preview could not be prepared.');
+  }
 }
 
 export function imageDataUrl(image: PendingScanImage): string {

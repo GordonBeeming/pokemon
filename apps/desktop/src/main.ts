@@ -1,16 +1,14 @@
-import { invoke } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import {
   captureCameraFrame,
   formatBytes,
-  imageDataUrl,
   importCapture,
   pairingPageUrl,
   type AppConfig,
   type DesktopStatus,
   type EncodedFrame,
   type PendingScan,
-  type PendingScanImage,
   type SaveCapture,
   type SyncReport,
 } from './domain';
@@ -177,8 +175,8 @@ const previewObserver =
         { rootMargin: '160px' },
       );
 
-const saveLocalCapture: SaveCapture = async (bytes, mimeType, source) =>
-  invoke<PendingScan>('save_capture', { bytes, mimeType, source });
+const saveLocalCapture: SaveCapture = async (bytes, mimeType, source, previewBytes) =>
+  invoke<PendingScan>('save_capture', { bytes, mimeType, source, previewBytes });
 
 async function refresh(): Promise<void> {
   const generation = refreshGenerations.next();
@@ -258,8 +256,8 @@ function pendingArticle(scan: PendingScan): HTMLElement {
 
 async function loadPendingPreview(image: HTMLImageElement, scan: PendingScan): Promise<void> {
   await previewQueue.run(async () => {
-    const pendingImage = await invoke<PendingScanImage>('pending_scan_image', { scanId: scan.id });
-    if (image.isConnected) image.src = imageDataUrl(pendingImage);
+    const path = await invoke<string>('pending_scan_preview_path', { scanId: scan.id });
+    if (image.isConnected) image.src = convertFileSrc(path);
   });
 }
 
@@ -302,7 +300,8 @@ fileCapture.addEventListener('change', () => {
   void runAction(async () => {
     const file = fileCapture.files?.item(0);
     if (!file) return;
-    await importCapture(file, saveLocalCapture);
+    const preview = await encodeFilePreview(file);
+    await importCapture(file, preview, saveLocalCapture);
     fileCapture.value = '';
     await refresh();
     showNotice('Image added to the pending inbox.');
@@ -404,6 +403,7 @@ async function encodeCameraFrame(): Promise<EncodedFrame> {
   const context = canvas.getContext('2d');
   if (!context) throw new Error('The camera frame could not be prepared.');
   context.drawImage(camera, 0, 0, canvas.width, canvas.height);
+  const previewBytes = await encodeThumbnail(canvas, canvas.width, canvas.height);
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob(
       (value) =>
@@ -412,7 +412,44 @@ async function encodeCameraFrame(): Promise<EncodedFrame> {
       0.92,
     );
   });
-  return { mimeType: blob.type, bytes: new Uint8Array(await blob.arrayBuffer()) };
+  return {
+    mimeType: blob.type,
+    bytes: new Uint8Array(await blob.arrayBuffer()),
+    previewBytes,
+  };
+}
+
+async function encodeFilePreview(file: File): Promise<Uint8Array> {
+  const bitmap = await createImageBitmap(file);
+  try {
+    return await encodeThumbnail(bitmap, bitmap.width, bitmap.height);
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function encodeThumbnail(
+  source: CanvasImageSource,
+  sourceWidth: number,
+  sourceHeight: number,
+): Promise<Uint8Array> {
+  const maximum = 240;
+  const scale = Math.min(1, maximum / Math.max(sourceWidth, sourceHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+  canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('The capture preview could not be prepared.');
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (value) =>
+        value ? resolve(value) : reject(new Error('The capture preview could not be encoded.')),
+      'image/jpeg',
+      0.72,
+    );
+  });
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 function stopCamera(): void {

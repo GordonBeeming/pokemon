@@ -173,6 +173,18 @@ export type BackupPageRunner = (
   action: () => Promise<BackupPageResult>,
 ) => Promise<BackupPageResult>;
 
+export interface CreateBackupOptions {
+  backupId?: string;
+  runPage?: BackupPageRunner;
+}
+
+export type RestoreStepRunner = (name: string, action: () => Promise<null>) => Promise<null>;
+
+export interface RestoreBackupOptions {
+  restoreRunId?: string;
+  runStep?: RestoreStepRunner;
+}
+
 const backupRowSchemas = {
   catalogue: catalogueRow,
   sources: sourceRow,
@@ -377,111 +389,149 @@ export async function createBackup(
   db: D1Database,
   art: R2Bucket,
   ownerId: string,
-  runPage: BackupPageRunner = (_name, action) => action(),
+  options: CreateBackupOptions | BackupPageRunner = {},
 ): Promise<{ id: string; checksum: string }> {
-  const id = newId('backup');
+  const configured = typeof options === 'function' ? { runPage: options } : options;
+  const runPage = configured.runPage ?? ((_name, action) => action());
+  const id = configured.backupId ?? newId('backup');
+  if (!/^backup_[A-Za-z0-9_-]+$/u.test(id)) throw new ApplicationError('backup_id_invalid', 400);
   const objectKey = `backups/${ownerId}/${id}/manifest.json`;
   const owner = await db
-    .prepare('SELECT mutation_epoch FROM users WHERE id = ?1')
+    .prepare('SELECT backup_epoch FROM users WHERE id = ?1')
     .bind(ownerId)
-    .first<{ mutation_epoch: number }>();
+    .first<{ backup_epoch: number }>();
   if (!owner) throw new ApplicationError('backup_owner_not_found', 404);
   await db
     .prepare(
-      'INSERT INTO backup_runs (id, owner_id, object_key, checksum, created_at) VALUES (?1, ?2, ?3, ?4, ?5)',
+      `INSERT INTO backup_runs (id, owner_id, object_key, checksum, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(id) DO NOTHING`,
     )
     .bind(id, ownerId, objectKey, 'pending', nowSeconds())
     .run();
-  try {
-    const chunks: BackupManifest['chunks'] = [];
-    let totalBytes = 0;
-    for (const query of backupQueries) {
-      let cursor = 0;
-      let page = 0;
-      while (true) {
-        const pageCursor = cursor;
-        const result = await runPage(`backup-${query.kind}-${page}`, async () => {
-          const selected = await db
-            .prepare(query.sql)
-            .bind(ownerId, pageCursor, BACKUP_QUERY_ROWS)
-            .all<BackupRawRow>();
-          if (selected.results.length === 0)
-            return { cursor: pageCursor, rowCount: 0, bytes: 0, chunks: [] };
-          const last = selected.results.at(-1);
-          if (!last || !Number.isInteger(last.backup_cursor) || last.backup_cursor <= pageCursor)
-            throw new ApplicationError('backup_cursor_invalid', 500);
-          const rows =
-            query.kind === 'art_manifest'
-              ? await backupArtRows(art, ownerId, id, selected.results)
-              : parseBackupRows(
-                  query.kind,
-                  selected.results.map(({ backup_cursor: ignored, ...row }) => {
-                    void ignored;
-                    return row;
-                  }),
-                );
-          const pageChunks: BackupManifest['chunks'] = [];
-          const bytes = await writeBackupRows(
-            art,
-            ownerId,
-            id,
-            query.kind,
-            rows,
-            pageChunks,
-            page * BACKUP_QUERY_ROWS,
-          );
-          return {
-            cursor: last.backup_cursor,
-            rowCount: selected.results.length,
-            bytes,
-            chunks: pageChunks,
-          };
-        });
-        if (result.rowCount === 0) break;
-        cursor = result.cursor;
-        chunks.push(...result.chunks);
-        totalBytes += result.bytes;
-        if (totalBytes > MAX_BACKUP_BYTES) throw new ApplicationError('backup_too_large', 413);
-        if (result.rowCount < BACKUP_QUERY_ROWS) break;
-        page += 1;
-      }
+  const run = await db
+    .prepare('SELECT owner_id, object_key FROM backup_runs WHERE id = ?1')
+    .bind(id)
+    .first<{ owner_id: string; object_key: string }>();
+  if (!run || run.owner_id !== ownerId || run.object_key !== objectKey)
+    throw new ApplicationError('backup_run_conflict', 409);
+  const chunks: BackupManifest['chunks'] = [];
+  let totalBytes = 0;
+  for (const query of backupQueries) {
+    let cursor = 0;
+    let page = 0;
+    while (true) {
+      const pageCursor = cursor;
+      const result = await runPage(`backup-${query.kind}-${page}`, async () => {
+        const selected = await db
+          .prepare(query.sql)
+          .bind(ownerId, pageCursor, BACKUP_QUERY_ROWS)
+          .all<BackupRawRow>();
+        if (selected.results.length === 0)
+          return { cursor: pageCursor, rowCount: 0, bytes: 0, chunks: [] };
+        const last = selected.results.at(-1);
+        if (!last || !Number.isInteger(last.backup_cursor) || last.backup_cursor <= pageCursor)
+          throw new ApplicationError('backup_cursor_invalid', 500);
+        const rows =
+          query.kind === 'art_manifest'
+            ? await backupArtRows(art, ownerId, id, selected.results)
+            : parseBackupRows(
+                query.kind,
+                selected.results.map(({ backup_cursor: ignored, ...row }) => {
+                  void ignored;
+                  return row;
+                }),
+              );
+        const pageChunks: BackupManifest['chunks'] = [];
+        const bytes = await writeBackupRows(
+          art,
+          ownerId,
+          id,
+          query.kind,
+          rows,
+          pageChunks,
+          page * BACKUP_QUERY_ROWS,
+        );
+        return {
+          cursor: last.backup_cursor,
+          rowCount: selected.results.length,
+          bytes,
+          chunks: pageChunks,
+        };
+      });
+      if (result.rowCount === 0) break;
+      cursor = result.cursor;
+      chunks.push(...result.chunks);
+      totalBytes += result.bytes;
+      if (totalBytes > MAX_BACKUP_BYTES) throw new ApplicationError('backup_too_large', 413);
+      if (result.rowCount < BACKUP_QUERY_ROWS) break;
+      page += 1;
     }
-    const currentOwner = await db
-      .prepare('SELECT mutation_epoch FROM users WHERE id = ?1')
-      .bind(ownerId)
-      .first<{ mutation_epoch: number }>();
-    if (!currentOwner || currentOwner.mutation_epoch !== owner.mutation_epoch)
-      throw new ApplicationError('backup_changed_during_creation', 409);
-    const manifest: BackupManifest = {
-      version: BACKUP_VERSION,
-      ownerId,
-      mutationEpoch: owner.mutation_epoch,
-      createdAt: new Date().toISOString(),
-      chunks,
-    };
-    const payload = JSON.stringify(manifest);
-    if (new TextEncoder().encode(payload).byteLength > MAX_BACKUP_MANIFEST_BYTES)
-      throw new ApplicationError('backup_too_large', 413);
-    const checksum = await hashText(payload);
-    await art.put(objectKey, payload, {
-      httpMetadata: { contentType: 'application/json' },
-      customMetadata: { ownerId, checksum, version: String(BACKUP_VERSION) },
-      sha256: checksum,
-    });
-    await db
-      .prepare('UPDATE backup_runs SET checksum = ?1 WHERE id = ?2 AND owner_id = ?3')
-      .bind(checksum, id, ownerId)
-      .run();
-    await pruneBackups(db, art, ownerId);
-    return { id, checksum };
-  } catch (error) {
-    await deleteBackupPrefix(art, `backups/${ownerId}/${id}/`);
-    await db
-      .prepare('DELETE FROM backup_runs WHERE id = ?1 AND checksum = ?2')
-      .bind(id, 'pending')
-      .run();
-    throw error;
   }
+  const currentOwner = await db
+    .prepare('SELECT backup_epoch FROM users WHERE id = ?1')
+    .bind(ownerId)
+    .first<{ backup_epoch: number }>();
+  if (!currentOwner || currentOwner.backup_epoch !== owner.backup_epoch)
+    throw new ApplicationError('backup_changed_during_creation', 409);
+  if (chunks.some((chunk) => !chunk.objectKey.startsWith(`backups/${ownerId}/${id}/chunks/`)))
+    throw new ApplicationError('backup_chunk_owner_mismatch', 500);
+  for (let offset = 0; offset < chunks.length; offset += 100) {
+    const page = Math.floor(offset / 100);
+    const expected = chunks.slice(offset, offset + 100);
+    await runPage(`verify-backup-chunks-${page}`, async () => {
+      const objects = await Promise.all(expected.map((chunk) => art.head(chunk.objectKey)));
+      if (
+        objects.some(
+          (object, index) =>
+            !object ||
+            object.size !== expected[index]?.bytes ||
+            object.customMetadata?.checksum !== expected[index]?.checksum,
+        )
+      )
+        throw new ApplicationError('backup_chunk_missing', 500);
+      return { cursor: 0, rowCount: 0, bytes: 0, chunks: [] };
+    });
+  }
+  const manifest: BackupManifest = {
+    version: BACKUP_VERSION,
+    ownerId,
+    mutationEpoch: owner.backup_epoch,
+    createdAt: new Date().toISOString(),
+    chunks,
+  };
+  const payload = JSON.stringify(manifest);
+  if (new TextEncoder().encode(payload).byteLength > MAX_BACKUP_MANIFEST_BYTES)
+    throw new ApplicationError('backup_too_large', 413);
+  const checksum = await hashText(payload);
+  await art.put(objectKey, payload, {
+    httpMetadata: { contentType: 'application/json' },
+    customMetadata: { ownerId, checksum, version: String(BACKUP_VERSION) },
+    sha256: checksum,
+  });
+  await db
+    .prepare('UPDATE backup_runs SET checksum = ?1 WHERE id = ?2 AND owner_id = ?3')
+    .bind(checksum, id, ownerId)
+    .run();
+  await pruneBackups(db, art, ownerId);
+  return { id, checksum };
+}
+
+export async function cleanupPendingBackup(
+  db: D1Database,
+  art: R2Bucket,
+  ownerId: string,
+  backupId: string,
+): Promise<void> {
+  const pending = await db
+    .prepare('SELECT 1 FROM backup_runs WHERE id = ?1 AND owner_id = ?2 AND checksum = ?3')
+    .bind(backupId, ownerId, 'pending')
+    .first();
+  if (!pending) return;
+  await deleteBackupPrefix(art, `backups/${ownerId}/${backupId}/`);
+  await db
+    .prepare('DELETE FROM backup_runs WHERE id = ?1 AND owner_id = ?2 AND checksum = ?3')
+    .bind(backupId, ownerId, 'pending')
+    .run();
 }
 
 async function readBackupText(object: R2ObjectBody, maximumBytes: number): Promise<string> {
@@ -563,6 +613,7 @@ async function stageManifestRestore(
   ownerId: string,
   backupId: string,
   manifest: BackupManifest,
+  runStep: RestoreStepRunner,
 ): Promise<void> {
   let totalBytes = 0;
   const identities = new Set<string>();
@@ -574,37 +625,44 @@ async function stageManifestRestore(
       throw new ApplicationError('backup_invalid', 400);
     totalBytes += chunk.bytes;
     if (totalBytes > MAX_BACKUP_BYTES) throw new ApplicationError('backup_too_large', 413);
-    const object = await art.get(chunk.objectKey);
-    if (!object) throw new ApplicationError('backup_object_missing', 404);
-    if (object.size !== chunk.bytes) throw new ApplicationError('backup_checksum_mismatch', 400);
-    const payload = await readBackupText(object, MAX_BACKUP_CHUNK_BYTES);
-    if ((await hashText(payload)) !== chunk.checksum)
-      throw new ApplicationError('backup_checksum_mismatch', 400);
-    let decoded: unknown;
-    try {
-      decoded = JSON.parse(payload);
-    } catch {
-      throw new ApplicationError('backup_invalid', 400);
-    }
-    const rows = z.array(backupRowSchemas[chunk.kind]).safeParse(decoded);
-    if (!rows.success || rows.data.length !== chunk.rows)
-      throw new ApplicationError('backup_invalid', 400);
-    if (
-      chunk.kind === 'binders' &&
-      z
-        .array(binderRow)
-        .parse(rows.data)
-        .some((binder) => binder.owner_id !== ownerId)
-    )
-      throw new ApplicationError('backup_owner_mismatch', 403);
-    if (chunk.kind === 'art_manifest')
-      await restoreCustomArt(art, ownerId, backupId, z.array(artRow).parse(rows.data));
-    await db
-      .prepare(
-        'INSERT INTO backup_restore_chunks (run_id, owner_id, kind, chunk_index, payload_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)',
+    await runStep(`restore-${chunk.kind}-${chunk.index}`, async () => {
+      const object = await art.get(chunk.objectKey);
+      if (!object) throw new ApplicationError('backup_object_missing', 404);
+      if (object.size !== chunk.bytes) throw new ApplicationError('backup_checksum_mismatch', 400);
+      const payload = await readBackupText(object, MAX_BACKUP_CHUNK_BYTES);
+      if ((await hashText(payload)) !== chunk.checksum)
+        throw new ApplicationError('backup_checksum_mismatch', 400);
+      let decoded: unknown;
+      try {
+        decoded = JSON.parse(payload);
+      } catch {
+        throw new ApplicationError('backup_invalid', 400);
+      }
+      const rows = z.array(backupRowSchemas[chunk.kind]).safeParse(decoded);
+      if (!rows.success || rows.data.length !== chunk.rows)
+        throw new ApplicationError('backup_invalid', 400);
+      if (
+        chunk.kind === 'binders' &&
+        z
+          .array(binderRow)
+          .parse(rows.data)
+          .some((binder) => binder.owner_id !== ownerId)
       )
-      .bind(runId, ownerId, chunk.kind, chunk.index, payload, nowSeconds())
-      .run();
+        throw new ApplicationError('backup_owner_mismatch', 403);
+      if (chunk.kind === 'art_manifest')
+        await restoreCustomArt(art, ownerId, backupId, z.array(artRow).parse(rows.data));
+      await db
+        .prepare(
+          `INSERT INTO backup_restore_chunks
+            (run_id, owner_id, kind, chunk_index, payload_json, created_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+           ON CONFLICT(run_id, kind, chunk_index) DO UPDATE SET
+             payload_json = excluded.payload_json, created_at = excluded.created_at`,
+        )
+        .bind(runId, ownerId, chunk.kind, chunk.index, payload, nowSeconds())
+        .run();
+      return null;
+    });
   }
 }
 
@@ -616,7 +674,9 @@ export async function restoreBackup(
   art: R2Bucket,
   ownerId: string,
   backupId: string,
+  options: RestoreBackupOptions = {},
 ): Promise<void> {
+  const runStep = options.runStep ?? ((_name, action) => action());
   const run = await db
     .prepare('SELECT object_key, checksum FROM backup_runs WHERE id = ?1 AND owner_id = ?2')
     .bind(backupId, ownerId)
@@ -633,13 +693,13 @@ export async function restoreBackup(
   } catch {
     throw new ApplicationError('backup_invalid', 400);
   }
-  const restoreRunId = newId('restore');
+  const restoreRunId = options.restoreRunId ?? newId('restore');
   try {
     const manifest = backupManifestSchema.safeParse(json);
     if (manifest.success) {
       if (manifest.data.ownerId !== ownerId)
         throw new ApplicationError('backup_owner_mismatch', 403);
-      await stageManifestRestore(db, art, restoreRunId, ownerId, backupId, manifest.data);
+      await stageManifestRestore(db, art, restoreRunId, ownerId, backupId, manifest.data, runStep);
     } else {
       const legacy = backupBundleSchema.safeParse(json);
       if (!legacy.success) throw new ApplicationError('backup_invalid', 400);
@@ -651,97 +711,100 @@ export async function restoreBackup(
       await restoreCustomArt(art, ownerId, backupId, legacy.data.artManifest);
       await stageRestore(db, restoreRunId, ownerId, legacy.data);
     }
-    await db.batch([
-      db.prepare('DELETE FROM collection_mutations WHERE owner_id = ?1').bind(ownerId),
-      db.prepare('DELETE FROM collection_cards WHERE owner_id = ?1').bind(ownerId),
-      db.prepare('DELETE FROM binders WHERE owner_id = ?1').bind(ownerId),
-      db
-        .prepare(
-          `INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,supertype,subtype,species,rarity,artist,release_date,pokedex_number,number_sort,is_custom,is_active,created_at,updated_at)
+    await runStep('restore-finalize', async () => {
+      await db.batch([
+        db.prepare('DELETE FROM collection_mutations WHERE owner_id = ?1').bind(ownerId),
+        db.prepare('DELETE FROM collection_cards WHERE owner_id = ?1').bind(ownerId),
+        db.prepare('DELETE FROM binders WHERE owner_id = ?1').bind(ownerId),
+        db
+          .prepare(
+            `INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,supertype,subtype,species,rarity,artist,release_date,pokedex_number,number_sort,is_custom,is_active,created_at,updated_at)
            SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.name'),json_extract(j.value,'$.language'),json_extract(j.value,'$.category'),json_extract(j.value,'$.set_id'),json_extract(j.value,'$.set_name'),json_extract(j.value,'$.number'),json_extract(j.value,'$.supertype'),json_extract(j.value,'$.subtype'),json_extract(j.value,'$.species'),json_extract(j.value,'$.rarity'),json_extract(j.value,'$.artist'),json_extract(j.value,'$.release_date'),json_extract(j.value,'$.pokedex_number'),json_extract(j.value,'$.number_sort'),json_extract(j.value,'$.is_custom'),json_extract(j.value,'$.is_active'),json_extract(j.value,'$.created_at'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='catalogue'
            ON CONFLICT(id) DO UPDATE SET name=excluded.name,language=excluded.language,category=excluded.category,set_id=excluded.set_id,set_name=excluded.set_name,number=excluded.number,supertype=excluded.supertype,subtype=excluded.subtype,species=excluded.species,rarity=excluded.rarity,artist=excluded.artist,release_date=excluded.release_date,pokedex_number=excluded.pokedex_number,number_sort=excluded.number_sort,is_custom=excluded.is_custom,is_active=excluded.is_active,updated_at=excluded.updated_at`,
-        )
-        .bind(restoreRunId, ownerId),
-      db
-        .prepare(
-          `DELETE FROM catalogue_search WHERE card_id IN (
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `DELETE FROM catalogue_search WHERE card_id IN (
              SELECT json_extract(j.value,'$.id') FROM ${jsonRows} AND c.kind='catalogue'
            )`,
-        )
-        .bind(restoreRunId, ownerId),
-      db
-        .prepare(
-          `INSERT INTO catalogue_search (card_id,name,set_name,number,species,rarity,artist)
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO catalogue_search (card_id,name,set_name,number,species,rarity,artist)
            SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.name'),json_extract(j.value,'$.set_name'),json_extract(j.value,'$.number'),COALESCE(json_extract(j.value,'$.species'),''),COALESCE(json_extract(j.value,'$.rarity'),''),COALESCE(json_extract(j.value,'$.artist'),'') FROM ${jsonRows} AND c.kind='catalogue'`,
-        )
-        .bind(restoreRunId, ownerId),
-      db
-        .prepare(
-          `INSERT INTO card_sources (provider,source_id,card_id,language,source_updated_at,checksum,active,imported_at)
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO card_sources (provider,source_id,card_id,language,source_updated_at,checksum,active,imported_at)
            SELECT json_extract(j.value,'$.provider'),json_extract(j.value,'$.source_id'),json_extract(j.value,'$.card_id'),json_extract(j.value,'$.language'),json_extract(j.value,'$.source_updated_at'),json_extract(j.value,'$.checksum'),json_extract(j.value,'$.active'),json_extract(j.value,'$.imported_at') FROM ${jsonRows} AND c.kind='sources'
            ON CONFLICT(provider,source_id,language) DO UPDATE SET card_id=excluded.card_id,source_updated_at=excluded.source_updated_at,checksum=excluded.checksum,active=excluded.active,imported_at=excluded.imported_at`,
-        )
-        .bind(restoreRunId, ownerId),
-      db
-        .prepare(
-          `INSERT INTO collection_cards (owner_id,card_id,quantity,notes,revision,updated_at)
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO collection_cards (owner_id,card_id,quantity,notes,revision,updated_at)
            SELECT ?2,json_extract(j.value,'$.card_id'),json_extract(j.value,'$.quantity'),json_extract(j.value,'$.notes'),json_extract(j.value,'$.revision'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='collection'`,
-        )
-        .bind(restoreRunId, ownerId),
-      db
-        .prepare(
-          `INSERT INTO binders (id,owner_id,name,active_version_id,created_at,updated_at)
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO binders (id,owner_id,name,active_version_id,created_at,updated_at)
            SELECT json_extract(j.value,'$.id'),?2,json_extract(j.value,'$.name'),NULL,json_extract(j.value,'$.created_at'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='binders'`,
-        )
-        .bind(restoreRunId, ownerId),
-      db
-        .prepare(
-          `INSERT INTO binder_versions (id,binder_id,version_number,status,layout_kind,rows,columns,created_at,activated_at,revision)
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO binder_versions (id,binder_id,version_number,status,layout_kind,rows,columns,created_at,activated_at,revision)
            SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.binder_id'),json_extract(j.value,'$.version_number'),json_extract(j.value,'$.status'),json_extract(j.value,'$.layout_kind'),json_extract(j.value,'$.rows'),json_extract(j.value,'$.columns'),json_extract(j.value,'$.created_at'),json_extract(j.value,'$.activated_at'),json_extract(j.value,'$.revision') FROM ${jsonRows} AND c.kind='versions'`,
-        )
-        .bind(restoreRunId, ownerId),
-      db
-        .prepare(
-          `UPDATE binders SET active_version_id = (
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `UPDATE binders SET active_version_id = (
              SELECT json_extract(j.value,'$.active_version_id') FROM ${jsonRows}
              AND c.kind='binders' AND json_extract(j.value,'$.id') = binders.id
            ) WHERE owner_id = ?2 AND id IN (
              SELECT json_extract(j.value,'$.id') FROM ${jsonRows} AND c.kind='binders'
            )`,
-        )
-        .bind(restoreRunId, ownerId),
-      db
-        .prepare(
-          `INSERT INTO binder_pages (id,binder_version_id,position)
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO binder_pages (id,binder_version_id,position)
            SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.binder_version_id'),json_extract(j.value,'$.position') FROM ${jsonRows} AND c.kind='pages'`,
-        )
-        .bind(restoreRunId, ownerId),
-      db
-        .prepare(
-          `INSERT INTO binder_slots (binder_page_id,row_index,column_index,card_id)
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO binder_slots (binder_page_id,row_index,column_index,card_id)
            SELECT json_extract(j.value,'$.binder_page_id'),json_extract(j.value,'$.row_index'),json_extract(j.value,'$.column_index'),json_extract(j.value,'$.card_id') FROM ${jsonRows} AND c.kind='slots'`,
-        )
-        .bind(restoreRunId, ownerId),
-      db
-        .prepare(
-          `INSERT INTO art_manifest (card_id,variant,object_key,sha256,bytes,version,updated_at)
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO art_manifest (card_id,variant,object_key,sha256,bytes,version,updated_at)
            SELECT json_extract(j.value,'$.card_id'),json_extract(j.value,'$.variant'),json_extract(j.value,'$.object_key'),json_extract(j.value,'$.sha256'),json_extract(j.value,'$.bytes'),json_extract(j.value,'$.version'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='art_manifest'
            ON CONFLICT(card_id,variant) DO UPDATE SET object_key=excluded.object_key,sha256=excluded.sha256,bytes=excluded.bytes,version=excluded.version,updated_at=excluded.updated_at`,
-        )
-        .bind(restoreRunId, ownerId),
-      db
-        .prepare('UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = ?1')
-        .bind(ownerId),
-      db
-        .prepare(
-          'UPDATE web_sessions SET revoked_at = ?1 WHERE user_id = ?2 AND revoked_at IS NULL',
-        )
-        .bind(nowSeconds(), ownerId),
-      db
-        .prepare('UPDATE backup_runs SET restored_at = ?1 WHERE id = ?2 AND owner_id = ?3')
-        .bind(nowSeconds(), backupId, ownerId),
-      db.prepare('DELETE FROM backup_restore_chunks WHERE run_id = ?1').bind(restoreRunId),
-    ]);
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare('UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = ?1')
+          .bind(ownerId),
+        db
+          .prepare(
+            'UPDATE web_sessions SET revoked_at = ?1 WHERE user_id = ?2 AND revoked_at IS NULL',
+          )
+          .bind(nowSeconds(), ownerId),
+        db
+          .prepare('UPDATE backup_runs SET restored_at = ?1 WHERE id = ?2 AND owner_id = ?3')
+          .bind(nowSeconds(), backupId, ownerId),
+        db.prepare('DELETE FROM backup_restore_chunks WHERE run_id = ?1').bind(restoreRunId),
+      ]);
+      return null;
+    });
   } catch (error) {
     await db
       .prepare('DELETE FROM backup_restore_chunks WHERE run_id = ?1')

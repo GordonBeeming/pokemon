@@ -100,11 +100,16 @@ describe('async frontend announcements', () => {
     await waitFor(() => container.textContent?.includes('Devices could not load.') === true);
 
     expect(container.querySelector('[aria-busy="true"]')).toBeNull();
+    const alerts = Array.from(container.querySelectorAll('[role="alert"]')).filter((element) =>
+      element.textContent?.trim(),
+    );
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.textContent).toContain('Devices could not load.');
     expect(
-      Array.from(container.querySelectorAll('[role="status"]')).some(
-        (element) => element.textContent === 'Devices could not load.',
+      Array.from(container.querySelectorAll('[role="status"]')).some((element) =>
+        element.textContent?.includes('Devices could not load.'),
       ),
-    ).toBe(true);
+    ).toBe(false);
     const retry = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent === 'Try again',
     );

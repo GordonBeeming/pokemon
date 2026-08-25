@@ -1,3 +1,4 @@
+import { createHash, type Hash } from 'node:crypto';
 import { nowSeconds } from './db';
 import { ApplicationError, describeError, logWarn } from './log';
 
@@ -73,69 +74,120 @@ function ticketId(tokenHash: string): string {
   return tokenHash.slice(0, 24);
 }
 
-async function isWebpObject(object: R2ObjectBody): Promise<boolean> {
-  const reader = object.body.getReader();
-  const header = new Uint8Array(12);
-  const chunkHeader = new Uint8Array(8);
-  let headerBytes = 0;
-  let chunkHeaderBytes = 0;
-  let chunkRemaining = 0;
-  let position = 0;
-  let imageChunk = false;
-  while (true) {
-    const next = await reader.read();
-    if (next.done) break;
-    const value: unknown = next.value;
-    if (!(value instanceof Uint8Array)) return false;
+class WebpStreamValidator {
+  private readonly header = new Uint8Array(12);
+  private readonly chunkHeader = new Uint8Array(8);
+  private headerBytes = 0;
+  private chunkHeaderBytes = 0;
+  private chunkRemaining = 0;
+  private position = 0;
+  private imageChunk = false;
+  private readonly hash: Hash = createHash('sha256');
+
+  constructor(
+    private readonly expectedBytes: number,
+    private readonly expectedSha256: string,
+  ) {}
+
+  write(value: Uint8Array): void {
+    this.hash.update(value);
     let offset = 0;
     while (offset < value.byteLength) {
-      if (headerBytes < header.byteLength) {
-        const length = Math.min(header.byteLength - headerBytes, value.byteLength - offset);
-        header.set(value.subarray(offset, offset + length), headerBytes);
-        headerBytes += length;
+      if (this.headerBytes < this.header.byteLength) {
+        const length = Math.min(
+          this.header.byteLength - this.headerBytes,
+          value.byteLength - offset,
+        );
+        this.header.set(value.subarray(offset, offset + length), this.headerBytes);
+        this.headerBytes += length;
         offset += length;
-        position += length;
-        if (headerBytes === header.byteLength) {
-          const view = new DataView(header.buffer);
+        this.position += length;
+        if (this.headerBytes === this.header.byteLength) {
+          const view = new DataView(this.header.buffer);
           if (
-            ascii(header, 0, 4) !== 'RIFF' ||
-            ascii(header, 8, 4) !== 'WEBP' ||
-            view.getUint32(4, true) !== object.size - 8
+            ascii(this.header, 0, 4) !== 'RIFF' ||
+            ascii(this.header, 8, 4) !== 'WEBP' ||
+            view.getUint32(4, true) !== this.expectedBytes - 8
           )
-            return false;
+            throw new ApplicationError('art_upload_not_webp', 400);
         }
         continue;
       }
-      if (chunkRemaining > 0) {
-        const length = Math.min(chunkRemaining, value.byteLength - offset);
-        chunkRemaining -= length;
+      if (this.chunkRemaining > 0) {
+        const length = Math.min(this.chunkRemaining, value.byteLength - offset);
+        this.chunkRemaining -= length;
         offset += length;
-        position += length;
+        this.position += length;
         continue;
       }
-      const length = Math.min(chunkHeader.byteLength - chunkHeaderBytes, value.byteLength - offset);
-      chunkHeader.set(value.subarray(offset, offset + length), chunkHeaderBytes);
-      chunkHeaderBytes += length;
+      const length = Math.min(
+        this.chunkHeader.byteLength - this.chunkHeaderBytes,
+        value.byteLength - offset,
+      );
+      this.chunkHeader.set(value.subarray(offset, offset + length), this.chunkHeaderBytes);
+      this.chunkHeaderBytes += length;
       offset += length;
-      position += length;
-      if (chunkHeaderBytes === chunkHeader.byteLength) {
-        const kind = ascii(chunkHeader, 0, 4);
-        const size = new DataView(chunkHeader.buffer).getUint32(4, true);
-        chunkRemaining = size + (size % 2);
-        if (position + chunkRemaining > object.size) return false;
+      this.position += length;
+      if (this.chunkHeaderBytes === this.chunkHeader.byteLength) {
+        const kind = ascii(this.chunkHeader, 0, 4);
+        const size = new DataView(this.chunkHeader.buffer).getUint32(4, true);
+        this.chunkRemaining = size + (size % 2);
+        if (this.position + this.chunkRemaining > this.expectedBytes)
+          throw new ApplicationError('art_upload_not_webp', 400);
         if (kind === 'VP8 ' || kind === 'VP8L' || kind === 'VP8X' || kind === 'ANMF')
-          imageChunk = true;
-        chunkHeaderBytes = 0;
+          this.imageChunk = true;
+        this.chunkHeaderBytes = 0;
       }
     }
   }
-  return (
-    position === object.size &&
-    headerBytes === header.byteLength &&
-    chunkHeaderBytes === 0 &&
-    chunkRemaining === 0 &&
-    imageChunk
+
+  finish(): void {
+    if (
+      this.position !== this.expectedBytes ||
+      this.headerBytes !== this.header.byteLength ||
+      this.chunkHeaderBytes !== 0 ||
+      this.chunkRemaining !== 0 ||
+      !this.imageChunk
+    )
+      throw new ApplicationError('art_upload_not_webp', 400);
+    if (this.hash.digest('hex') !== this.expectedSha256)
+      throw new ApplicationError('art_upload_checksum_mismatch', 400);
+  }
+}
+
+export function validatingWebpStream(
+  body: ReadableStream<Uint8Array>,
+  expectedBytes: number,
+  expectedSha256: string,
+) {
+  const validator = new WebpStreamValidator(expectedBytes, expectedSha256);
+  return body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        validator.write(chunk);
+        controller.enqueue(chunk);
+      },
+      flush() {
+        validator.finish();
+      },
+    }),
   );
+}
+
+export async function propagateUploadFailure(
+  putError: unknown,
+  writeBody: Promise<void>,
+): Promise<never> {
+  try {
+    await writeBody;
+  } catch (bodyError) {
+    if (bodyError instanceof ApplicationError) {
+      bodyError.cause = putError;
+      throw bodyError;
+    }
+    throw new AggregateError([putError, bodyError], 'R2 upload and request body both failed');
+  }
+  throw putError;
 }
 
 async function recordOrphan(db: D1Database, objectKey: string, reason: string): Promise<void> {
@@ -268,13 +320,25 @@ export async function createArtUploadTokens(
   });
 }
 
-export async function uploadArt(
+interface ActiveUploadClaim {
+  tokenHash: string;
+  upload: UploadTokenRow;
+  claimedAt: number;
+  objectKey: string;
+}
+
+type UploadClaim =
+  | {
+      replayed: true;
+      result: { cardId: string; variant: ArtVariant; objectKey: string; replayed: true };
+    }
+  | { replayed: false; claim: ActiveUploadClaim };
+
+async function claimUpload(
   db: D1Database,
-  art: R2Bucket,
   token: string,
   suppliedTicketId: string,
-  request: Request,
-): Promise<{ cardId: string; variant: ArtVariant; objectKey: string; replayed: boolean }> {
+): Promise<UploadClaim> {
   const tokenHash = await hashToken(token);
   if (ticketId(tokenHash) !== suppliedTicketId && token !== suppliedTicketId)
     throw new ApplicationError('art_upload_token_invalid', 400);
@@ -295,14 +359,17 @@ export async function uploadArt(
   if (!upload) throw new ApplicationError('art_upload_token_invalid', 400);
   if (upload.committed_object_key)
     return {
-      cardId: upload.card_id,
-      variant: upload.variant,
-      objectKey: upload.committed_object_key,
       replayed: true,
+      result: {
+        cardId: upload.card_id,
+        variant: upload.variant,
+        objectKey: upload.committed_object_key,
+        replayed: true,
+      },
     };
   const claimedAt = nowSeconds();
   if (upload.expires_at <= claimedAt) throw new ApplicationError('art_upload_token_invalid', 400);
-  const claim = await db
+  const claimed = await db
     .prepare(
       `UPDATE art_upload_tokens SET consumed_at = ?1
        WHERE token_hash = ?2 AND expires_at > ?1
@@ -310,88 +377,124 @@ export async function uploadArt(
     )
     .bind(claimedAt, tokenHash, claimedAt - 120)
     .run();
-  if (claim.meta.changes !== 1) throw new ApplicationError('art_upload_in_progress', 409);
+  if (claimed.meta.changes !== 1) throw new ApplicationError('art_upload_in_progress', 409);
+  return {
+    replayed: false,
+    claim: {
+      tokenHash,
+      upload,
+      claimedAt,
+      objectKey: artObjectKey(upload.card_id, upload.variant, upload.expected_sha256),
+    },
+  };
+}
 
+async function commitUploadManifest(
+  db: D1Database,
+  claim: ActiveUploadClaim,
+  object: R2Object,
+): Promise<string | null> {
+  const previous = await db
+    .prepare('SELECT object_key FROM art_manifest WHERE card_id = ?1 AND variant = ?2')
+    .bind(claim.upload.card_id, claim.upload.variant)
+    .first<{ object_key: string }>();
+  const manifest = await db
+    .prepare(
+      `INSERT INTO art_manifest (card_id, variant, object_key, sha256, bytes, version, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+       ON CONFLICT(card_id, variant) DO UPDATE SET object_key = excluded.object_key,
+         sha256 = excluded.sha256, bytes = excluded.bytes, version = excluded.version,
+         updated_at = excluded.updated_at WHERE art_manifest.version < excluded.version`,
+    )
+    .bind(
+      claim.upload.card_id,
+      claim.upload.variant,
+      claim.objectKey,
+      claim.upload.expected_sha256,
+      object.size,
+      claim.upload.expected_version,
+      nowSeconds(),
+    )
+    .run();
+  if (manifest.meta.changes < 1) {
+    await recordOrphan(db, claim.objectKey, 'manifest_version_conflict');
+    throw new ApplicationError('art_upload_version_conflict', 409);
+  }
+  return previous?.object_key ?? null;
+}
+
+async function releaseUploadClaim(db: D1Database, claim: ActiveUploadClaim): Promise<void> {
+  await Promise.all([
+    recordOrphan(db, claim.objectKey, 'upload_failed'),
+    db
+      .prepare(
+        'UPDATE art_upload_tokens SET consumed_at = NULL WHERE token_hash = ?1 AND consumed_at = ?2',
+      )
+      .bind(claim.tokenHash, claim.claimedAt)
+      .run(),
+  ]);
+}
+
+export async function uploadArt(
+  db: D1Database,
+  art: R2Bucket,
+  token: string,
+  suppliedTicketId: string,
+  request: Request,
+): Promise<{ cardId: string; variant: ArtVariant; objectKey: string; replayed: boolean }> {
+  const claimed = await claimUpload(db, token, suppliedTicketId);
+  if (claimed.replayed) return claimed.result;
+  const claim = claimed.claim;
   let committed = false;
-  const objectKey = artObjectKey(upload.card_id, upload.variant, upload.expected_sha256);
   try {
     const declaredLength = Number(request.headers.get('content-length'));
     if (
       !request.body ||
       !Number.isInteger(declaredLength) ||
       declaredLength < 1 ||
-      declaredLength > upload.max_bytes
+      declaredLength > claim.upload.max_bytes
     )
       throw new ApplicationError('art_upload_size_invalid', 413);
-    const previous = await db
-      .prepare('SELECT object_key FROM art_manifest WHERE card_id = ?1 AND variant = ?2')
-      .bind(upload.card_id, upload.variant)
-      .first<{ object_key: string }>();
     const fixedLength = new FixedLengthStream(declaredLength);
-    const writeBody = request.body.pipeTo(fixedLength.writable);
+    const writeBody = validatingWebpStream(
+      request.body,
+      declaredLength,
+      claim.upload.expected_sha256,
+    ).pipeTo(fixedLength.writable);
     let object: R2Object;
     try {
-      object = await art.put(objectKey, fixedLength.readable, {
+      object = await art.put(claim.objectKey, fixedLength.readable, {
         httpMetadata: {
           contentType: 'image/webp',
           cacheControl: 'public, max-age=31536000, immutable',
         },
         customMetadata: {
-          cardId: upload.card_id,
-          variant: upload.variant,
-          sha256: upload.expected_sha256,
-          version: String(upload.expected_version),
+          cardId: claim.upload.card_id,
+          variant: claim.upload.variant,
+          sha256: claim.upload.expected_sha256,
+          version: String(claim.upload.expected_version),
         },
-        sha256: upload.expected_sha256,
+        sha256: claim.upload.expected_sha256,
       });
-      await writeBody;
-    } catch (error) {
-      await writeBody.catch(() => undefined);
-      throw error;
+    } catch (putError) {
+      return propagateUploadFailure(putError, writeBody);
     }
+    await writeBody;
     if (object.size !== declaredLength) throw new ApplicationError('art_upload_size_invalid', 400);
-    const stored = await art.get(objectKey);
-    if (!stored || !(await isWebpObject(stored)))
-      throw new ApplicationError('art_upload_not_webp', 400);
-    const now = nowSeconds();
-    const manifest = await db
-      .prepare(
-        `INSERT INTO art_manifest (card_id, variant, object_key, sha256, bytes, version, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-         ON CONFLICT(card_id, variant) DO UPDATE SET object_key = excluded.object_key,
-           sha256 = excluded.sha256, bytes = excluded.bytes, version = excluded.version,
-           updated_at = excluded.updated_at WHERE art_manifest.version < excluded.version`,
-      )
-      .bind(
-        upload.card_id,
-        upload.variant,
-        objectKey,
-        upload.expected_sha256,
-        object.size,
-        upload.expected_version,
-        now,
-      )
-      .run();
-    if (manifest.meta.changes < 1) {
-      await recordOrphan(db, objectKey, 'manifest_version_conflict');
-      throw new ApplicationError('art_upload_version_conflict', 409);
-    }
+    const previousObjectKey = await commitUploadManifest(db, claim, object);
     committed = true;
-    if (previous && previous.object_key !== objectKey)
-      await recordOrphan(db, previous.object_key, 'manifest_superseded');
+    if (previousObjectKey && previousObjectKey !== claim.objectKey)
+      await recordOrphan(db, previousObjectKey, 'manifest_superseded');
     await cleanupArtOrphans(db, art);
-    return { cardId: upload.card_id, variant: upload.variant, objectKey, replayed: false };
+    return {
+      cardId: claim.upload.card_id,
+      variant: claim.upload.variant,
+      objectKey: claim.objectKey,
+      replayed: false,
+    };
   } catch (error) {
     if (!committed) {
-      await Promise.all([
-        recordOrphan(db, objectKey, 'upload_failed'),
-        db
-          .prepare(
-            'UPDATE art_upload_tokens SET consumed_at = NULL WHERE token_hash = ?1 AND consumed_at = ?2',
-          )
-          .bind(tokenHash, claimedAt)
-          .run(),
-      ]);
+      await releaseUploadClaim(db, claim);
       await cleanupArtOrphans(db, art, nowSeconds());
     }
     throw error;

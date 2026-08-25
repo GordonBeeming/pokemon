@@ -14,6 +14,132 @@ pub struct CloudClient {
     http: reqwest::Client,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LanguageCode {
+    #[serde(rename = "en")]
+    En,
+    #[serde(rename = "fr")]
+    Fr,
+    #[serde(rename = "es")]
+    Es,
+    #[serde(rename = "es-mx")]
+    EsMx,
+    #[serde(rename = "it")]
+    It,
+    #[serde(rename = "pt")]
+    Pt,
+    #[serde(rename = "pt-br")]
+    PtBr,
+    #[serde(rename = "pt-pt")]
+    PtPt,
+    #[serde(rename = "de")]
+    De,
+    #[serde(rename = "nl")]
+    Nl,
+    #[serde(rename = "pl")]
+    Pl,
+    #[serde(rename = "ru")]
+    Ru,
+    #[serde(rename = "ja")]
+    Ja,
+    #[serde(rename = "ko")]
+    Ko,
+    #[serde(rename = "zh-tw")]
+    ZhTw,
+    #[serde(rename = "id")]
+    Id,
+    #[serde(rename = "th")]
+    Th,
+    #[serde(rename = "zh-cn")]
+    ZhCn,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CardCategory {
+    Pokemon,
+    Trainer,
+    Energy,
+    Special,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BinderStatus {
+    Draft,
+    Active,
+    Archived,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BinderLayoutKind {
+    #[serde(rename = "2x2")]
+    TwoByTwo,
+    #[serde(rename = "3x3")]
+    ThreeByThree,
+    #[serde(rename = "4x3")]
+    FourByThree,
+    #[serde(rename = "top-loader")]
+    TopLoader,
+    #[serde(rename = "custom")]
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct CurrencyCode(String);
+
+impl<'de> Deserialize<'de> for CurrencyCode {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        if value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_uppercase()) {
+            Ok(Self(value))
+        } else {
+            Err(serde::de::Error::custom(
+                "currency must be three uppercase ASCII letters",
+            ))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct IsoDateTime(String);
+
+impl<'de> Deserialize<'de> for IsoDateTime {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        time::OffsetDateTime::parse(&value, &time::format_description::well_known::Rfc3339)
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self(value))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct IsoDate(String);
+
+impl<'de> Deserialize<'de> for IsoDate {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        time::Date::parse(
+            &value,
+            &time::macros::format_description!("[year]-[month]-[day]"),
+        )
+        .map_err(serde::de::Error::custom)?;
+        Ok(Self(value))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingResult {
@@ -85,7 +211,7 @@ pub struct CollectionState {
     pub quantity: u32,
     pub notes: Option<String>,
     pub revision: u64,
-    pub updated_at: String,
+    pub updated_at: IsoDateTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -100,10 +226,10 @@ pub struct CollectionMutationResult {
 pub struct PriceBaseline {
     pub amount_aud: Option<f64>,
     pub native_amount: Option<f64>,
-    pub native_currency: Option<String>,
+    pub native_currency: Option<CurrencyCode>,
     pub source: Option<String>,
-    pub source_captured_at: Option<String>,
-    pub fx_date: Option<String>,
+    pub source_captured_at: Option<IsoDateTime>,
+    pub fx_date: Option<IsoDate>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -111,8 +237,8 @@ pub struct PriceBaseline {
 pub struct CatalogueCardView {
     pub id: String,
     pub name: String,
-    pub language: String,
-    pub category: String,
+    pub language: LanguageCode,
+    pub category: CardCategory,
     pub set_id: String,
     pub set_name: String,
     pub number: String,
@@ -126,7 +252,7 @@ pub struct CatalogueCardView {
 pub struct CatalogueSource {
     pub provider: String,
     pub source_id: String,
-    pub updated_at: String,
+    pub updated_at: IsoDateTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -134,8 +260,8 @@ pub struct CatalogueSource {
 pub struct CatalogueDetailView {
     pub id: String,
     pub name: String,
-    pub language: String,
-    pub category: String,
+    pub language: LanguageCode,
+    pub category: CardCategory,
     pub set_id: String,
     pub set_name: String,
     pub number: String,
@@ -184,12 +310,47 @@ pub struct BinderSlot {
     pub card_id: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BinderLayout {
-    pub kind: String,
+    pub kind: BinderLayoutKind,
     pub rows: u32,
     pub columns: u32,
+}
+
+impl<'de> Deserialize<'de> for BinderLayout {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct WireLayout {
+            kind: BinderLayoutKind,
+            rows: u32,
+            columns: u32,
+        }
+        let layout = WireLayout::deserialize(deserializer)?;
+        let valid = match layout.kind {
+            BinderLayoutKind::TwoByTwo | BinderLayoutKind::TopLoader => {
+                layout.rows == 2 && layout.columns == 2
+            }
+            BinderLayoutKind::ThreeByThree => layout.rows == 3 && layout.columns == 3,
+            BinderLayoutKind::FourByThree => layout.rows == 3 && layout.columns == 4,
+            BinderLayoutKind::Custom => {
+                (1..=20).contains(&layout.rows) && (1..=20).contains(&layout.columns)
+            }
+        };
+        if !valid {
+            return Err(serde::de::Error::custom(
+                "binder layout dimensions do not match its kind",
+            ));
+        }
+        Ok(Self {
+            kind: layout.kind,
+            rows: layout.rows,
+            columns: layout.columns,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -206,7 +367,7 @@ pub struct BinderVersionSummary {
     pub id: String,
     pub binder_id: String,
     pub version_number: u32,
-    pub status: String,
+    pub status: BinderStatus,
     pub layout: BinderLayout,
     pub revision: u64,
     pub page_count: u32,
@@ -236,7 +397,7 @@ pub struct BinderView {
     pub name: String,
     pub active_version_id: Option<String>,
     pub latest_version_id: Option<String>,
-    pub updated_at: String,
+    pub updated_at: IsoDateTime,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -707,7 +868,7 @@ impl CloudClient {
         token: &str,
         cursor: Option<&str>,
     ) -> Result<ArtManifestPage> {
-        let mut query = vec![("limit", "500".to_string())];
+        let mut query = vec![("limit", "5000".to_string())];
         if let Some(cursor) = cursor {
             query.push(("cursor", cursor.to_string()));
         }
@@ -733,7 +894,7 @@ impl CloudClient {
         token: &str,
         cursor: Option<&str>,
     ) -> Result<CatalogueSourcePage> {
-        let mut query = vec![("limit", "500".to_string())];
+        let mut query = vec![("limit", "5000".to_string())];
         if let Some(cursor) = cursor {
             query.push(("cursor", cursor.to_string()));
         }
@@ -1823,6 +1984,57 @@ mod tests {
             retry_delay_from_headers(&headers, 0),
             Duration::from_secs(30)
         );
+    }
+
+    #[test]
+    fn response_dtos_reject_unknown_enums_and_invalid_formatted_values() {
+        let card = json!({
+            "id": "card-1", "name": "Card", "language": "en", "category": "pokemon",
+            "setId": "set-1", "setName": "Set", "number": "1", "imageLowUrl": null,
+            "collection": null,
+            "price": { "amountAud": null, "nativeAmount": 1.0, "nativeCurrency": "AUD",
+              "source": "market", "sourceCapturedAt": "2026-08-25T00:00:00Z", "fxDate": "2026-08-25" }
+        });
+        let valid: CatalogueSearchResult = serde_json::from_value(json!({
+            "ok": true, "total": 1, "cards": [card.clone()], "cursor": null
+        }))
+        .expect("valid catalogue response");
+        assert_eq!(valid.cards[0].language, LanguageCode::En);
+        assert_eq!(valid.cards[0].category, CardCategory::Pokemon);
+
+        let mut invalid_category = card.clone();
+        invalid_category["category"] = json!("pocket");
+        assert!(serde_json::from_value::<CatalogueSearchResult>(json!({
+            "ok": true, "total": 1, "cards": [invalid_category], "cursor": null
+        }))
+        .is_err());
+
+        let mut invalid_currency = card.clone();
+        invalid_currency["price"]["nativeCurrency"] = json!("aud");
+        assert!(serde_json::from_value::<CatalogueSearchResult>(json!({
+            "ok": true, "total": 1, "cards": [invalid_currency], "cursor": null
+        }))
+        .is_err());
+
+        let mut invalid_datetime = card;
+        invalid_datetime["price"]["sourceCapturedAt"] = json!("25 August 2026");
+        assert!(serde_json::from_value::<CatalogueSearchResult>(json!({
+            "ok": true, "total": 1, "cards": [invalid_datetime], "cursor": null
+        }))
+        .is_err());
+
+        assert!(serde_json::from_value::<BinderVersionSummary>(json!({
+            "id": "version-1", "binderId": "binder-1", "versionNumber": 1,
+            "status": "deleted", "layout": { "kind": "3x3", "rows": 3, "columns": 3 },
+            "revision": 1, "pageCount": 1
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<BinderVersionSummary>(json!({
+            "id": "version-1", "binderId": "binder-1", "versionNumber": 1,
+            "status": "draft", "layout": { "kind": "3x3", "rows": 2, "columns": 2 },
+            "revision": 1, "pageCount": 1
+        }))
+        .is_err());
     }
 
     #[test]

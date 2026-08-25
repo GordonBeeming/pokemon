@@ -15,7 +15,6 @@ import {
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { createArtUploadToken, createArtUploadTokens, uploadArt } from '../../lib/art';
-import { restoreBackup } from '../../lib/backup';
 import {
   createPairCode,
   listDesktopTokens,
@@ -42,7 +41,7 @@ import { ApplicationError } from '../../lib/log';
 import { priceCoverage } from '../../lib/pricing';
 import type { AuthVars } from '../../lib/types';
 import { apiFailure, parsedJson } from './errors';
-import { ownerOperations } from './operations';
+import { catalogueFilters, ownerOperations } from './operations';
 
 const api = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
 const desktopPublic = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
@@ -145,11 +144,6 @@ export function parseDesktopBearer(header: string | undefined): string | null {
   return matched?.[1] ?? null;
 }
 
-function uploadBearer(header: string | undefined): string | null {
-  const matched = header?.match(/^Bearer ([a-f0-9]{64})$/iu);
-  return matched?.[1] ?? null;
-}
-
 async function desktopOwner(
   c: { env: CloudflareEnv; get: (key: 'desktopBearer') => string | undefined },
   scope: DesktopScope,
@@ -236,7 +230,7 @@ desktopPublic.put('/desktop/art/uploads/:token', async (c) => {
   try {
     const pathTicket = c.req.param('token');
     const token =
-      uploadBearer(c.req.header('authorization')) ??
+      parseDesktopBearer(c.req.header('authorization')) ??
       (/^[a-f0-9]{64}$/iu.test(pathTicket) ? pathTicket : null);
     if (!token)
       return c.json(
@@ -257,23 +251,11 @@ desktopPublic.put('/desktop/art/uploads/:token', async (c) => {
 desktop.get('/desktop/catalogue/search', async (c) => {
   try {
     const ownerId = await desktopOwner(c, 'catalogue:read');
-    const query = c.req.query();
-    const language = query.language ? languageSchema.safeParse(query.language) : undefined;
-    const category = query.category ? cardCategorySchema.safeParse(query.category) : undefined;
-    if ((language && !language.success) || (category && !category.success))
-      return c.json({ ok: false, error: 'invalid_filter' }, 400);
     return c.json({
       ok: true,
-      ...(await ownerOperations(c.env, ownerId).searchCatalogue({
-        query: query.q,
-        language: language?.success ? language.data : undefined,
-        category: category?.success ? category.data : undefined,
-        setId: query.setId,
-        species: query.species,
-        limit: asPositiveInt(query.limit, 50, 100),
-        offset: Math.max(0, Number.parseInt(query.offset ?? '0', 10) || 0),
-        cursor: query.cursor ?? null,
-      })),
+      ...(await ownerOperations(c.env, ownerId).searchCatalogue(
+        catalogueFilters(c.req.query(), false),
+      )),
     });
   } catch (error) {
     return apiFailure(c, error);
@@ -285,7 +267,7 @@ desktop.get('/desktop/catalogue/sources', async (c) => {
     const result = await listCatalogueSources(
       c.env.DB,
       c.req.query('cursor') ?? null,
-      asPositiveInt(c.req.query('limit'), 500, 500),
+      asPositiveInt(c.req.query('limit'), 5_000, 5_000),
     );
     return c.json({ ok: true, ...result });
   } catch (error) {
@@ -307,7 +289,7 @@ desktop.get('/desktop/art/manifest', async (c) => {
       ok: true,
       ...(await operations.artManifest(
         c.req.query('cursor') ?? null,
-        asPositiveInt(c.req.query('limit'), 100, 500),
+        asPositiveInt(c.req.query('limit'), 5_000, 5_000),
       )),
     });
   } catch (error) {
@@ -500,32 +482,9 @@ browser.get('/dashboard', async (c) => {
 
 browser.get('/catalogue/search', async (c) => {
   try {
-    const query = c.req.query();
-    const language = query.language ? languageSchema.safeParse(query.language) : undefined;
-    const category = query.category ? cardCategorySchema.safeParse(query.category) : undefined;
-    if ((language && !language.success) || (category && !category.success))
-      return c.json({ ok: false, error: 'invalid_filter' }, 400);
-    const owned =
-      query.owned === undefined
-        ? undefined
-        : query.owned === 'true'
-          ? true
-          : query.owned === 'false'
-            ? false
-            : undefined;
-    if (query.owned !== undefined && owned === undefined)
-      return c.json({ ok: false, error: 'invalid_filter' }, 400);
-    const result = await ownerOperations(c.env, sessionOwner(c)).searchCatalogue({
-      query: query.q,
-      language: language?.success ? language.data : undefined,
-      category: category?.success ? category.data : undefined,
-      setId: query.setId,
-      species: query.species,
-      owned,
-      limit: asPositiveInt(query.limit, 50, 100),
-      offset: Math.max(0, Number.parseInt(query.offset ?? '0', 10) || 0),
-      cursor: query.cursor ?? null,
-    });
+    const result = await ownerOperations(c.env, sessionOwner(c)).searchCatalogue(
+      catalogueFilters(c.req.query(), true),
+    );
     return c.json({ ok: true, ...result });
   } catch (error) {
     return apiFailure(c, error);
@@ -908,7 +867,7 @@ browser.post('/backups', async (c) => {
     }
     const workflow = await c.env.BACKUP.create({
       id: `backup-${crypto.randomUUID()}`,
-      params: { ownerId },
+      params: { ownerId, operation: 'create' },
     });
     return c.json({ ok: true, workflowId: workflow.id }, 202);
   } catch (error) {
@@ -921,8 +880,12 @@ browser.get('/backups/workflows/:id', async (c) => {
     const status = await workflow.status();
     if (status.status === 'complete') {
       const output = z
-        .object({ id: z.string().min(1), checksum: z.string().regex(/^[a-f0-9]{64}$/u) })
-        .strict()
+        .union([
+          z
+            .object({ id: z.string().min(1), checksum: z.string().regex(/^[a-f0-9]{64}$/u) })
+            .strict(),
+          z.object({ restored: z.literal(true), backupId: z.string().min(1) }).strict(),
+        ])
         .safeParse(status.output);
       if (!output.success) throw new ApplicationError('backup_workflow_output_invalid', 500);
       return c.json({ ok: true, status: status.status, ...output.data });
@@ -936,8 +899,13 @@ browser.get('/backups/workflows/:id', async (c) => {
 });
 browser.post('/backups/:id/restore', async (c) => {
   try {
-    await restoreBackup(c.env.DB, c.env.ART, sessionOwner(c), c.req.param('id'));
-    return c.json({ ok: true });
+    const ownerId = sessionOwner(c);
+    const backupId = c.req.param('id');
+    const workflow = await c.env.BACKUP.create({
+      id: `restore-${crypto.randomUUID()}`,
+      params: { ownerId, operation: 'restore', backupId },
+    });
+    return c.json({ ok: true, workflowId: workflow.id }, 202);
   } catch (error) {
     return apiFailure(c, error);
   }

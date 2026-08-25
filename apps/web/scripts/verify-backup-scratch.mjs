@@ -52,6 +52,27 @@ async function json(path, init = {}) {
   return { response, body };
 }
 
+async function completedWorkflow(workflowId, cookie, allowReauthentication = false) {
+  let statusCookie = cookie;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const status = await fetch(`${base}/api/backups/workflows/${encodeURIComponent(workflowId)}`, {
+      headers: { cookie: statusCookie },
+    });
+    const body = await status.json();
+    if (status.status === 200) return body;
+    if (status.status === 401 && allowReauthentication) {
+      const login = await json('/api/auth/dev-login', { method: 'POST' });
+      statusCookie = login.response.headers.get('set-cookie')?.split(';', 1)[0];
+      if (!statusCookie) throw new Error('workflow polling re-login did not return a cookie');
+      continue;
+    }
+    if (status.status !== 202)
+      throw new Error(`backup workflow failed (${status.status}): ${JSON.stringify(body)}`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`backup workflow did not complete: ${workflowId}`);
+}
+
 try {
   await run(['d1', 'migrations', 'apply', 'pokedex-local', '--local', '--persist-to', persist]);
   await d1(
@@ -137,6 +158,35 @@ try {
   const login = await json('/api/auth/dev-login', { method: 'POST' });
   let cookie = login.response.headers.get('set-cookie')?.split(';', 1)[0];
   if (!cookie) throw new Error('development login did not return a session cookie');
+  const sessionStillValid = async (after) => {
+    const response = await fetch(`${base}/api/auth/me`, { headers: { cookie } });
+    if (response.status !== 200)
+      throw new Error(`ordinary ${after} mutation revoked the current session: ${response.status}`);
+  };
+  const backupEpoch = async () => {
+    const result = await d1("SELECT backup_epoch FROM users WHERE id='owner';");
+    const match = result.stdout.match(/"backup_epoch":\s*(\d+)/u);
+    if (!match) throw new Error(`backup epoch was not queryable: ${result.stdout}`);
+    return Number(match[1]);
+  };
+  const epochBeforeMutations = await backupEpoch();
+  await json('/api/collection/custom_fixture', {
+    method: 'PUT',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      mutationId: '00000000-0000-4000-8000-000000000002',
+      expectedRevision: 3,
+      quantity: 3,
+      notes: 'private fixture updated',
+    }),
+  });
+  await sessionStillValid('collection');
+  await json('/api/binders/versions/version_fixture/clone', {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ expectedRevision: 1 }),
+  });
+  await sessionStillValid('binder');
   const pair = await json('/api/desktop/pair', {
     method: 'POST',
     headers: { cookie, 'content-type': 'application/json' },
@@ -175,9 +225,12 @@ try {
     },
     body: webp,
   });
-  const postArtLogin = await json('/api/auth/dev-login', { method: 'POST' });
-  cookie = postArtLogin.response.headers.get('set-cookie')?.split(';', 1)[0];
-  if (!cookie) throw new Error('post-art login did not return a session cookie');
+  await sessionStillValid('custom art');
+  const epochAfterMutations = await backupEpoch();
+  if (epochAfterMutations <= epochBeforeMutations)
+    throw new Error(
+      `ordinary mutations did not advance backup consistency: ${epochBeforeMutations} -> ${epochAfterMutations}`,
+    );
   const firstCataloguePage = await json('/api/catalogue/search?limit=100&offset=0', {
     headers: { cookie },
   });
@@ -196,6 +249,15 @@ try {
     secondCataloguePage.body.cards.some((card) => firstIds.has(card.id))
   )
     throw new Error('catalogue keyset page repeated or omitted the expected page size');
+  await d1(
+    `WITH RECURSIVE sequence(value) AS (
+       SELECT 1 UNION ALL SELECT value + 1 FROM sequence WHERE value < 12000
+     )
+     INSERT INTO art_upload_tokens
+       (token_hash,owner_id,card_id,variant,expected_sha256,expected_version,max_bytes,expires_at,consumed_at,created_at)
+     SELECT printf('expired_%05d', value), 'owner', 'custom_fixture', 'low',
+       '${'b'.repeat(64)}', 1, 20, 1, 1, 1 FROM sequence;`,
+  );
   const backupResponses = await Promise.all(
     Array.from({ length: 5 }, () =>
       fetch(`${base}/api/backups`, { method: 'POST', headers: { cookie } }),
@@ -212,22 +274,13 @@ try {
   const backup = await createdBackups[0].json();
   if (typeof backup.workflowId !== 'string')
     throw new Error('backup response did not contain a workflow id');
-  let backupId;
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    const status = await fetch(
-      `${base}/api/backups/workflows/${encodeURIComponent(backup.workflowId)}`,
-      { headers: { cookie } },
-    );
-    const body = await status.json();
-    if (status.status === 200) {
-      backupId = body.id;
-      break;
-    }
-    if (status.status !== 202)
-      throw new Error(`backup workflow failed (${status.status}): ${JSON.stringify(body)}`);
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
+  const backupId = (await completedWorkflow(backup.workflowId, cookie)).id;
   if (typeof backupId !== 'string') throw new Error('backup response did not contain an id');
+  const retained = await d1(
+    'SELECT COUNT(*) AS count FROM art_upload_tokens WHERE expires_at <= 1;',
+  );
+  if (!/"count":\s*0/s.test(retained.stdout))
+    throw new Error(`retention workflow left an expired backlog: ${retained.stdout}`);
 
   await d1(
     `DELETE FROM collection_mutations WHERE owner_id='owner';
@@ -240,10 +293,17 @@ try {
   const restoreLogin = await json('/api/auth/dev-login', { method: 'POST' });
   cookie = restoreLogin.response.headers.get('set-cookie')?.split(';', 1)[0];
   if (!cookie) throw new Error('restore login did not return a session cookie');
-  await json(`/api/backups/${encodeURIComponent(backupId)}/restore`, {
+  const restore = await json(`/api/backups/${encodeURIComponent(backupId)}/restore`, {
     method: 'POST',
     headers: { cookie },
   });
+  if (typeof restore.body.workflowId !== 'string')
+    throw new Error('restore response did not contain a workflow id');
+  const restoreResult = await completedWorkflow(restore.body.workflowId, cookie, true);
+  if (restoreResult.restored !== true || restoreResult.backupId !== backupId)
+    throw new Error(
+      `restore workflow returned an invalid result: ${JSON.stringify(restoreResult)}`,
+    );
 
   const verified = await d1(
     `SELECT
@@ -257,7 +317,7 @@ try {
        (SELECT COUNT(*) FROM backup_runs WHERE id='${backupId}' AND owner_id='owner' AND restored_at IS NOT NULL) AS restored;`,
   );
   const match = verified.stdout.match(
-    /"catalogue":\s*1,\s*"bulk_catalogue":\s*300,\s*"quantity":\s*2,\s*"binders":\s*1,\s*"slots":\s*1,\s*"mutations":\s*0,\s*"epoch":\s*(\d+),\s*"restored":\s*1/s,
+    /"catalogue":\s*1,\s*"bulk_catalogue":\s*300,\s*"quantity":\s*3,\s*"binders":\s*1,\s*"slots":\s*1,\s*"mutations":\s*0,\s*"epoch":\s*(\d+),\s*"restored":\s*1/s,
   );
   if (!match) throw new Error(`backup round-trip mismatch: ${verified.stdout}`);
   if (Number(match[1]) < 1) throw new Error(`restore did not advance mutation epoch: ${match[1]}`);

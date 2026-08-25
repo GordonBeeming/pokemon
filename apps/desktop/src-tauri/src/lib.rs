@@ -189,13 +189,26 @@ async fn disconnect_cloud(state: tauri::State<'_, TauriState>) -> std::result::R
 fn save_capture(
     state: tauri::State<'_, TauriState>,
     bytes: Vec<u8>,
+    preview_bytes: Vec<u8>,
     mime_type: String,
     source: CaptureSource,
 ) -> std::result::Result<PendingScan, String> {
     state
         .services
         .inbox
-        .save(&bytes, &mime_type, source)
+        .save(&bytes, &preview_bytes, &mime_type, source)
+        .map_err(display_error)
+}
+
+#[tauri::command]
+fn pending_scan_preview_path(
+    state: tauri::State<'_, TauriState>,
+    scan_id: Uuid,
+) -> std::result::Result<PathBuf, String> {
+    state
+        .services
+        .inbox
+        .preview_path(scan_id)
         .map_err(display_error)
 }
 
@@ -652,6 +665,7 @@ pub fn run() {
             disconnect_cloud,
             save_capture,
             pending_scan_image,
+            pending_scan_preview_path,
             delete_pending_scan,
             synchronize_art,
             cancel_art_sync,
@@ -990,6 +1004,7 @@ mod tests {
             .inbox
             .save(
                 b"RIFF\x04\x00\x00\x00WEBPdata",
+                b"\xff\xd8\xffpreview",
                 "image/webp",
                 CaptureSource::File,
             )
@@ -1023,6 +1038,7 @@ mod tests {
             .inbox
             .save(
                 b"RIFF\x04\x00\x00\x00WEBPdata",
+                b"\xff\xd8\xffpreview",
                 "image/webp",
                 CaptureSource::Camera,
             )
@@ -1057,6 +1073,7 @@ mod tests {
             .inbox
             .save(
                 b"RIFF\x04\x00\x00\x00WEBPdata",
+                b"\xff\xd8\xffpreview",
                 "image/webp",
                 CaptureSource::Camera,
             )
@@ -1128,6 +1145,7 @@ mod tests {
             .inbox
             .save(
                 b"RIFF\x04\x00\x00\x00WEBPdata",
+                b"\xff\xd8\xffpreview",
                 "image/webp",
                 CaptureSource::File,
             )
@@ -1158,6 +1176,7 @@ mod tests {
             .inbox
             .save(
                 b"RIFF\x04\x00\x00\x00WEBPdata",
+                b"\xff\xd8\xffpreview",
                 "image/webp",
                 CaptureSource::File,
             )
@@ -1166,6 +1185,7 @@ mod tests {
             .inbox
             .save(
                 b"RIFF\x04\x00\x00\x00WEBPdata",
+                b"\xff\xd8\xffpreview",
                 "image/webp",
                 CaptureSource::Camera,
             )

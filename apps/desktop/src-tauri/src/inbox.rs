@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 const MAX_CAPTURE_BYTES: usize = 25 * 1024 * 1024;
+const MAX_PREVIEW_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +64,7 @@ impl PendingInbox {
     pub fn save(
         &self,
         bytes: &[u8],
+        preview_bytes: &[u8],
         declared_mime: &str,
         source: CaptureSource,
     ) -> Result<PendingScan> {
@@ -79,9 +81,18 @@ impl PendingInbox {
                 "declared MIME type {declared_mime} does not match {mime_type} data"
             )));
         }
+        if preview_bytes.is_empty()
+            || preview_bytes.len() > MAX_PREVIEW_BYTES
+            || detect_image_mime(preview_bytes) != Some("image/jpeg")
+        {
+            return Err(DesktopError::InvalidImage(format!(
+                "preview must contain 1 to {MAX_PREVIEW_BYTES} bytes of JPEG data"
+            )));
+        }
         std::fs::create_dir_all(&self.root)?;
         let id = Uuid::new_v4();
         let image_path = self.image_path(id, mime_type);
+        let preview_path = self.thumbnail_path(id);
         let metadata = PendingScan {
             id,
             created_at: SystemTime::now()
@@ -97,11 +108,16 @@ impl PendingInbox {
             completed_result: None,
         };
         write_private(&image_path, bytes)?;
+        if let Err(error) = write_private(&preview_path, preview_bytes) {
+            let _cleanup_result = std::fs::remove_file(&image_path);
+            return Err(error);
+        }
         if let Err(error) = write_private(
             &self.metadata_path(id),
             &serde_json::to_vec_pretty(&metadata)?,
         ) {
             let _cleanup_result = std::fs::remove_file(image_path);
+            let _preview_cleanup_result = std::fs::remove_file(preview_path);
             return Err(error);
         }
         Ok(metadata)
@@ -160,9 +176,19 @@ impl PendingInbox {
         })
     }
 
+    pub fn preview_path(&self, id: Uuid) -> Result<PathBuf> {
+        self.read_metadata(id)?;
+        let path = self.thumbnail_path(id);
+        if !path.is_file() {
+            return Err(DesktopError::InvalidPath(path));
+        }
+        Ok(path)
+    }
+
     pub fn delete(&self, id: Uuid) -> Result<()> {
         let scan = self.read_metadata(id)?;
         remove_if_exists(&self.image_path(id, &scan.mime_type))?;
+        remove_if_exists(&self.thumbnail_path(id))?;
         remove_if_exists(&self.metadata_path(id))?;
         Ok(())
     }
@@ -205,6 +231,7 @@ impl PendingInbox {
             return Err(DesktopError::Mcp("scan is not complete".to_string()));
         }
         remove_if_exists(&self.image_path(id, &scan.mime_type))?;
+        remove_if_exists(&self.thumbnail_path(id))?;
         remove_if_exists(&self.metadata_path(id))?;
         Ok(())
     }
@@ -240,6 +267,10 @@ impl PendingInbox {
 
     fn image_path(&self, id: Uuid, mime_type: &str) -> PathBuf {
         self.root.join(format!("{id}.{}", extension(mime_type)))
+    }
+
+    fn thumbnail_path(&self, id: Uuid) -> PathBuf {
+        self.root.join(format!("{id}.preview.jpg"))
     }
 }
 
@@ -299,15 +330,19 @@ mod tests {
         b"RIFF\x04\x00\x00\x00WEBPdata".to_vec()
     }
 
+    fn preview() -> Vec<u8> {
+        b"\xff\xd8\xffpreview".to_vec()
+    }
+
     #[test]
     fn camera_and_file_captures_use_the_same_pending_inbox() {
         let root = tempdir().expect("temp dir");
         let inbox = PendingInbox::new(root.path().join("inbox"));
         let first = inbox
-            .save(&webp(), "image/webp", CaptureSource::Camera)
+            .save(&webp(), &preview(), "image/webp", CaptureSource::Camera)
             .expect("camera capture");
         let second = inbox
-            .save(&webp(), "image/webp", CaptureSource::File)
+            .save(&webp(), &preview(), "image/webp", CaptureSource::File)
             .expect("file capture");
 
         let scans = inbox.list().expect("list scans");
@@ -316,6 +351,10 @@ mod tests {
             inbox.read_image(first.id).expect("image").data,
             "UklGRgQAAABXRUJQZGF0YQ=="
         );
+        assert!(inbox
+            .preview_path(first.id)
+            .expect("preview path")
+            .is_file());
         inbox.delete(second.id).expect("delete scan");
         assert_eq!(inbox.list().expect("list scans").len(), 1);
     }
@@ -325,7 +364,7 @@ mod tests {
         let root = tempdir().expect("temp dir");
         let inbox = PendingInbox::new(root.path().join("inbox"));
         let error = inbox
-            .save(&webp(), "image/png", CaptureSource::File)
+            .save(&webp(), &preview(), "image/png", CaptureSource::File)
             .expect_err("mismatched type");
         assert!(error.to_string().contains("does not match"));
     }
@@ -340,7 +379,7 @@ mod tests {
         let root = tempdir().expect("temp dir");
         let inbox = PendingInbox::new(root.path().join("inbox"));
         let valid = inbox
-            .save(&webp(), "IMAGE/WEBP", CaptureSource::File)
+            .save(&webp(), &preview(), "IMAGE/WEBP", CaptureSource::File)
             .expect("valid scan");
         std::fs::write(inbox.root.join("broken.json"), b"not json").expect("broken metadata");
 
@@ -355,7 +394,7 @@ mod tests {
         let root = tempdir().expect("temp dir");
         let inbox = PendingInbox::new(root.path().join("inbox"));
         let scan = inbox
-            .save(&webp(), "image/webp", CaptureSource::Camera)
+            .save(&webp(), &preview(), "image/webp", CaptureSource::Camera)
             .expect("scan");
         let claimed = inbox.claim(scan.id, "card-1").expect("claim");
         assert_eq!(claimed.mutation_id, scan.mutation_id);

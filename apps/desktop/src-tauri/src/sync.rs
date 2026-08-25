@@ -7,7 +7,7 @@ use crate::error::{DesktopError, Result};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -83,6 +83,8 @@ const SOURCE_DISCOVERY_PAGE_CARDS: usize = 500;
 const MAX_ART_BYTES: u64 = 15 * 1024 * 1024;
 const TCGDEX_RETRY_ATTEMPTS: u32 = 4;
 const TCGDEX_RETRY_AFTER_CAP: Duration = Duration::from_secs(10);
+const TCGDEX_LIST_MAX_BYTES: usize = 25 * 1024 * 1024;
+const TCGDEX_DETAIL_MAX_BYTES: usize = 2 * 1024 * 1024;
 
 fn is_transient_status(status: reqwest::StatusCode) -> bool {
     status == reqwest::StatusCode::TOO_MANY_REQUESTS
@@ -106,6 +108,32 @@ fn retry_delay(attempt: u32, headers: &reqwest::header::HeaderMap) -> Duration {
             u64::from(duration.subsec_nanos()) % jitter_ceiling
         });
     Duration::from_millis(base_millis + jitter).min(TCGDEX_RETRY_AFTER_CAP)
+}
+
+async fn bounded_response_json<T: DeserializeOwned>(
+    response: reqwest::Response,
+    maximum_bytes: usize,
+) -> Result<T> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > maximum_bytes as u64)
+    {
+        return Err(DesktopError::InvalidCloudResponse(
+            "TCGdex JSON response exceeded its byte limit".to_string(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        if bytes.len().saturating_add(chunk.len()) > maximum_bytes {
+            return Err(DesktopError::InvalidCloudResponse(
+                "TCGdex JSON response exceeded its byte limit".to_string(),
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(serde_json::from_slice(&bytes)?)
 }
 
 async fn wait_for_cancellation(cancellation: &AtomicBool) {
@@ -226,7 +254,8 @@ impl TcgdexArtSource {
                         response.status().as_u16()
                     )));
                 }
-                let cards: Vec<TcgdexCardBrief> = response.json().await?;
+                let cards: Vec<TcgdexCardBrief> =
+                    bounded_response_json(response, TCGDEX_LIST_MAX_BYTES).await?;
                 let mut indexed = HashMap::with_capacity(cards.len());
                 for card in cards {
                     let image = match card.image {
@@ -284,7 +313,7 @@ impl CardArtSource for TcgdexArtSource {
                 response.status().as_u16()
             )));
         }
-        let card: TcgdexCard = response.json().await?;
+        let card: TcgdexCard = bounded_response_json(response, TCGDEX_DETAIL_MAX_BYTES).await?;
         if card.id != source.source_id {
             return Err(DesktopError::InvalidCloudResponse(
                 "TCGdex returned a different card identifier".to_string(),

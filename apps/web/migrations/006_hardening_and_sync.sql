@@ -33,6 +33,7 @@ DROP TRIGGER migration_006_preflight_binder_layout;
 DROP TABLE migration_006_preflight;
 
 ALTER TABLE users ADD COLUMN mutation_epoch INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN backup_epoch INTEGER NOT NULL DEFAULT 0;
 
 CREATE TABLE web_sessions (
   id_hash TEXT PRIMARY KEY NOT NULL,
@@ -232,36 +233,36 @@ END;
 CREATE TRIGGER collection_cards_epoch_after_insert
 AFTER INSERT ON collection_cards
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = NEW.owner_id;
+  UPDATE users SET backup_epoch = backup_epoch + 1 WHERE id = NEW.owner_id;
 END;
 CREATE TRIGGER collection_cards_epoch_after_update
 AFTER UPDATE ON collection_cards
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = NEW.owner_id;
-  UPDATE users SET mutation_epoch = mutation_epoch + 1
+  UPDATE users SET backup_epoch = backup_epoch + 1 WHERE id = NEW.owner_id;
+  UPDATE users SET backup_epoch = backup_epoch + 1
   WHERE id = OLD.owner_id AND OLD.owner_id <> NEW.owner_id;
 END;
 CREATE TRIGGER collection_cards_epoch_after_delete
 AFTER DELETE ON collection_cards
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = OLD.owner_id;
+  UPDATE users SET backup_epoch = backup_epoch + 1 WHERE id = OLD.owner_id;
 END;
 CREATE TRIGGER binders_epoch_after_insert
 AFTER INSERT ON binders
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = NEW.owner_id;
+  UPDATE users SET backup_epoch = backup_epoch + 1 WHERE id = NEW.owner_id;
 END;
 CREATE TRIGGER binders_epoch_after_update
 AFTER UPDATE ON binders
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = NEW.owner_id;
-  UPDATE users SET mutation_epoch = mutation_epoch + 1
+  UPDATE users SET backup_epoch = backup_epoch + 1 WHERE id = NEW.owner_id;
+  UPDATE users SET backup_epoch = backup_epoch + 1
   WHERE id = OLD.owner_id AND OLD.owner_id <> NEW.owner_id;
 END;
 CREATE TRIGGER binders_epoch_after_delete
 AFTER DELETE ON binders
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = OLD.owner_id;
+  UPDATE users SET backup_epoch = backup_epoch + 1 WHERE id = OLD.owner_id;
 END;
 
 -- Custom catalogue rows, their source metadata, and their art are part of every
@@ -271,57 +272,57 @@ CREATE TRIGGER custom_catalogue_epoch_after_insert
 AFTER INSERT ON catalogue_cards
 WHEN NEW.is_custom = 1
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+  UPDATE users SET backup_epoch = backup_epoch + 1;
 END;
 CREATE TRIGGER custom_catalogue_epoch_after_update
 AFTER UPDATE ON catalogue_cards
 WHEN OLD.is_custom = 1 OR NEW.is_custom = 1
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+  UPDATE users SET backup_epoch = backup_epoch + 1;
 END;
 CREATE TRIGGER custom_catalogue_epoch_after_delete
 AFTER DELETE ON catalogue_cards
 WHEN OLD.is_custom = 1
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+  UPDATE users SET backup_epoch = backup_epoch + 1;
 END;
 CREATE TRIGGER custom_source_epoch_after_insert
 AFTER INSERT ON card_sources
 WHEN EXISTS (SELECT 1 FROM catalogue_cards WHERE id = NEW.card_id AND is_custom = 1)
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+  UPDATE users SET backup_epoch = backup_epoch + 1;
 END;
 CREATE TRIGGER custom_source_epoch_after_update
 AFTER UPDATE ON card_sources
 WHEN EXISTS (SELECT 1 FROM catalogue_cards WHERE id = OLD.card_id AND is_custom = 1)
   OR EXISTS (SELECT 1 FROM catalogue_cards WHERE id = NEW.card_id AND is_custom = 1)
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+  UPDATE users SET backup_epoch = backup_epoch + 1;
 END;
 CREATE TRIGGER custom_source_epoch_after_delete
 AFTER DELETE ON card_sources
 WHEN EXISTS (SELECT 1 FROM catalogue_cards WHERE id = OLD.card_id AND is_custom = 1)
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+  UPDATE users SET backup_epoch = backup_epoch + 1;
 END;
 CREATE TRIGGER custom_art_epoch_after_insert
 AFTER INSERT ON art_manifest
 WHEN EXISTS (SELECT 1 FROM catalogue_cards WHERE id = NEW.card_id AND is_custom = 1)
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+  UPDATE users SET backup_epoch = backup_epoch + 1;
 END;
 CREATE TRIGGER custom_art_epoch_after_update
 AFTER UPDATE ON art_manifest
 WHEN EXISTS (SELECT 1 FROM catalogue_cards WHERE id = OLD.card_id AND is_custom = 1)
   OR EXISTS (SELECT 1 FROM catalogue_cards WHERE id = NEW.card_id AND is_custom = 1)
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+  UPDATE users SET backup_epoch = backup_epoch + 1;
 END;
 CREATE TRIGGER custom_art_epoch_after_delete
 AFTER DELETE ON art_manifest
 WHEN EXISTS (SELECT 1 FROM catalogue_cards WHERE id = OLD.card_id AND is_custom = 1)
 BEGIN
-  UPDATE users SET mutation_epoch = mutation_epoch + 1;
+  UPDATE users SET backup_epoch = backup_epoch + 1;
 END;
 
 ALTER TABLE catalogue_cards ADD COLUMN number_sort INTEGER;

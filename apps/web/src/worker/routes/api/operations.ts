@@ -5,6 +5,7 @@ import type {
   CollectionNotesPatchRequest,
   CollectionSetRequest,
 } from '@pokedex/shared';
+import { cardCategorySchema, languageSchema } from '@pokedex/shared';
 import { getArtResponse, listArtManifest } from '../../lib/art';
 import {
   createBinder,
@@ -28,6 +29,37 @@ import {
   setCollectionState,
 } from '../../lib/collection';
 import { ApplicationError } from '../../lib/log';
+import { asPositiveInt } from '../../lib/db';
+
+export function catalogueFilters(
+  query: Record<string, string>,
+  includeOwned: boolean,
+): CatalogueFilters {
+  const language = query.language ? languageSchema.safeParse(query.language) : undefined;
+  const category = query.category ? cardCategorySchema.safeParse(query.category) : undefined;
+  if ((language && !language.success) || (category && !category.success))
+    throw new ApplicationError('invalid_filter', 400);
+  const owned =
+    !includeOwned || query.owned === undefined
+      ? undefined
+      : query.owned === 'true'
+        ? true
+        : query.owned === 'false'
+          ? false
+          : null;
+  if (owned === null) throw new ApplicationError('invalid_filter', 400);
+  return {
+    query: query.q,
+    language: language?.success ? language.data : undefined,
+    category: category?.success ? category.data : undefined,
+    setId: query.setId,
+    species: query.species,
+    owned,
+    limit: asPositiveInt(query.limit, 50, 100),
+    offset: Math.max(0, Number.parseInt(query.offset ?? '0', 10) || 0),
+    cursor: query.cursor ?? null,
+  };
+}
 
 export function ownerOperations(env: CloudflareEnv, ownerId: string) {
   return {

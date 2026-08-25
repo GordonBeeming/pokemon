@@ -9,7 +9,10 @@ const mocks = vi.hoisted(() => ({
   writeText: vi.fn(),
 }));
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: mocks.invoke,
+  convertFileSrc: (path: string) => `asset://localhost/${path}`,
+}));
 vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: mocks.openUrl }));
 
 function deferred<T>(): {
@@ -70,6 +73,42 @@ describe('desktop main DOM', () => {
       configurable: true,
       value: { getUserMedia: vi.fn() },
     });
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        readonly root = null;
+        readonly rootMargin = '0px';
+        readonly thresholds = [0];
+
+        constructor(private readonly callback: IntersectionObserverCallback) {}
+
+        observe(target: Element): void {
+          const bounds = target.getBoundingClientRect();
+          queueMicrotask(() =>
+            this.callback(
+              [
+                {
+                  boundingClientRect: bounds,
+                  intersectionRatio: 1,
+                  intersectionRect: bounds,
+                  isIntersecting: true,
+                  rootBounds: null,
+                  target,
+                  time: performance.now(),
+                },
+              ],
+              this,
+            ),
+          );
+        }
+
+        disconnect(): void {}
+        unobserve(): void {}
+        takeRecords(): IntersectionObserverEntry[] {
+          return [];
+        }
+      },
+    );
     HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
   });
 
@@ -101,12 +140,8 @@ describe('desktop main DOM', () => {
         if (statusCalls === 1) return Promise.resolve(status([firstScan, secondScan]));
         return statusCalls === 2 ? olderRefresh.promise : newerRefresh.promise;
       }
-      if (command === 'pending_scan_image') {
-        return Promise.resolve({
-          id: firstScan.id,
-          mimeType: 'image/webp',
-          data: 'UklGRgQAAABXRUJQZGF0YQ==',
-        });
+      if (command === 'pending_scan_preview_path') {
+        return Promise.resolve('/tmp/pending.preview.jpg');
       }
       if (command === 'delete_pending_scan') {
         const call = deleteCalls[deleteIndex];
@@ -118,6 +153,14 @@ describe('desktop main DOM', () => {
 
     await import('./main');
     await waitFor(() => document.querySelectorAll('.pending-item').length === 2);
+    await waitFor(() =>
+      mocks.invoke.mock.calls.some(([command]) => command === 'pending_scan_preview_path'),
+    );
+    expect(
+      Array.from(document.querySelectorAll<HTMLImageElement>('.pending-item img')).every(
+        (image) => image.src.startsWith('asset://') && image.src.includes('pending.preview.jpg'),
+      ),
+    ).toBe(true);
 
     const fileInput = document.querySelector('#file-capture');
     expect(fileInput).toBeInstanceOf(HTMLInputElement);

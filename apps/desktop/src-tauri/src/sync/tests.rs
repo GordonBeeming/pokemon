@@ -1,6 +1,8 @@
 use super::*;
+use axum::body::Body;
 use axum::extract::Path as AxumPath;
 use axum::extract::State;
+use axum::http::{header, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -850,6 +852,24 @@ async fn tcgdex_card_detail(
     }))
 }
 
+async fn oversized_tcgdex_json() -> Response<Body> {
+    Response::builder()
+        .status(200)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONTENT_LENGTH, TCGDEX_LIST_MAX_BYTES + 1)
+        .body(Body::from(vec![b' '; TCGDEX_LIST_MAX_BYTES + 1]))
+        .expect("oversized response")
+}
+
+async fn oversized_tcgdex_detail() -> Response<Body> {
+    Response::builder()
+        .status(200)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONTENT_LENGTH, TCGDEX_DETAIL_MAX_BYTES + 1)
+        .body(Body::from(vec![b' '; TCGDEX_DETAIL_MAX_BYTES + 1]))
+        .expect("oversized response")
+}
+
 #[tokio::test]
 async fn tcgdex_card_list_is_fetched_once_for_multiple_cards_in_one_language() {
     let requests = Arc::new(AtomicUsize::new(0));
@@ -889,6 +909,52 @@ async fn tcgdex_card_list_is_fetched_once_for_multiple_cards_in_one_language() {
     assert!(first.is_some());
     assert!(second.is_some());
     assert_eq!(requests.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn tcgdex_list_and_detail_json_are_rejected_before_oversized_bodies_are_read() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener");
+    let address = listener.local_addr().expect("address");
+    let router = Router::new().route("/en/cards", get(oversized_tcgdex_json));
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.expect("TCGdex mock");
+    });
+    let source = TcgdexArtSource {
+        http: reqwest::Client::new(),
+        api_base: Url::parse(&format!("http://{address}/")).expect("API base"),
+        language_cards: RwLock::new(HashMap::new()),
+    };
+    let list_error = source
+        .image_base(&source_entry("card", "source"))
+        .await
+        .expect_err("oversized list");
+    assert!(list_error.to_string().contains("exceeded its byte limit"));
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("listener");
+    let address = listener.local_addr().expect("address");
+    let router = Router::new()
+        .route("/en/cards", get(tcgdex_empty_card_list))
+        .route("/en/cards/{id}", get(oversized_tcgdex_detail))
+        .with_state(ListRequestState {
+            requests: Arc::new(AtomicUsize::new(0)),
+        });
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.expect("TCGdex mock");
+    });
+    let source = TcgdexArtSource {
+        http: reqwest::Client::new(),
+        api_base: Url::parse(&format!("http://{address}/")).expect("API base"),
+        language_cards: RwLock::new(HashMap::new()),
+    };
+    let detail_error = source
+        .image_base(&source_entry("card", "source"))
+        .await
+        .expect_err("oversized detail");
+    assert!(detail_error.to_string().contains("exceeded its byte limit"));
 }
 
 #[tokio::test]

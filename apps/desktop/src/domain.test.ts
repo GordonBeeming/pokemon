@@ -27,19 +27,30 @@ describe('capture workflows', () => {
       arrayBuffer: () => Promise.resolve(Uint8Array.from([82, 73, 70, 70]).buffer),
     };
 
-    await expect(importCapture(input, save)).resolves.toEqual(pending);
-    expect(save).toHaveBeenCalledWith([82, 73, 70, 70], 'image/webp', 'file');
+    const preview = Uint8Array.from([255, 216, 255, 217]);
+    await expect(importCapture(input, preview, save)).resolves.toEqual(pending);
+    expect(save).toHaveBeenCalledWith([82, 73, 70, 70], 'image/webp', 'file', Array.from(preview));
   });
 
   it('passes a mocked camera frame to the same local pending inbox', async () => {
     const save = vi.fn<SaveCapture>().mockResolvedValue({ ...pending, source: 'camera' });
 
     await captureCameraFrame(
-      () => Promise.resolve({ mimeType: 'image/jpeg', bytes: Uint8Array.from([255, 216, 255]) }),
+      () =>
+        Promise.resolve({
+          mimeType: 'image/jpeg',
+          bytes: Uint8Array.from([255, 216, 255]),
+          previewBytes: Uint8Array.from([255, 216, 255, 217]),
+        }),
       save,
     );
 
-    expect(save).toHaveBeenCalledWith([255, 216, 255], 'image/jpeg', 'camera');
+    expect(save).toHaveBeenCalledWith(
+      [255, 216, 255],
+      'image/jpeg',
+      'camera',
+      [255, 216, 255, 217],
+    );
   });
 
   it('rejects unsupported files before invoking native storage', async () => {
@@ -50,7 +61,9 @@ describe('capture workflows', () => {
       arrayBuffer: () => Promise.resolve(new ArrayBuffer(4)),
     };
 
-    await expect(importCapture(input, save)).rejects.toThrow('Choose a JPEG');
+    await expect(importCapture(input, Uint8Array.from([255, 216, 255, 217]), save)).rejects.toThrow(
+      'Choose a JPEG',
+    );
     expect(save).not.toHaveBeenCalled();
   });
 });

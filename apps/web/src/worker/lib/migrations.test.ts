@@ -253,7 +253,7 @@ describe('migration 006 legacy-data safety', () => {
     ).toEqual({ active_version_id: 'version-2' });
   });
 
-  it('increments mutation epochs once for each owner affected by an owner change', () => {
+  it('increments backup epochs without revoking sessions when personal data changes', () => {
     const database = databaseAtMigrationFive();
     applyMigrationSix(database);
 
@@ -264,20 +264,23 @@ describe('migration 006 legacy-data safety', () => {
       WHERE owner_id = 'owner-a' AND card_id = 'card-1';
     `);
 
-    expect(database.prepare('SELECT id, mutation_epoch FROM users ORDER BY id').all()).toEqual([
-      { id: 'owner-a', mutation_epoch: 2 },
-      { id: 'owner-b', mutation_epoch: 1 },
+    expect(
+      database.prepare('SELECT id, mutation_epoch, backup_epoch FROM users ORDER BY id').all(),
+    ).toEqual([
+      { id: 'owner-a', mutation_epoch: 0, backup_epoch: 2 },
+      { id: 'owner-b', mutation_epoch: 0, backup_epoch: 1 },
     ]);
     database.exec("DELETE FROM collection_cards WHERE owner_id = 'owner-b'");
-    expect(database.prepare("SELECT mutation_epoch FROM users WHERE id = 'owner-b'").get()).toEqual(
-      { mutation_epoch: 2 },
-    );
+    expect(
+      database.prepare("SELECT mutation_epoch, backup_epoch FROM users WHERE id = 'owner-b'").get(),
+    ).toEqual({ mutation_epoch: 0, backup_epoch: 2 });
   });
 
   it('invalidates every owner backup when the custom catalogue graph changes', () => {
     const database = databaseAtMigrationFive();
     applyMigrationSix(database);
-    const epochs = () => database.prepare('SELECT id, mutation_epoch FROM users ORDER BY id').all();
+    const epochs = () =>
+      database.prepare('SELECT id, mutation_epoch, backup_epoch FROM users ORDER BY id').all();
 
     database.exec(`
       INSERT INTO catalogue_cards
@@ -285,8 +288,8 @@ describe('migration 006 legacy-data safety', () => {
       VALUES ('custom-1', 'Custom', 'en', 'special', 'custom', 'Custom', '1', 1, 1, 1);
     `);
     expect(epochs()).toEqual([
-      { id: 'owner-a', mutation_epoch: 1 },
-      { id: 'owner-b', mutation_epoch: 1 },
+      { id: 'owner-a', mutation_epoch: 0, backup_epoch: 1 },
+      { id: 'owner-b', mutation_epoch: 0, backup_epoch: 1 },
     ]);
 
     database.exec(`
@@ -298,8 +301,8 @@ describe('migration 006 legacy-data safety', () => {
       VALUES ('custom-1', 'high', 'cards/custom-1/high/hash.webp', '${'a'.repeat(64)}', 20, 1, 1);
     `);
     expect(epochs()).toEqual([
-      { id: 'owner-a', mutation_epoch: 3 },
-      { id: 'owner-b', mutation_epoch: 3 },
+      { id: 'owner-a', mutation_epoch: 0, backup_epoch: 3 },
+      { id: 'owner-b', mutation_epoch: 0, backup_epoch: 3 },
     ]);
 
     database.exec(`
@@ -308,8 +311,8 @@ describe('migration 006 legacy-data safety', () => {
       UPDATE art_manifest SET updated_at = 2 WHERE card_id = 'custom-1';
     `);
     expect(epochs()).toEqual([
-      { id: 'owner-a', mutation_epoch: 6 },
-      { id: 'owner-b', mutation_epoch: 6 },
+      { id: 'owner-a', mutation_epoch: 0, backup_epoch: 6 },
+      { id: 'owner-b', mutation_epoch: 0, backup_epoch: 6 },
     ]);
 
     database.exec(`
@@ -318,8 +321,39 @@ describe('migration 006 legacy-data safety', () => {
       DELETE FROM catalogue_cards WHERE id = 'custom-1';
     `);
     expect(epochs()).toEqual([
-      { id: 'owner-a', mutation_epoch: 9 },
-      { id: 'owner-b', mutation_epoch: 9 },
+      { id: 'owner-a', mutation_epoch: 0, backup_epoch: 9 },
+      { id: 'owner-b', mutation_epoch: 0, backup_epoch: 9 },
     ]);
+  });
+
+  it('keeps an existing session valid while its backup generation advances', () => {
+    const database = databaseAtMigrationFive();
+    applyMigrationSix(database);
+    database.exec(`
+      INSERT INTO web_sessions
+        (id_hash, user_id, mutation_epoch, expires_at, created_at)
+      VALUES ('session-a', 'owner-a', 0, 9999999999, 1);
+      INSERT INTO collection_cards (owner_id, card_id, quantity, revision, updated_at)
+      VALUES ('owner-a', 'card-1', 1, 1, 1);
+      INSERT INTO binders (id, owner_id, name, created_at, updated_at)
+      VALUES ('binder-session', 'owner-a', 'Binder', 1, 1);
+      INSERT INTO catalogue_cards
+        (id, name, language, category, set_id, set_name, number, is_custom, created_at, updated_at)
+      VALUES ('custom-session', 'Custom', 'en', 'special', 'custom', 'Custom', '2', 1, 1, 1);
+      INSERT INTO art_manifest
+        (card_id, variant, object_key, sha256, bytes, version, updated_at)
+      VALUES ('custom-session', 'high', 'cards/custom-session/high/hash.webp', '${'b'.repeat(64)}', 20, 1, 1);
+    `);
+
+    expect(
+      database
+        .prepare(
+          `SELECT u.mutation_epoch = session.mutation_epoch AS valid,
+             u.mutation_epoch, u.backup_epoch
+           FROM users u JOIN web_sessions session ON session.user_id = u.id
+           WHERE u.id = 'owner-a'`,
+        )
+        .get(),
+    ).toEqual({ valid: 1, mutation_epoch: 0, backup_epoch: 4 });
   });
 });

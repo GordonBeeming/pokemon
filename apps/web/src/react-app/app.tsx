@@ -44,7 +44,7 @@ function LoadingRoute({ message }: { message: string }): ReactElement {
 
 function RouteLoadError({ route, retry }: { route: string; retry: () => void }): ReactElement {
   return (
-    <section className="empty-state" role="alert">
+    <section className="empty-state">
       <h1>{route} could not load.</h1>
       <button className="quiet-button" type="button" onClick={retry}>
         Try again
@@ -135,9 +135,9 @@ export function App(): ReactElement {
       .catch((error: unknown) => {
         const message = userMessage(error);
         if (message && generation === loadGeneration.current) {
-          setNotice({ kind: 'error', message });
+          setNotice({ kind: 'error', message: `${routeLabel} could not load. ${message}` });
           setRouteError(routeLabel);
-          setRouteStatus(`${routeLabel} could not load.`);
+          setRouteStatus('');
         }
       })
       .finally(() => {

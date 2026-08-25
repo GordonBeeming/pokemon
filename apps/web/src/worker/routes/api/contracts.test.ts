@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { arrangementBody, pageOrderBody } from './index';
+import { catalogueFilters } from './operations';
 
 describe('API contracts', () => {
   it('requires a revision for page reordering and rejects extra fields', () => {
@@ -22,5 +23,16 @@ describe('API contracts', () => {
     expect(
       arrangementBody.safeParse({ mode: 'set-number', expectedRevision: 4, ignored: true }).success,
     ).toBe(false);
+  });
+
+  it('shares catalogue query parsing across browser and desktop routes', () => {
+    expect(catalogueFilters({ language: 'en', owned: 'true', limit: '25' }, true)).toMatchObject({
+      language: 'en',
+      owned: true,
+      limit: 25,
+      offset: 0,
+    });
+    expect(catalogueFilters({ owned: 'true' }, false).owned).toBeUndefined();
+    expect(() => catalogueFilters({ owned: 'sometimes' }, true)).toThrow('invalid_filter');
   });
 });
