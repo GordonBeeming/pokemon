@@ -254,15 +254,36 @@ function pendingArticle(scan: PendingScan): HTMLElement {
   const remove = document.createElement('button');
   remove.className = 'text-action danger';
   remove.type = 'button';
-  remove.textContent = 'Delete';
-  remove.setAttribute('aria-label', `Delete pending capture ${scan.id}`);
-  remove.addEventListener('click', () => {
-    void runAction(async () => {
-      await invoke('delete_pending_scan', { scanId: scan.id });
-      await refresh();
-      showNotice('Local capture deleted.');
+  if (scan.state === 'pending') {
+    remove.textContent = 'Delete';
+    remove.setAttribute('aria-label', `Delete pending capture ${scan.id}`);
+    remove.addEventListener('click', () => {
+      remove.disabled = true;
+      remove.textContent = 'Deleting…';
+      remove.setAttribute('aria-label', `Deleting pending capture ${scan.id}`);
+      article.setAttribute('aria-busy', 'true');
+      void runAction(async () => {
+        await invoke('delete_pending_scan', { scanId: scan.id });
+        await refresh();
+        showNotice('Local capture deleted.');
+      }).finally(() => {
+        if (!article.isConnected) return;
+        article.removeAttribute('aria-busy');
+        remove.disabled = false;
+        remove.textContent = 'Delete';
+        remove.setAttribute('aria-label', `Delete pending capture ${scan.id}`);
+      });
     });
-  });
+  } else {
+    remove.disabled = true;
+    remove.textContent = scan.state === 'claimed' ? 'Confirming…' : 'Confirmed';
+    remove.setAttribute(
+      'aria-label',
+      scan.state === 'claimed'
+        ? `Capture ${scan.id} is being confirmed and cannot be deleted`
+        : `Capture ${scan.id} is confirmed and cannot be deleted`,
+    );
+  }
   article.append(preview, detail, remove);
   return article;
 }

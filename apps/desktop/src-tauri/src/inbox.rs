@@ -199,12 +199,12 @@ impl PendingInbox {
     }
 
     pub fn delete(&self, id: Uuid) -> Result<()> {
-        self.begin_scan_transaction()?.delete(id)
+        self.begin_scan_transaction(id)?.delete_pending()
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn claim(&self, id: Uuid, card_id: &str) -> Result<PendingScan> {
-        self.begin_scan_transaction()?.claim(id, card_id)
+        self.begin_scan_transaction(id)?.claim(card_id)
     }
 
     fn claim_unlocked(&self, id: Uuid, card_id: &str) -> Result<PendingScan> {
@@ -228,7 +228,7 @@ impl PendingInbox {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn complete(&self, id: Uuid, result: serde_json::Value) -> Result<PendingScan> {
-        self.begin_scan_transaction()?.complete(id, result)
+        self.begin_scan_transaction(id)?.complete(result)
     }
 
     fn complete_unlocked(&self, id: Uuid, result: serde_json::Value) -> Result<PendingScan> {
@@ -246,7 +246,7 @@ impl PendingInbox {
 
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn finish_completed(&self, id: Uuid) -> Result<()> {
-        self.begin_scan_transaction()?.finish_completed(id)
+        self.begin_scan_transaction(id)?.finish_completed()
     }
 
     fn read_metadata(&self, id: Uuid) -> Result<PendingScan> {

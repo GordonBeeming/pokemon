@@ -341,6 +341,49 @@ fn canonical_validation_rejects_duplicate_unknown_missing_and_cross_scan_entries
 }
 
 #[test]
+fn recovery_quarantines_a_self_consistent_capture_identity_that_disagrees_with_metadata() {
+    let root = tempdir().expect("temp dir");
+    let inbox = PendingInbox::new(root.path().join("inbox"));
+    let scan = inbox
+        .save(&webp(), &preview(), "image/webp", CaptureSource::File)
+        .expect("scan");
+    let mut journal = inbox.new_delete_journal(&scan).expect("journal");
+    let false_capture = inbox.root.join(format!("{}.png", scan.id));
+    std::fs::rename(inbox.image_path(scan.id, &scan.mime_type), &false_capture)
+        .expect("rename capture to false identity");
+    journal.capture_mime_type = "image/png".to_string();
+    journal.capture_original = format!("{}.png", scan.id);
+    journal
+        .entries
+        .iter_mut()
+        .find(|entry| entry.label == "capture")
+        .expect("capture entry")
+        .original = journal.capture_original.clone();
+    inbox
+        .validate_delete_journal(&journal)
+        .expect("journal is internally canonical");
+    inbox.write_delete_journal(&journal).expect("false journal");
+
+    let report = inbox.recover_delete_journals().expect("isolated recovery");
+
+    assert_eq!(report.recovered, 0);
+    assert_eq!(report.quarantined, 1);
+    assert!(report.diagnostics.iter().any(
+        |diagnostic| diagnostic.contains("capture identity disagrees with persisted metadata")
+    ));
+    assert!(false_capture.is_file());
+    assert!(inbox.metadata_path(scan.id).is_file());
+    assert!(inbox.thumbnail_path(scan.id).is_file());
+    assert!(journal.entries.iter().all(|entry| {
+        !inbox
+            .delete_entry_paths(entry)
+            .expect("entry paths")
+            .1
+            .exists()
+    }));
+}
+
+#[test]
 fn directory_entry_errors_are_reported_without_hiding_later_journals() {
     let root = tempdir().expect("temp dir");
     let first = root
@@ -396,6 +439,35 @@ fn journal_creation_fails_before_staging_when_a_required_source_is_missing() {
             .count(),
         0
     );
+}
+
+#[test]
+fn user_delete_rejects_claimed_and_completed_scans_while_finalize_removes_completed() {
+    let root = tempdir().expect("temp dir");
+    let inbox = PendingInbox::new(root.path().join("inbox"));
+    let scan = inbox
+        .save(&webp(), &preview(), "image/webp", CaptureSource::Camera)
+        .expect("scan");
+
+    inbox.claim(scan.id, "card-1").expect("claim scan");
+    assert!(inbox
+        .delete(scan.id)
+        .expect_err("claimed delete is rejected")
+        .to_string()
+        .contains("cannot delete a claimed or completed scan"));
+    inbox
+        .complete(scan.id, serde_json::json!({ "ok": true }))
+        .expect("complete scan");
+    assert!(inbox
+        .delete(scan.id)
+        .expect_err("completed delete is rejected")
+        .to_string()
+        .contains("cannot delete a claimed or completed scan"));
+
+    inbox
+        .finish_completed(scan.id)
+        .expect("finalization removes completed scan");
+    assert!(inbox.list().expect("empty inbox").is_empty());
 }
 
 #[test]
@@ -504,12 +576,6 @@ fn second_process_cannot_scavenge_an_inflight_delete() {
     assert!(!capture.exists());
     assert!(capture_tombstone.exists());
     assert!(inbox.delete_journal_path(journal.operation_id).is_file());
-    let claim_error = inbox
-        .claim(scan.id, "card-1")
-        .expect_err("second process cannot claim during a transaction");
-    assert!(claim_error
-        .to_string()
-        .contains("pending scan transaction is already running"));
 
     std::fs::write(&release, b"release").expect("release marker");
     assert!(child.wait().expect("child exit").success());

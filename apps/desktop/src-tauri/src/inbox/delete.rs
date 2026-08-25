@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 const DELETE_TOMBSTONE_PREFIX: &str = ".pokedex-delete-";
 const DELETE_LOCK_DATABASE: &str = ".pokedex-delete-lock.sqlite3";
+const SCAN_LOCK_PREFIX: &str = ".pokedex-scan-";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,6 +46,7 @@ struct DeleteLock {
 
 pub(crate) struct ScanTransaction<'a> {
     inbox: &'a PendingInbox,
+    scan_id: Uuid,
     _lock: DeleteLock,
 }
 
@@ -76,10 +78,11 @@ pub(super) fn is_delete_artifact(path: &Path) -> bool {
 }
 
 impl PendingInbox {
-    pub(crate) fn begin_scan_transaction(&self) -> Result<ScanTransaction<'_>> {
+    pub(crate) fn begin_scan_transaction(&self, scan_id: Uuid) -> Result<ScanTransaction<'_>> {
         Ok(ScanTransaction {
             inbox: self,
-            _lock: self.acquire_delete_lock()?,
+            scan_id,
+            _lock: self.acquire_scan_lock(scan_id)?,
         })
     }
 
@@ -110,6 +113,7 @@ impl PendingInbox {
     }
 
     fn delete_scan_locked(&self, scan: &PendingScan) -> Result<()> {
+        let _delete_lock = self.acquire_delete_lock()?;
         self.delete_scan_locked_with(
             scan,
             |source, tombstone| std::fs::rename(source, tombstone),
@@ -485,6 +489,43 @@ impl PendingInbox {
             };
             paths.push((entry, original, tombstone));
         }
+        let Some((_, metadata_original, metadata_tombstone)) =
+            paths.iter().find(|(entry, _, _)| entry.label == "metadata")
+        else {
+            return JournalRecovery::Quarantine(
+                "journal is missing its metadata identity anchor".to_string(),
+            );
+        };
+        let persisted_metadata = if metadata_original.exists() {
+            Some(metadata_original)
+        } else if metadata_tombstone.exists() {
+            Some(metadata_tombstone)
+        } else {
+            None
+        };
+        if let Some(metadata_path) = persisted_metadata {
+            let scan = match self.read_metadata_path(metadata_path) {
+                Ok(scan) => scan,
+                Err(error) => {
+                    return JournalRecovery::Quarantine(format!(
+                        "persisted metadata identity is invalid: {error}"
+                    ));
+                }
+            };
+            let persisted_capture = format!("{}.{}", scan.id, super::extension(&scan.mime_type));
+            if scan.id != journal.scan_id
+                || scan.mime_type != journal.capture_mime_type
+                || persisted_capture != journal.capture_original
+            {
+                return JournalRecovery::Quarantine(
+                    "journal capture identity disagrees with persisted metadata".to_string(),
+                );
+            }
+        } else if journal.state == DeleteJournalState::Pending {
+            return JournalRecovery::Quarantine(
+                "pending journal has no persisted metadata identity".to_string(),
+            );
+        }
         match journal.state {
             DeleteJournalState::Pending => {
                 for (entry, original, tombstone) in &paths {
@@ -588,28 +629,56 @@ impl PendingInbox {
             )
         })
     }
+
+    fn acquire_scan_lock(&self, scan_id: Uuid) -> Result<DeleteLock> {
+        std::fs::create_dir_all(&self.root)?;
+        let connection = rusqlite::Connection::open(
+            self.root
+                .join(format!("{SCAN_LOCK_PREFIX}{scan_id}.lock.sqlite3")),
+        )?;
+        connection.busy_timeout(Duration::ZERO)?;
+        match connection.execute_batch("BEGIN EXCLUSIVE") {
+            Ok(()) => Ok(DeleteLock { connection }),
+            Err(error)
+                if matches!(
+                    error.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                ) =>
+            {
+                Err(DesktopError::InvalidImage(
+                    "pending scan transaction is already running in another process".to_string(),
+                ))
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
 }
 
 impl ScanTransaction<'_> {
-    pub(crate) fn claim(&self, id: Uuid, card_id: &str) -> Result<PendingScan> {
-        self.inbox.claim_unlocked(id, card_id)
+    pub(crate) fn claim(&self, card_id: &str) -> Result<PendingScan> {
+        self.inbox.claim_unlocked(self.scan_id, card_id)
     }
 
-    pub(crate) fn read_image(&self, id: Uuid) -> Result<super::PendingScanImage> {
-        self.inbox.read_image(id)
+    pub(crate) fn read_image(&self) -> Result<super::PendingScanImage> {
+        self.inbox.read_image(self.scan_id)
     }
 
-    pub(crate) fn complete(&self, id: Uuid, result: serde_json::Value) -> Result<PendingScan> {
-        self.inbox.complete_unlocked(id, result)
+    pub(crate) fn complete(&self, result: serde_json::Value) -> Result<PendingScan> {
+        self.inbox.complete_unlocked(self.scan_id, result)
     }
 
-    pub(crate) fn delete(&self, id: Uuid) -> Result<()> {
-        let scan = self.inbox.read_metadata(id)?;
+    pub(crate) fn delete_pending(&self) -> Result<()> {
+        let scan = self.inbox.read_metadata(self.scan_id)?;
+        if scan.state != super::ScanState::Pending {
+            return Err(DesktopError::Mcp(
+                "pending scan transaction cannot delete a claimed or completed scan".to_string(),
+            ));
+        }
         self.inbox.delete_scan_locked(&scan)
     }
 
-    pub(crate) fn finish_completed(&self, id: Uuid) -> Result<()> {
-        let scan = self.inbox.read_metadata(id)?;
+    pub(crate) fn finish_completed(&self) -> Result<()> {
+        let scan = self.inbox.read_metadata(self.scan_id)?;
         if scan.state != super::ScanState::Completed {
             return Err(DesktopError::Mcp("scan is not complete".to_string()));
         }
