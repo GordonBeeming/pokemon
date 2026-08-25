@@ -485,6 +485,145 @@ async fn oversized_source_failure_removes_partial_and_identity() {
     assert!(!part.with_extension("meta.json").exists());
 }
 
+struct WrongHashCardSource;
+
+#[async_trait]
+impl CardArtSource for WrongHashCardSource {
+    async fn image_base(&self, _source: &CatalogueSourceEntry) -> Result<Option<Url>> {
+        Ok(Some(
+            Url::parse("https://assets.tcgdex.net/en/base/base1/4").expect("image URL"),
+        ))
+    }
+
+    async fn download_to(
+        &self,
+        _image_base: &Url,
+        variant: ArtVariant,
+        _start: u64,
+        destination: &Path,
+    ) -> Result<SourceDownload> {
+        let payload = match variant {
+            ArtVariant::High => b"RIFF\x08\x00\x00\x00WEBPhigh".as_slice(),
+            ArtVariant::Low => b"RIFF\x07\x00\x00\x00WEBPlow".as_slice(),
+        };
+        tokio::fs::write(destination, payload).await?;
+        Ok(SourceDownload {
+            mode: DownloadMode::Restarted,
+            sha256: "0".repeat(64),
+            bytes: payload.len() as u64,
+        })
+    }
+}
+
+#[tokio::test]
+async fn source_hash_mismatch_removes_every_variant_partial_and_identity() {
+    let root = tempdir().expect("temp dir");
+    let remote = Arc::new(SourceSyncRemote {
+        manifest: StdMutex::new(Vec::new()),
+        sources: vec![source_entry("card-1", "base1-4")],
+        pending: StdMutex::new(BTreeMap::new()),
+        uploads: StdMutex::new(0),
+    });
+    let engine = ArtSyncEngine::with_source(
+        root.path().join("art"),
+        remote,
+        Arc::new(WrongHashCardSource),
+    );
+
+    engine
+        .synchronize()
+        .await
+        .expect_err("source hash mismatch");
+
+    for variant in [ArtVariant::High, ArtVariant::Low] {
+        let entry = ArtManifestEntry {
+            card_id: "card-1".to_string(),
+            variant,
+            sha256: "0".repeat(64),
+            bytes: 1,
+        };
+        let part = local_art_path(&engine.root, &entry).with_extension("webp.source.part");
+        assert!(!part.exists());
+        assert!(!part.with_extension("meta.json").exists());
+    }
+}
+
+struct PartialBlockingCardSource {
+    started: Arc<Notify>,
+    started_count: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl CardArtSource for PartialBlockingCardSource {
+    async fn image_base(&self, _source: &CatalogueSourceEntry) -> Result<Option<Url>> {
+        Ok(Some(
+            Url::parse("https://assets.tcgdex.net/en/base/base1/4").expect("image URL"),
+        ))
+    }
+
+    async fn download_to(
+        &self,
+        _image_base: &Url,
+        _variant: ArtVariant,
+        _start: u64,
+        destination: &Path,
+    ) -> Result<SourceDownload> {
+        tokio::fs::write(destination, b"RIFF").await?;
+        self.started_count.fetch_add(1, Ordering::Relaxed);
+        self.started.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn cancellation_removes_every_variant_partial_and_identity() {
+    let root = tempdir().expect("temp dir");
+    let cancellation = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(Notify::new());
+    let started_count = Arc::new(AtomicUsize::new(0));
+    let remote = Arc::new(SourceSyncRemote {
+        manifest: StdMutex::new(Vec::new()),
+        sources: vec![source_entry("card-1", "base1-4")],
+        pending: StdMutex::new(BTreeMap::new()),
+        uploads: StdMutex::new(0),
+    });
+    let engine = ArtSyncEngine::with_source(
+        root.path().join("art"),
+        remote,
+        Arc::new(PartialBlockingCardSource {
+            started: started.clone(),
+            started_count: started_count.clone(),
+        }),
+    )
+    .with_cancellation(cancellation.clone());
+    let sync = engine.synchronize();
+    tokio::pin!(sync);
+    while started_count.load(Ordering::Relaxed) < 2 {
+        tokio::select! {
+            () = started.notified() => {}
+            result = &mut sync => panic!("sync completed before cancellation: {result:?}"),
+        }
+    }
+    cancellation.store(true, Ordering::Relaxed);
+    let error = tokio::time::timeout(Duration::from_secs(1), sync)
+        .await
+        .expect("prompt cancellation")
+        .expect_err("cancelled source downloads");
+    assert!(matches!(error, DesktopError::Cancelled));
+
+    for variant in [ArtVariant::High, ArtVariant::Low] {
+        let entry = ArtManifestEntry {
+            card_id: "card-1".to_string(),
+            variant,
+            sha256: "0".repeat(64),
+            bytes: 1,
+        };
+        let part = local_art_path(&engine.root, &entry).with_extension("webp.source.part");
+        assert!(!part.exists());
+        assert!(!part.with_extension("meta.json").exists());
+    }
+}
+
 struct BlockingCardSource {
     started: Arc<Notify>,
 }

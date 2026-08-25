@@ -813,14 +813,13 @@ impl ArtSyncEngine {
                 ..SourceCardOutcome::default()
             });
         };
-        let downloads = futures_util::future::try_join_all(
-            [ArtVariant::High, ArtVariant::Low]
-                .into_iter()
-                .map(|variant| {
-                    self.download_source_variant(source, &source_entry, &image_base, variant)
-                }),
-        )
-        .await?;
+        let downloads =
+            futures_util::future::join_all([ArtVariant::High, ArtVariant::Low].into_iter().map(
+                |variant| self.download_source_variant(source, &source_entry, &image_base, variant),
+            ))
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
         let mut outcome = SourceCardOutcome::default();
         let mut indexed_variants = BTreeMap::new();
         let mut pending_uploads = Vec::new();
@@ -951,9 +950,10 @@ impl ArtSyncEngine {
         let download = match download {
             Ok(download) => download,
             Err(error) => {
-                if tokio::fs::metadata(&part)
-                    .await
-                    .is_ok_and(|metadata| metadata.len() > MAX_ART_BYTES)
+                if matches!(&error, DesktopError::Cancelled)
+                    || tokio::fs::metadata(&part)
+                        .await
+                        .is_ok_and(|metadata| metadata.len() > MAX_ART_BYTES)
                 {
                     remove_if_present(&part).await?;
                     remove_if_present(&partial_identity_path).await?;
