@@ -20,6 +20,12 @@ pub enum DesktopError {
     ChecksumMismatch { card_id: String, variant: String },
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("{operation} failed: {primary}; rollback cleanup failed: {cleanup}")]
+    Rollback {
+        operation: &'static str,
+        primary: Box<DesktopError>,
+        cleanup: String,
+    },
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("HTTP error: {0}")]

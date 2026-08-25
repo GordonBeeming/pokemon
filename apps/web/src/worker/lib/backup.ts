@@ -396,24 +396,44 @@ export async function createBackup(
   const id = configured.backupId ?? newId('backup');
   if (!/^backup_[A-Za-z0-9_-]+$/u.test(id)) throw new ApplicationError('backup_id_invalid', 400);
   const objectKey = `backups/${ownerId}/${id}/manifest.json`;
+  let run = await db
+    .prepare('SELECT owner_id, object_key, checksum, backup_epoch FROM backup_runs WHERE id = ?1')
+    .bind(id)
+    .first<{ owner_id: string; object_key: string; checksum: string; backup_epoch: number }>();
+  if (run && (run.owner_id !== ownerId || run.object_key !== objectKey))
+    throw new ApplicationError('backup_run_conflict', 409);
+  if (run?.checksum !== undefined && run.checksum !== 'pending') {
+    if (!/^[a-f0-9]{64}$/u.test(run.checksum))
+      throw new ApplicationError('backup_run_conflict', 409);
+    return { id, checksum: run.checksum };
+  }
   const owner = await db
     .prepare('SELECT backup_epoch FROM users WHERE id = ?1')
     .bind(ownerId)
     .first<{ backup_epoch: number }>();
   if (!owner) throw new ApplicationError('backup_owner_not_found', 404);
-  await db
-    .prepare(
-      `INSERT INTO backup_runs (id, owner_id, object_key, checksum, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(id) DO NOTHING`,
-    )
-    .bind(id, ownerId, objectKey, 'pending', nowSeconds())
-    .run();
-  const run = await db
-    .prepare('SELECT owner_id, object_key FROM backup_runs WHERE id = ?1')
+  if (!run)
+    await db
+      .prepare(
+        `INSERT INTO backup_runs
+          (id, owner_id, object_key, checksum, backup_epoch, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6) ON CONFLICT(id) DO NOTHING`,
+      )
+      .bind(id, ownerId, objectKey, 'pending', owner.backup_epoch, nowSeconds())
+      .run();
+  run = await db
+    .prepare('SELECT owner_id, object_key, checksum, backup_epoch FROM backup_runs WHERE id = ?1')
     .bind(id)
-    .first<{ owner_id: string; object_key: string }>();
+    .first<{ owner_id: string; object_key: string; checksum: string; backup_epoch: number }>();
   if (!run || run.owner_id !== ownerId || run.object_key !== objectKey)
     throw new ApplicationError('backup_run_conflict', 409);
+  if (run.checksum !== 'pending') {
+    if (!/^[a-f0-9]{64}$/u.test(run.checksum))
+      throw new ApplicationError('backup_run_conflict', 409);
+    return { id, checksum: run.checksum };
+  }
+  if (run.backup_epoch !== owner.backup_epoch)
+    throw new ApplicationError('backup_changed_during_creation', 409);
   const chunks: BackupManifest['chunks'] = [];
   let totalBytes = 0;
   for (const query of backupQueries) {
@@ -471,7 +491,7 @@ export async function createBackup(
     .prepare('SELECT backup_epoch FROM users WHERE id = ?1')
     .bind(ownerId)
     .first<{ backup_epoch: number }>();
-  if (!currentOwner || currentOwner.backup_epoch !== owner.backup_epoch)
+  if (!currentOwner || currentOwner.backup_epoch !== run.backup_epoch)
     throw new ApplicationError('backup_changed_during_creation', 409);
   if (chunks.some((chunk) => !chunk.objectKey.startsWith(`backups/${ownerId}/${id}/chunks/`)))
     throw new ApplicationError('backup_chunk_owner_mismatch', 500);
@@ -495,7 +515,7 @@ export async function createBackup(
   const manifest: BackupManifest = {
     version: BACKUP_VERSION,
     ownerId,
-    mutationEpoch: owner.backup_epoch,
+    mutationEpoch: run.backup_epoch,
     createdAt: new Date().toISOString(),
     chunks,
   };

@@ -107,18 +107,24 @@ impl PendingInbox {
             confirmed_card_id: None,
             completed_result: None,
         };
+        let metadata_bytes = serde_json::to_vec_pretty(&metadata)?;
         write_private(&image_path, bytes)?;
         if let Err(error) = write_private(&preview_path, preview_bytes) {
-            let _cleanup_result = std::fs::remove_file(&image_path);
-            return Err(error);
+            return Err(rollback_save(
+                "pending preview write",
+                error,
+                &[("capture", image_path.as_path())],
+            ));
         }
-        if let Err(error) = write_private(
-            &self.metadata_path(id),
-            &serde_json::to_vec_pretty(&metadata)?,
-        ) {
-            let _cleanup_result = std::fs::remove_file(image_path);
-            let _preview_cleanup_result = std::fs::remove_file(preview_path);
-            return Err(error);
+        if let Err(error) = write_private(&self.metadata_path(id), &metadata_bytes) {
+            return Err(rollback_save(
+                "pending metadata write",
+                error,
+                &[
+                    ("preview", preview_path.as_path()),
+                    ("capture", image_path.as_path()),
+                ],
+            ));
         }
         Ok(metadata)
     }
@@ -321,6 +327,30 @@ fn remove_if_exists(path: &Path) -> Result<()> {
     }
 }
 
+fn rollback_save(
+    operation: &'static str,
+    primary: DesktopError,
+    files: &[(&str, &Path)],
+) -> DesktopError {
+    let cleanup = files
+        .iter()
+        .filter_map(|(label, path)| {
+            remove_if_exists(path)
+                .err()
+                .map(|error| format!("{label}: {error}"))
+        })
+        .collect::<Vec<_>>();
+    if cleanup.is_empty() {
+        primary
+    } else {
+        DesktopError::Rollback {
+            operation,
+            primary: Box::new(primary),
+            cleanup: cleanup.join("; "),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,6 +397,46 @@ mod tests {
             .save(&webp(), &preview(), "image/png", CaptureSource::File)
             .expect_err("mismatched type");
         assert!(error.to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn rollback_removes_written_files_and_preserves_the_primary_error() {
+        let root = tempdir().expect("temp dir");
+        let capture = root.path().join("capture.webp");
+        std::fs::write(&capture, webp()).expect("capture");
+
+        let error = rollback_save(
+            "pending preview write",
+            DesktopError::InvalidImage("preview failed".to_string()),
+            &[("capture", capture.as_path())],
+        );
+
+        assert!(matches!(error, DesktopError::InvalidImage(_)));
+        assert!(!capture.exists());
+    }
+
+    #[test]
+    fn rollback_aggregates_every_cleanup_failure() {
+        let root = tempdir().expect("temp dir");
+        let capture = root.path().join("capture.webp");
+        let preview = root.path().join("capture.preview.jpg");
+        std::fs::create_dir(&capture).expect("capture directory");
+        std::fs::create_dir(&preview).expect("preview directory");
+
+        let error = rollback_save(
+            "pending metadata write",
+            DesktopError::InvalidImage("metadata failed".to_string()),
+            &[
+                ("preview", preview.as_path()),
+                ("capture", capture.as_path()),
+            ],
+        );
+        let message = error.to_string();
+
+        assert!(matches!(error, DesktopError::Rollback { .. }));
+        assert!(message.contains("metadata failed"));
+        assert!(message.contains("preview: I/O error"));
+        assert!(message.contains("capture: I/O error"));
     }
 
     #[test]

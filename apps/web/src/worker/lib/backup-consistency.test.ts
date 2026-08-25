@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createBackup } from './backup';
 
 const meta: D1Meta & Record<string, unknown> = {
@@ -16,6 +16,8 @@ class StubStatement implements D1PreparedStatement {
     private readonly sql: string,
     private readonly backupEpoch: () => number,
     private readonly objectKey: string,
+    private readonly checksum = 'pending',
+    private readonly runEpoch = 0,
   ) {}
 
   bind(...values: unknown[]): D1PreparedStatement {
@@ -28,8 +30,13 @@ class StubStatement implements D1PreparedStatement {
   first<T>(): Promise<T | null> {
     if (this.sql.includes('SELECT backup_epoch FROM users'))
       return Promise.resolve({ backup_epoch: this.backupEpoch() } as T);
-    if (this.sql.includes('SELECT owner_id, object_key FROM backup_runs'))
-      return Promise.resolve({ owner_id: 'owner', object_key: this.objectKey } as T);
+    if (this.sql.includes('FROM backup_runs WHERE id') && this.sql.includes('owner_id'))
+      return Promise.resolve({
+        owner_id: 'owner',
+        object_key: this.objectKey,
+        checksum: this.checksum,
+        backup_epoch: this.runEpoch,
+      } as T);
     return Promise.resolve(null);
   }
 
@@ -87,5 +94,52 @@ describe('backup snapshot consistency', () => {
 
     expect(pageNames[0]).toBe('backup-catalogue-0');
     expect(backupEpoch).toBe(1);
+  });
+
+  it('returns a completed stable run before reading a new epoch or replaying pages', async () => {
+    const backupId = 'backup_completed';
+    const checksum = 'c'.repeat(64);
+    const objectKey = `backups/owner/${backupId}/manifest.json`;
+    let ownerEpochReads = 0;
+    const db: D1Database = {
+      prepare(sql: string) {
+        return new StubStatement(
+          sql,
+          () => {
+            ownerEpochReads += 1;
+            return 99;
+          },
+          objectKey,
+          checksum,
+          1,
+        );
+      },
+      batch<T>(statements: D1PreparedStatement[]) {
+        return Promise.all(statements.map((statement) => statement.run<T>()));
+      },
+      exec() {
+        return Promise.resolve({ count: 0, duration: 0 });
+      },
+      withSession() {
+        throw new Error('sessions are not used by createBackup');
+      },
+      dump() {
+        return Promise.resolve(new ArrayBuffer(0));
+      },
+    };
+    const pageAction = vi.fn();
+
+    await expect(
+      createBackup(db, {} as R2Bucket, 'owner', {
+        backupId,
+        runPage: async (name, action) => {
+          pageAction(name);
+          return action();
+        },
+      }),
+    ).resolves.toEqual({ id: backupId, checksum });
+
+    expect(ownerEpochReads).toBe(0);
+    expect(pageAction).not.toHaveBeenCalled();
   });
 });

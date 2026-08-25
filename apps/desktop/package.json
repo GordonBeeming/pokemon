@@ -16,6 +16,7 @@
     "tauri:debug": "tauri build --debug --no-bundle",
     "tauri:check": "cargo check --manifest-path src-tauri/Cargo.toml",
     "tauri:test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "audit:macos:init": "node scripts/audit-macos.mjs --initialize-db",
     "audit:macos": "node scripts/audit-macos.mjs"
   },
   "dependencies": {

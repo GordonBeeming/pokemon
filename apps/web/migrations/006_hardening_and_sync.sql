@@ -49,6 +49,7 @@ CREATE INDEX idx_web_sessions_user_active
 CREATE INDEX idx_web_sessions_expires ON web_sessions(expires_at);
 
 ALTER TABLE backup_runs ADD COLUMN owner_id TEXT REFERENCES users(id);
+ALTER TABLE backup_runs ADD COLUMN backup_epoch INTEGER NOT NULL DEFAULT 0;
 UPDATE backup_runs
 SET owner_id = substr(object_key, 9, instr(substr(object_key, 9), '/') - 1)
 WHERE owner_id IS NULL
@@ -58,6 +59,11 @@ WHERE owner_id IS NULL
     SELECT 1 FROM users
     WHERE users.id = substr(object_key, 9, instr(substr(object_key, 9), '/') - 1)
   );
+UPDATE backup_runs
+SET backup_epoch = COALESCE(
+  (SELECT users.backup_epoch FROM users WHERE users.id = backup_runs.owner_id),
+  0
+);
 CREATE INDEX idx_backup_runs_owner_created
   ON backup_runs(owner_id, created_at DESC);
 CREATE TRIGGER backup_runs_require_owner_insert

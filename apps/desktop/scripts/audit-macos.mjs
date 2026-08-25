@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 const manifest = 'src-tauri/Cargo.toml';
 const lockfile = 'src-tauri/Cargo.lock';
 const targets = ['aarch64-apple-darwin', 'x86_64-apple-darwin'];
+const initializeDatabase = process.argv.includes('--initialize-db');
 
 function run(command, args) {
   const result = spawnSync(command, args, {
@@ -16,6 +17,12 @@ function run(command, args) {
     process.exit(result.status ?? 1);
   }
   return result.stdout;
+}
+
+if (initializeDatabase) {
+  JSON.parse(run('cargo', ['audit', '--json', '--file', lockfile]));
+  process.stdout.write('RustSec advisory database initialized for the offline macOS audit.\n');
+  process.exit(0);
 }
 
 const supportedPackages = new Set();

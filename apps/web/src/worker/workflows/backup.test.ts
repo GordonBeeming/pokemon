@@ -23,17 +23,22 @@ const emptyRetention = () =>
   });
 
 describe('BackupWorkflow lifecycle', () => {
-  it('reuses one backup ID and cached page output when the Workflow re-enters', async () => {
+  it('reuses one backup ID and short-circuits page replay after commit', async () => {
     const step = new CachedStep();
     const pageAction = vi.fn(() =>
       Promise.resolve({ cursor: 1, rowCount: 1, bytes: 2, chunks: [] }),
     );
     const backupIds: string[] = [];
+    let committed = false;
+    const runPageCalls = vi.fn();
     const dependencies = {
       ownerExists: () => Promise.resolve(true),
       create: async (_ownerId: string, backupId: string, runPage: BackupPageRunner) => {
         backupIds.push(backupId);
+        if (committed) return { id: backupId, checksum: 'a'.repeat(64) };
+        runPageCalls();
         await runPage('backup-catalogue-0', pageAction);
+        committed = true;
         return { id: backupId, checksum: 'a'.repeat(64) };
       },
       restore: vi.fn(),
@@ -47,6 +52,7 @@ describe('BackupWorkflow lifecycle', () => {
     expect(first).toEqual({ id: 'backup_instance-1', checksum: 'a'.repeat(64) });
     expect(replay).toEqual(first);
     expect(backupIds).toEqual(['backup_instance-1', 'backup_instance-1']);
+    expect(runPageCalls).toHaveBeenCalledOnce();
     expect(pageAction).toHaveBeenCalledOnce();
   });
 

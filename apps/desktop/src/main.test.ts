@@ -18,13 +18,16 @@ vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: mocks.openUrl }));
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
 } {
   let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((done) => {
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  if (!resolve) throw new Error('Deferred promise did not initialise.');
-  return { promise, resolve };
+  if (!resolve || !reject) throw new Error('Deferred promise did not initialise.');
+  return { promise, resolve, reject };
 }
 
 function status(pendingScans: PendingScan[] = []): DesktopStatus {
@@ -192,5 +195,72 @@ describe('desktop main DOM', () => {
 
     expect(document.querySelector('#pending-count')?.textContent).toBe('0 pending');
     expect(document.querySelectorAll('.pending-item')).toHaveLength(0);
+  });
+
+  it('renders one local fallback when a lazy preview command rejects', async () => {
+    const scan: PendingScan = {
+      id: '01909a91-2fd5-77e0-b7e9-962c6f8b57ec',
+      createdAt: 1,
+      source: 'file',
+      mimeType: 'image/webp',
+      bytes: 16,
+      mutationId: '319e23de-1648-460e-8a82-a1379428357d',
+      state: 'pending',
+      confirmedCardId: null,
+    };
+    const unhandled = vi.fn((event: PromiseRejectionEvent) => event.preventDefault());
+    window.addEventListener('unhandledrejection', unhandled);
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'desktop_status') return Promise.resolve(status([scan]));
+      if (command === 'pending_scan_preview_path')
+        return Promise.reject(new Error('Preview path unavailable.'));
+      return Promise.resolve(undefined);
+    });
+
+    await import('./main');
+    await waitFor(
+      () => document.querySelector('.pending-preview-status')?.textContent === 'No preview',
+    );
+    await settle();
+
+    const previewStatus = document.querySelector('.pending-preview-status');
+    const image = document.querySelector<HTMLImageElement>('.pending-preview img');
+    expect(document.querySelectorAll('.pending-preview-status')).toHaveLength(1);
+    expect(previewStatus?.getAttribute('role')).toBe('status');
+    expect(previewStatus?.getAttribute('aria-hidden')).toBeNull();
+    expect(image?.dataset.state).toBe('error');
+    expect(document.querySelector('#notice')?.textContent).toBe('');
+    expect(unhandled).not.toHaveBeenCalled();
+    window.removeEventListener('unhandledrejection', unhandled);
+  });
+
+  it('replaces an asset load error with the same local fallback', async () => {
+    const scan: PendingScan = {
+      id: '01909a91-2fd5-77e0-b7e9-962c6f8b57ec',
+      createdAt: 1,
+      source: 'camera',
+      mimeType: 'image/webp',
+      bytes: 16,
+      mutationId: '319e23de-1648-460e-8a82-a1379428357d',
+      state: 'pending',
+      confirmedCardId: null,
+    };
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'desktop_status') return Promise.resolve(status([scan]));
+      if (command === 'pending_scan_preview_path')
+        return Promise.resolve('/tmp/pending.preview.jpg');
+      return Promise.resolve(undefined);
+    });
+
+    await import('./main');
+    await waitFor(
+      () => document.querySelector<HTMLImageElement>('.pending-preview img')?.src !== '',
+    );
+    const image = document.querySelector<HTMLImageElement>('.pending-preview img');
+    image?.dispatchEvent(new Event('error'));
+
+    expect(document.querySelector('.pending-preview-status')?.textContent).toBe('No preview');
+    expect(image?.dataset.state).toBe('error');
+    expect(document.querySelector('#notice')?.textContent).toBe('');
   });
 });

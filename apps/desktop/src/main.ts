@@ -225,10 +225,16 @@ function pendingArticle(scan: PendingScan): HTMLElement {
   const image = document.createElement('img');
   image.alt = `Pending ${scan.source} capture`;
   image.loading = 'lazy';
+  image.dataset.state = 'loading';
+  image.addEventListener('error', () => showPendingPreviewFailure(image));
+  const previewStatus = document.createElement('span');
+  previewStatus.className = 'pending-preview-status';
+  previewStatus.textContent = 'Loading preview…';
+  previewStatus.setAttribute('aria-hidden', 'true');
   previewScans.set(image, scan);
   if (previewObserver) previewObserver.observe(image);
   else void loadPendingPreview(image, scan);
-  preview.append(image);
+  preview.append(image, previewStatus);
 
   const detail = document.createElement('div');
   detail.className = 'pending-detail';
@@ -255,10 +261,32 @@ function pendingArticle(scan: PendingScan): HTMLElement {
 }
 
 async function loadPendingPreview(image: HTMLImageElement, scan: PendingScan): Promise<void> {
-  await previewQueue.run(async () => {
-    const path = await invoke<string>('pending_scan_preview_path', { scanId: scan.id });
-    if (image.isConnected) image.src = convertFileSrc(path);
-  });
+  try {
+    await previewQueue.run(async () => {
+      const path = await invoke<string>('pending_scan_preview_path', { scanId: scan.id });
+      if (!image.isConnected) return;
+      const previewStatus = image.nextElementSibling;
+      if (previewStatus instanceof HTMLSpanElement) previewStatus.hidden = true;
+      delete image.dataset.state;
+      image.src = convertFileSrc(path);
+    });
+  } catch {
+    showPendingPreviewFailure(image);
+  }
+}
+
+function showPendingPreviewFailure(image: HTMLImageElement): void {
+  if (!image.isConnected) return;
+  const previewStatus = image.nextElementSibling;
+  if (!(previewStatus instanceof HTMLSpanElement) || previewStatus.dataset.state === 'error')
+    return;
+  image.dataset.state = 'error';
+  image.removeAttribute('src');
+  previewStatus.hidden = false;
+  previewStatus.dataset.state = 'error';
+  previewStatus.removeAttribute('aria-hidden');
+  previewStatus.setAttribute('role', 'status');
+  previewStatus.textContent = 'No preview';
 }
 
 cameraToggle.addEventListener('click', () => {
