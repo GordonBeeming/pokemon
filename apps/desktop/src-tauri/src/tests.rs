@@ -174,6 +174,31 @@ async fn mock_cloud() -> String {
     format!("http://{address}")
 }
 
+async fn terminal_collection_failure() -> Response {
+    (
+        axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+        Json(json!({ "ok": false, "error": "card_not_confirmable" })),
+    )
+        .into_response()
+}
+
+async fn terminal_mutation_cloud() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("terminal cloud listener");
+    let address = listener.local_addr().expect("terminal cloud address");
+    let router = Router::new().route(
+        "/api/desktop/collection/{card_id}/increment",
+        post(terminal_collection_failure),
+    );
+    tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("terminal mutation cloud");
+    });
+    format!("http://{address}")
+}
+
 async fn mock_backend_cloud() -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -412,6 +437,117 @@ async fn scan_confirmation_is_required_before_any_mutation_or_deletion() {
 }
 
 #[tokio::test]
+async fn unpaired_confirmation_preflight_leaves_the_scan_pending() {
+    let root = tempdir().expect("temp dir");
+    let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
+    let config = AppConfig::defaults(&paths);
+    let services =
+        DesktopServices::new(paths, config, Arc::new(MemoryTokenStore(Mutex::new(None))))
+            .expect("services");
+    let scan = services
+        .inbox
+        .save(
+            b"RIFF\x04\x00\x00\x00WEBPdata",
+            b"\xff\xd8\xffpreview",
+            "image/webp",
+            CaptureSource::File,
+        )
+        .expect("scan");
+
+    let error = services
+        .call_tool(
+            ToolName::ConfirmScan,
+            json!({ "scanId": scan.id, "cardId": "card-1", "confirmed": true }),
+        )
+        .await
+        .expect_err("unpaired preflight");
+
+    assert!(matches!(error, DesktopError::NotPaired));
+    let retained = services.inbox.list().expect("retained scan");
+    assert_eq!(retained[0].state, ScanState::Pending);
+    assert_eq!(retained[0].confirmed_card_id, None);
+    assert_eq!(retained[0].mutation_id, scan.mutation_id);
+}
+
+#[tokio::test]
+async fn missing_image_preflight_leaves_the_scan_pending() {
+    let root = tempdir().expect("temp dir");
+    let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
+    let config = AppConfig::defaults(&paths);
+    let services = DesktopServices::new(
+        paths,
+        config,
+        Arc::new(MemoryTokenStore(Mutex::new(Some("token".to_string())))),
+    )
+    .expect("services");
+    let scan = services
+        .inbox
+        .save(
+            b"RIFF\x04\x00\x00\x00WEBPdata",
+            b"\xff\xd8\xffpreview",
+            "image/webp",
+            CaptureSource::File,
+        )
+        .expect("scan");
+    std::fs::remove_file(services.paths.inbox_dir.join(format!("{}.webp", scan.id)))
+        .expect("remove capture");
+
+    services
+        .call_tool(
+            ToolName::ConfirmScan,
+            json!({ "scanId": scan.id, "cardId": "card-1", "confirmed": true }),
+        )
+        .await
+        .expect_err("image preflight");
+
+    let retained: PendingScan = serde_json::from_slice(
+        &std::fs::read(services.paths.inbox_dir.join(format!("{}.json", scan.id)))
+            .expect("retained metadata"),
+    )
+    .expect("retained scan");
+    assert_eq!(retained.state, ScanState::Pending);
+    assert_eq!(retained.confirmed_card_id, None);
+    assert_eq!(retained.mutation_id, scan.mutation_id);
+}
+
+#[tokio::test]
+async fn terminal_confirmation_response_resets_this_calls_claim_to_pending() {
+    let root = tempdir().expect("temp dir");
+    let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
+    let mut config = AppConfig::defaults(&paths);
+    config.cloud_base_url = terminal_mutation_cloud().await;
+    let services = DesktopServices::new(
+        paths,
+        config,
+        Arc::new(MemoryTokenStore(Mutex::new(Some("token".to_string())))),
+    )
+    .expect("services");
+    let scan = services
+        .inbox
+        .save(
+            b"RIFF\x04\x00\x00\x00WEBPdata",
+            b"\xff\xd8\xffpreview",
+            "image/webp",
+            CaptureSource::Camera,
+        )
+        .expect("scan");
+
+    let error = services
+        .call_tool(
+            ToolName::ConfirmScan,
+            json!({ "scanId": scan.id, "cardId": "card-1", "confirmed": true }),
+        )
+        .await
+        .expect_err("terminal response");
+
+    assert!(matches!(error, DesktopError::Cloud { status: 422, .. }));
+    let retained = services.inbox.list().expect("retained scan");
+    assert_eq!(retained[0].state, ScanState::Pending);
+    assert_eq!(retained[0].confirmed_card_id, None);
+    assert_eq!(retained[0].mutation_id, scan.mutation_id);
+}
+
+#[tokio::test]
 async fn confirmed_scan_increments_collection_then_deletes_the_capture() {
     let root = tempdir().expect("temp dir");
     let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
@@ -623,6 +759,91 @@ async fn ambiguous_confirmation_serializes_delete_and_reuses_the_mutation_identi
             .as_slice(),
         &[scan.mutation_id.to_string(), scan.mutation_id.to_string()]
     );
+}
+
+#[tokio::test]
+async fn unrelated_delete_and_finalization_wait_for_the_short_destructive_phase() {
+    let root = tempdir().expect("temp dir");
+    let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
+    let config = AppConfig::defaults(&paths);
+    let services = Arc::new(
+        DesktopServices::new(
+            paths,
+            config,
+            Arc::new(MemoryTokenStore(Mutex::new(Some("token".to_string())))),
+        )
+        .expect("services"),
+    );
+    let pending = services
+        .inbox
+        .save(
+            b"RIFF\x04\x00\x00\x00WEBPdata",
+            b"\xff\xd8\xffpreview",
+            "image/webp",
+            CaptureSource::File,
+        )
+        .expect("pending scan");
+    let completed = services
+        .inbox
+        .save(
+            b"RIFF\x04\x00\x00\x00WEBPdata",
+            b"\xff\xd8\xffpreview",
+            "image/webp",
+            CaptureSource::Camera,
+        )
+        .expect("completed scan");
+    services
+        .inbox
+        .claim(completed.id, "card-2")
+        .expect("claim completed fixture");
+    services
+        .inbox
+        .complete(completed.id, json!({ "ok": true }))
+        .expect("complete fixture");
+
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let contended = Arc::new(tokio::sync::Notify::new());
+    *services
+        .delete_phase_pause
+        .lock()
+        .expect("delete phase pause") = Some((entered.clone(), release.clone()));
+    *services
+        .delete_phase_contended
+        .lock()
+        .expect("delete phase contention") = Some(contended.clone());
+
+    let deleting_services = services.clone();
+    let deleting = tokio::spawn(async move { deleting_services.delete_scan(pending.id).await });
+    entered.notified().await;
+
+    let finalizing_services = services.clone();
+    let finalizing = tokio::spawn(async move {
+        let _scan_guard = finalizing_services
+            .acquire_process_scan_lock(completed.id)
+            .await;
+        let transaction = finalizing_services
+            .inbox
+            .begin_scan_transaction(completed.id)?;
+        let _delete_guard = finalizing_services.acquire_delete_phase_lock().await;
+        transaction.finish_completed()
+    });
+    contended.notified().await;
+    assert!(
+        !finalizing.is_finished(),
+        "the second scan reached destructive-phase contention"
+    );
+
+    release.notify_one();
+    deleting
+        .await
+        .expect("delete task")
+        .expect("pending deletion");
+    finalizing
+        .await
+        .expect("finalize task")
+        .expect("completed finalization");
+    assert!(services.inbox.list().expect("empty inbox").is_empty());
 }
 
 #[tokio::test]

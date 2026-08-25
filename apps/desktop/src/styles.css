@@ -370,6 +370,24 @@ p {
   overflow-wrap: anywhere;
 }
 
+.pending-detail .pending-state-guidance,
+.pending-detail .pending-action-status {
+  max-width: 68ch;
+  line-height: 1.35;
+}
+
+.pending-detail .pending-action-status[data-state='error'] {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.pending-item:focus-visible,
+.empty-state:focus-visible,
+#inbox-heading:focus-visible {
+  outline: 3px solid var(--ring);
+  outline-offset: 3px;
+}
+
 .empty-state {
   margin-bottom: 0;
   border: 1px dashed var(--border-strong);

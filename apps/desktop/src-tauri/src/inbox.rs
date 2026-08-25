@@ -198,6 +198,7 @@ impl PendingInbox {
         Ok(path)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn delete(&self, id: Uuid) -> Result<()> {
         self.begin_scan_transaction(id)?.delete_pending()
     }

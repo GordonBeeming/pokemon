@@ -10,6 +10,13 @@ use uuid::Uuid;
 const DELETE_TOMBSTONE_PREFIX: &str = ".pokedex-delete-";
 const DELETE_LOCK_DATABASE: &str = ".pokedex-delete-lock.sqlite3";
 const SCAN_LOCK_PREFIX: &str = ".pokedex-scan-";
+const DELETE_LOCK_RETRY_DELAYS: [Duration; 5] = [
+    Duration::from_millis(10),
+    Duration::from_millis(25),
+    Duration::from_millis(50),
+    Duration::from_millis(100),
+    Duration::from_millis(200),
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -623,6 +630,12 @@ impl PendingInbox {
     }
 
     fn acquire_delete_lock(&self) -> Result<DeleteLock> {
+        for delay in DELETE_LOCK_RETRY_DELAYS {
+            if let Some(lock) = self.try_delete_lock()? {
+                return Ok(lock);
+            }
+            std::thread::sleep(delay);
+        }
         self.try_delete_lock()?.ok_or_else(|| {
             DesktopError::InvalidImage(
                 "pending scan transaction is already running in another process".to_string(),
@@ -655,6 +668,10 @@ impl PendingInbox {
 }
 
 impl ScanTransaction<'_> {
+    pub(crate) fn read_scan(&self) -> Result<PendingScan> {
+        self.inbox.read_metadata(self.scan_id)
+    }
+
     pub(crate) fn claim(&self, card_id: &str) -> Result<PendingScan> {
         self.inbox.claim_unlocked(self.scan_id, card_id)
     }
@@ -665,6 +682,22 @@ impl ScanTransaction<'_> {
 
     pub(crate) fn complete(&self, result: serde_json::Value) -> Result<PendingScan> {
         self.inbox.complete_unlocked(self.scan_id, result)
+    }
+
+    pub(crate) fn reset_claim(&self, card_id: &str, mutation_id: Uuid) -> Result<PendingScan> {
+        let mut scan = self.inbox.read_metadata(self.scan_id)?;
+        if scan.state != super::ScanState::Claimed
+            || scan.confirmed_card_id.as_deref() != Some(card_id)
+            || scan.mutation_id != mutation_id
+        {
+            return Err(DesktopError::Mcp(
+                "scan claim changed before it could be reset".to_string(),
+            ));
+        }
+        scan.state = super::ScanState::Pending;
+        scan.confirmed_card_id = None;
+        self.inbox.write_metadata(&scan)?;
+        Ok(scan)
     }
 
     pub(crate) fn delete_pending(&self) -> Result<()> {

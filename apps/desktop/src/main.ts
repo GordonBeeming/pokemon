@@ -64,7 +64,7 @@ app.innerHTML = `
 
         <div class="inbox" aria-labelledby="inbox-heading">
           <div class="inbox-heading">
-            <h3 id="inbox-heading">Pending inbox</h3>
+            <h3 id="inbox-heading" tabindex="-1">Pending inbox</h3>
             <p>Codex can inspect these through the local MCP bridge.</p>
           </div>
           <div id="pending-list" class="pending-list"></div>
@@ -155,9 +155,11 @@ const notice = requireElement('#notice', HTMLDivElement);
 let status: DesktopStatus | null = null;
 let cameraStream: MediaStream | null = null;
 const refreshGenerations = new LatestGeneration();
+const noticeGenerations = new LatestGeneration();
 const cameraAction = new ExclusiveAction();
 const previewQueue = new BoundedAsyncQueue(2);
 const previewScans = new WeakMap<HTMLImageElement, PendingScan>();
+const pendingActionStates = new Map<string, { state: 'working' | 'error'; message: string }>();
 const previewObserver =
   typeof IntersectionObserver === 'undefined'
     ? null
@@ -178,7 +180,7 @@ const previewObserver =
 const saveLocalCapture: SaveCapture = async (bytes, mimeType, source, previewBytes) =>
   invoke<PendingScan>('save_capture', { bytes, mimeType, source, previewBytes });
 
-async function refresh(): Promise<void> {
+async function refresh(focusCandidates?: string[]): Promise<void> {
   const generation = refreshGenerations.next();
   const next = await invoke<DesktopStatus>('desktop_status');
   const pending = pendingFragment(next.pendingScans);
@@ -188,6 +190,7 @@ async function refresh(): Promise<void> {
   pendingCount.textContent = `${next.pendingScans.length} pending`;
   pendingList.querySelectorAll('img').forEach((image) => previewObserver?.unobserve(image));
   pendingList.replaceChildren(pending);
+  if (focusCandidates) restorePendingFocus(focusCandidates);
 }
 
 function renderStatus(next: DesktopStatus): void {
@@ -209,6 +212,7 @@ function pendingFragment(scans: PendingScan[]): DocumentFragment {
   if (scans.length === 0) {
     const empty = document.createElement('p');
     empty.className = 'empty-state';
+    empty.tabIndex = -1;
     empty.textContent = 'No captures are waiting. The next image will appear here.';
     fragment.append(empty);
     return fragment;
@@ -220,6 +224,8 @@ function pendingFragment(scans: PendingScan[]): DocumentFragment {
 function pendingArticle(scan: PendingScan): HTMLElement {
   const article = document.createElement('article');
   article.className = 'pending-item';
+  article.dataset.scanId = scan.id;
+  article.tabIndex = -1;
   const preview = document.createElement('div');
   preview.className = 'pending-preview';
   const image = document.createElement('img');
@@ -249,43 +255,141 @@ function pendingArticle(scan: PendingScan): HTMLElement {
   title.textContent = scan.source === 'camera' ? 'Camera capture' : 'Imported image';
   const metadata = document.createElement('span');
   metadata.textContent = `${formatBytes(scan.bytes)} · ${new Date(scan.createdAt * 1000).toLocaleString()}`;
-  detail.append(title, metadata);
+  const guidance = document.createElement('span');
+  guidance.className = 'pending-state-guidance';
+  guidance.id = `pending-guidance-${scan.id}`;
+  const actionStatus = document.createElement('span');
+  actionStatus.className = 'pending-action-status';
+  actionStatus.id = `pending-action-${scan.id}`;
+  actionStatus.setAttribute('role', 'status');
+  actionStatus.setAttribute('aria-live', 'polite');
+  actionStatus.setAttribute('aria-atomic', 'true');
+  actionStatus.hidden = true;
+  const currentAction = pendingActionStates.get(scan.id);
+  if (currentAction) {
+    actionStatus.hidden = false;
+    actionStatus.dataset.state = currentAction.state;
+    actionStatus.textContent = currentAction.message;
+    if (currentAction.state === 'working') article.setAttribute('aria-busy', 'true');
+  }
+  detail.append(title, metadata, guidance, actionStatus);
 
   const remove = document.createElement('button');
   remove.className = 'text-action danger';
   remove.type = 'button';
+  remove.setAttribute('aria-describedby', actionStatus.id);
   if (scan.state === 'pending') {
     remove.textContent = 'Delete';
     remove.setAttribute('aria-label', `Delete pending capture ${scan.id}`);
     remove.addEventListener('click', () => {
-      remove.disabled = true;
-      remove.textContent = 'Deleting…';
-      remove.setAttribute('aria-label', `Deleting pending capture ${scan.id}`);
-      article.setAttribute('aria-busy', 'true');
-      void runAction(async () => {
-        await invoke('delete_pending_scan', { scanId: scan.id });
-        await refresh();
-        showNotice('Local capture deleted.');
-      }).finally(() => {
-        if (!article.isConnected) return;
-        article.removeAttribute('aria-busy');
-        remove.disabled = false;
-        remove.textContent = 'Delete';
-        remove.setAttribute('aria-label', `Delete pending capture ${scan.id}`);
-      });
+      void deletePendingCapture(scan, article, remove, actionStatus);
     });
+    renderPendingActionState(scan, article, remove, actionStatus, true);
   } else {
     remove.disabled = true;
-    remove.textContent = scan.state === 'claimed' ? 'Confirming…' : 'Confirmed';
+    remove.textContent = scan.state === 'claimed' ? 'Confirmation needs retry' : 'Confirmed';
+    guidance.textContent =
+      scan.state === 'claimed'
+        ? 'The cloud result was unclear. Retry the same confirmation from Codex; its saved mutation ID will be reused.'
+        : 'The collection update completed. Retry the same confirmation from Codex if local cleanup remains.';
+    remove.setAttribute('aria-describedby', `${guidance.id} ${actionStatus.id}`);
     remove.setAttribute(
       'aria-label',
       scan.state === 'claimed'
-        ? `Capture ${scan.id} is being confirmed and cannot be deleted`
+        ? `Capture ${scan.id} needs the same confirmation retried and cannot be deleted`
         : `Capture ${scan.id} is confirmed and cannot be deleted`,
     );
   }
   article.append(preview, detail, remove);
   return article;
+}
+
+function renderPendingActionState(
+  scan: PendingScan,
+  article: HTMLElement,
+  remove: HTMLButtonElement,
+  actionStatus: HTMLSpanElement,
+  allowRetry: boolean,
+): void {
+  const action = pendingActionStates.get(scan.id);
+  if (action?.state === 'working') article.setAttribute('aria-busy', 'true');
+  else article.removeAttribute('aria-busy');
+  actionStatus.hidden = !action;
+  actionStatus.dataset.state = action?.state ?? '';
+  actionStatus.textContent = action?.message ?? '';
+  if (action?.state === 'working') {
+    remove.disabled = true;
+    remove.textContent = 'Deleting…';
+    remove.setAttribute('aria-label', `Deleting pending capture ${scan.id}`);
+    return;
+  }
+  remove.disabled = !allowRetry;
+  remove.textContent = 'Delete';
+  remove.setAttribute('aria-label', `Delete pending capture ${scan.id}`);
+}
+
+async function deletePendingCapture(
+  scan: PendingScan,
+  article: HTMLElement,
+  remove: HTMLButtonElement,
+  actionStatus: HTMLSpanElement,
+): Promise<void> {
+  const focusCandidates = pendingFocusCandidates(scan.id);
+  const shouldRestoreFocus = article.contains(document.activeElement);
+  const noticeGeneration = beginNotice();
+  pendingActionStates.set(scan.id, {
+    state: 'working',
+    message: 'Deleting this capture…',
+  });
+  renderPendingActionState(scan, article, remove, actionStatus, false);
+  try {
+    await invoke('delete_pending_scan', { scanId: scan.id });
+    pendingActionStates.delete(scan.id);
+    await refresh(shouldRestoreFocus ? focusCandidates : undefined);
+    finishNotice(noticeGeneration, 'ok', 'Local capture deleted.');
+  } catch (error) {
+    const message = `Couldn’t delete this capture. ${actionErrorMessage(error)}`;
+    pendingActionStates.set(scan.id, { state: 'error', message });
+    renderPendingActionState(scan, article, remove, actionStatus, false);
+    try {
+      await refresh();
+      if (!status?.pendingScans.some((pending) => pending.id === scan.id)) {
+        pendingActionStates.delete(scan.id);
+      }
+    } catch (refreshError) {
+      const refreshMessage = `${message} The current inbox state could not be refreshed: ${actionErrorMessage(refreshError)}`;
+      pendingActionStates.set(scan.id, { state: 'error', message: refreshMessage });
+      if (article.isConnected) {
+        renderPendingActionState(scan, article, remove, actionStatus, false);
+      }
+    }
+    finishNotice(noticeGeneration, 'error', message);
+  }
+}
+
+function pendingFocusCandidates(scanId: string): string[] {
+  const rows = Array.from(pendingList.querySelectorAll<HTMLElement>('.pending-item'));
+  const index = rows.findIndex((row) => row.dataset.scanId === scanId);
+  if (index < 0) return [];
+  return [rows[index + 1]?.dataset.scanId, rows[index - 1]?.dataset.scanId].filter(
+    (value): value is string => Boolean(value),
+  );
+}
+
+function restorePendingFocus(candidates: string[]): void {
+  for (const scanId of candidates) {
+    const row = pendingList.querySelector<HTMLElement>(`.pending-item[data-scan-id="${scanId}"]`);
+    if (!row) continue;
+    const action = row.querySelector<HTMLButtonElement>('button:not(:disabled)');
+    (action ?? row).focus();
+    return;
+  }
+  const empty = pendingList.querySelector<HTMLElement>('.empty-state');
+  if (empty) {
+    empty.focus();
+    return;
+  }
+  requireElement('#inbox-heading', HTMLHeadingElement).focus();
 }
 
 async function loadPendingPreview(image: HTMLImageElement, scan: PendingScan): Promise<void> {
@@ -358,7 +462,7 @@ cameraCapture.addEventListener('click', () => {
   void runAction(async () => {
     await captureCameraFrame(encodeCameraFrame, saveLocalCapture);
     await refresh();
-    showNotice('Camera capture added to the pending inbox.');
+    return 'Camera capture added to the pending inbox.';
   });
 });
 
@@ -370,7 +474,7 @@ fileCapture.addEventListener('change', () => {
     await importCapture(file, preview, saveLocalCapture);
     fileCapture.value = '';
     await refresh();
-    showNotice('Image added to the pending inbox.');
+    return 'Image added to the pending inbox.';
   });
 });
 
@@ -387,7 +491,7 @@ pairForm.addEventListener('submit', (event) => {
     const scopes = await invoke<string[]>('redeem_pairing_code', { code: pairCode.value });
     pairCode.value = '';
     await refresh();
-    showNotice(`Paired with ${scopes.length} scoped permissions.`);
+    return `Paired with ${scopes.length} scoped permissions.`;
   });
 });
 
@@ -395,7 +499,7 @@ disconnect.addEventListener('click', () => {
   void runAction(async () => {
     await invoke('disconnect_cloud');
     await refresh();
-    showNotice('Cloud token removed from Keychain.');
+    return 'Cloud token removed from Keychain.';
   });
 });
 
@@ -411,7 +515,7 @@ settingsForm.addEventListener('submit', (event) => {
     };
     await invoke<AppConfig>('save_settings', { config });
     await refresh();
-    showNotice('Settings saved.');
+    return 'Settings saved.';
   });
 });
 
@@ -425,9 +529,7 @@ syncArt.addEventListener('click', () => {
     try {
       const report = await invoke<SyncReport>('synchronize_art');
       syncState.textContent = 'Up to date';
-      showNotice(
-        `Art sync checked ${report.sourceCards} catalogue cards: ${report.downloaded} downloaded, ${report.uploaded} uploaded, ${report.skipped} unchanged, ${report.missingImages} without source art.`,
-      );
+      return `Art sync checked ${report.sourceCards} catalogue cards: ${report.downloaded} downloaded, ${report.uploaded} uploaded, ${report.skipped} unchanged, ${report.missingImages} without source art.`;
     } catch (error) {
       syncState.textContent = String(error).toLowerCase().includes('cancel')
         ? 'Cancelled'
@@ -453,7 +555,7 @@ cancelSync.addEventListener('click', () => {
 copyMcp.addEventListener('click', () => {
   void runAction(async () => {
     await navigator.clipboard.writeText(requireStatus().mcp.configSnippet);
-    showNotice('Codex MCP config copied.');
+    return 'Codex MCP config copied.';
   });
 });
 
@@ -528,21 +630,31 @@ function stopCamera(): void {
   cameraToggle.textContent = 'Start camera';
 }
 
-async function runAction(action: () => Promise<void>): Promise<void> {
-  notice.dataset.state = 'working';
-  notice.textContent = 'Working…';
+async function runAction(action: () => Promise<string | void>): Promise<void> {
+  const generation = beginNotice();
   try {
-    await action();
-    if (notice.dataset.state === 'working') notice.textContent = '';
+    const message = await action();
+    finishNotice(generation, message ? 'ok' : 'idle', message ?? '');
   } catch (error) {
-    notice.dataset.state = 'error';
-    notice.textContent = error instanceof Error ? error.message : String(error);
+    finishNotice(generation, 'error', actionErrorMessage(error));
   }
 }
 
-function showNotice(message: string): void {
-  notice.dataset.state = 'ok';
+function beginNotice(): number {
+  const generation = noticeGenerations.next();
+  notice.dataset.state = 'working';
+  notice.textContent = 'Working…';
+  return generation;
+}
+
+function finishNotice(generation: number, state: 'idle' | 'ok' | 'error', message: string): void {
+  if (!noticeGenerations.isCurrent(generation)) return;
+  notice.dataset.state = state;
   notice.textContent = message;
+}
+
+function actionErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function requireStatus(): DesktopStatus {

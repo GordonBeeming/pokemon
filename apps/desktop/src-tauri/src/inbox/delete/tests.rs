@@ -583,3 +583,41 @@ fn second_process_cannot_scavenge_an_inflight_delete() {
     assert!(recovered.image_path(scan.id, &scan.mime_type).is_file());
     assert_eq!(recovered.list().expect("restored scan"), vec![scan]);
 }
+
+#[test]
+fn delete_waits_for_a_short_cross_process_journal_lease() {
+    let temp = tempdir().expect("temp dir");
+    let inbox_root = temp.path().join("inbox");
+    let inbox = PendingInbox::new(inbox_root.clone());
+    let scan = inbox
+        .save(&webp(), &preview(), "image/webp", CaptureSource::File)
+        .expect("scan");
+    let ready = temp.path().join("ready");
+    let release = temp.path().join("release");
+    let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .arg("--exact")
+        .arg("inbox::delete::tests::delete_lock_holder")
+        .arg("--nocapture")
+        .env("POKEDEX_TEST_DELETE_LOCK_ROOT", &inbox_root)
+        .env("POKEDEX_TEST_DELETE_LOCK_READY", &ready)
+        .env("POKEDEX_TEST_DELETE_LOCK_RELEASE", &release)
+        .spawn()
+        .expect("lock-holder process");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !ready.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(ready.exists(), "lock holder became ready");
+
+    let release_path = release.clone();
+    let releasing = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(75));
+        std::fs::write(release_path, b"release").expect("release marker");
+    });
+    inbox
+        .delete(scan.id)
+        .expect("delete retries the short cross-process lease");
+    releasing.join().expect("release thread");
+    assert!(child.wait().expect("child exit").success());
+    assert!(inbox.list().expect("empty inbox").is_empty());
+}

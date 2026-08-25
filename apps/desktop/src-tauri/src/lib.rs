@@ -33,6 +33,9 @@ const REQUIRED_SCOPES: [&str; 5] = [
     "binders:write",
 ];
 
+#[cfg(test)]
+type DeletePhasePause = (Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>);
+
 struct DesktopServices {
     paths: AppPaths,
     config: RwLock<AppConfig>,
@@ -42,9 +45,14 @@ struct DesktopServices {
     settings_lock: Mutex<()>,
     pairing_lock: Mutex<()>,
     sync_lock: Mutex<()>,
+    delete_phase_lock: Arc<Mutex<()>>,
     scan_locks: StdMutex<HashMap<Uuid, Weak<Mutex<()>>>>,
     #[cfg(test)]
     scan_lock_contended: StdMutex<Option<Arc<tokio::sync::Notify>>>,
+    #[cfg(test)]
+    delete_phase_contended: StdMutex<Option<Arc<tokio::sync::Notify>>>,
+    #[cfg(test)]
+    delete_phase_pause: StdMutex<Option<DeletePhasePause>>,
     sync_cancel: Arc<AtomicBool>,
 }
 
@@ -80,9 +88,14 @@ impl DesktopServices {
             settings_lock: Mutex::new(()),
             pairing_lock: Mutex::new(()),
             sync_lock: Mutex::new(()),
+            delete_phase_lock: Arc::new(Mutex::new(())),
             scan_locks: StdMutex::new(HashMap::new()),
             #[cfg(test)]
             scan_lock_contended: StdMutex::new(None),
+            #[cfg(test)]
+            delete_phase_contended: StdMutex::new(None),
+            #[cfg(test)]
+            delete_phase_pause: StdMutex::new(None),
             sync_cancel: Arc::new(AtomicBool::new(false)),
         })
     }
@@ -135,6 +148,37 @@ impl DesktopServices {
                 lock.lock_owned().await
             }
         }
+    }
+
+    async fn acquire_delete_phase_lock(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = self.delete_phase_lock.clone();
+        let guard = match lock.clone().try_lock_owned() {
+            Ok(guard) => guard,
+            Err(_) => {
+                #[cfg(test)]
+                if let Some(notify) = self
+                    .delete_phase_contended
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .as_ref()
+                {
+                    notify.notify_one();
+                }
+                lock.lock_owned().await
+            }
+        };
+        #[cfg(test)]
+        let pause = self
+            .delete_phase_pause
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take();
+        #[cfg(test)]
+        if let Some((entered, release)) = pause {
+            entered.notify_one();
+            release.notified().await;
+        }
+        guard
     }
 }
 
@@ -508,34 +552,104 @@ impl DesktopServices {
         let card_id = required_string(arguments, "cardId", 128)?;
         let _process_guard = self.acquire_process_scan_lock(scan_id).await;
         let transaction = self.inbox.begin_scan_transaction(scan_id)?;
-        let claimed = transaction.claim(card_id)?;
-        if claimed.state == ScanState::Completed {
-            let completed = claimed.completed_result.ok_or_else(|| {
+        let scan = transaction.read_scan()?;
+        if scan.state != ScanState::Pending && scan.confirmed_card_id.as_deref() != Some(card_id) {
+            return Err(DesktopError::Mcp(
+                "scan is already claimed for a different card".to_string(),
+            ));
+        }
+        if scan.state == ScanState::Completed {
+            let completed = scan.completed_result.ok_or_else(|| {
                 DesktopError::Mcp("completed scan is missing its stored result".to_string())
             })?;
+            let _delete_guard = self.acquire_delete_phase_lock().await;
             transaction.finish_completed()?;
+            tracing::info!(
+                target: "pokedex.scan",
+                event = "scan.confirmation.completed",
+                operation = "confirm_scan",
+                scan_id = %scan.id,
+                mutation_id = %scan.mutation_id,
+                state = "completed",
+                replayed = true,
+                "completed scan confirmation finalized from its stored result"
+            );
             return Ok(ToolPayload::Structured(completed));
         }
-        transaction.read_image()?;
-        let (base, token) = self.cloud_context().await?;
-        let mutation = self
+        if let Err(error) = transaction.read_image() {
+            if scan.state == ScanState::Claimed {
+                log_ambiguous_confirmation(&scan, &error);
+            }
+            return Err(error);
+        }
+        let (base, token) = match self.cloud_context().await {
+            Ok(context) => context,
+            Err(error) => {
+                if scan.state == ScanState::Claimed {
+                    log_ambiguous_confirmation(&scan, &error);
+                }
+                return Err(error);
+            }
+        };
+        let claimed_this_call = scan.state == ScanState::Pending;
+        let claimed = if claimed_this_call {
+            transaction.claim(card_id)?
+        } else {
+            scan
+        };
+        let mutation = match self
             .cloud
             .increment_collection(&base, &token, card_id, 1, claimed.mutation_id)
-            .await;
-        let mutation = self.handle_cloud(&base, &token, mutation)?;
+            .await
+        {
+            Ok(mutation) => mutation,
+            Err(error) => {
+                let terminal = is_terminal_non_commit_confirmation(&error);
+                let handled = self
+                    .handle_cloud::<()>(&base, &token, Err(error))
+                    .expect_err("cloud failure cannot produce a value");
+                if terminal && claimed_this_call {
+                    if let Err(reset_error) = transaction.reset_claim(card_id, claimed.mutation_id)
+                    {
+                        return Err(DesktopError::Rollback {
+                            operation: "terminal scan confirmation",
+                            primary: Box::new(handled),
+                            cleanup: reset_error.to_string(),
+                        });
+                    }
+                } else {
+                    log_ambiguous_confirmation(&claimed, &handled);
+                }
+                return Err(handled);
+            }
+        };
+        let replayed = mutation.replayed;
         let result = json!({
             "confirmedCardId": card_id,
             "collection": mutation,
             "deletedScanId": scan_id
         });
         transaction.complete(result.clone())?;
+        let _delete_guard = self.acquire_delete_phase_lock().await;
         transaction.finish_completed()?;
+        tracing::info!(
+            target: "pokedex.scan",
+            event = "scan.confirmation.completed",
+            operation = "confirm_scan",
+            scan_id = %claimed.id,
+            mutation_id = %claimed.mutation_id,
+            state = "completed",
+            replayed,
+            "scan confirmation completed and local capture was finalized"
+        );
         Ok(ToolPayload::Structured(result))
     }
 
     async fn delete_scan(&self, scan_id: Uuid) -> Result<()> {
         let _process_guard = self.acquire_process_scan_lock(scan_id).await;
-        self.inbox.delete(scan_id)
+        let transaction = self.inbox.begin_scan_transaction(scan_id)?;
+        let _delete_guard = self.acquire_delete_phase_lock().await;
+        transaction.delete_pending()
     }
 
     async fn set_collection_tool(&self, arguments: &Map<String, Value>) -> Result<ToolPayload> {
@@ -588,6 +702,49 @@ impl DesktopServices {
             self.handle_cloud(&base, &token, result)?,
         )?))
     }
+}
+
+fn is_terminal_non_commit_confirmation(error: &DesktopError) -> bool {
+    matches!(
+        error,
+        DesktopError::Cloud { status, .. }
+            if (400..500).contains(status) && !matches!(status, 408 | 429)
+    )
+}
+
+fn desktop_error_class(error: &DesktopError) -> &'static str {
+    match error {
+        DesktopError::InvalidConfig(_) => "invalid_config",
+        DesktopError::InvalidPath(_) => "invalid_path",
+        DesktopError::InvalidImage(_) => "invalid_image",
+        DesktopError::NotPaired => "not_paired",
+        DesktopError::Cancelled => "cancelled",
+        DesktopError::Cloud { .. } => "cloud",
+        DesktopError::InvalidCloudResponse(_) => "invalid_cloud_response",
+        DesktopError::ChecksumMismatch { .. } => "checksum_mismatch",
+        DesktopError::Io(_) => "io",
+        DesktopError::Rollback { .. } => "rollback",
+        DesktopError::Json(_) => "json",
+        DesktopError::Http(_) => "http",
+        DesktopError::Url(_) => "url",
+        DesktopError::Sqlite(_) => "sqlite",
+        DesktopError::Keychain(_) => "keychain",
+        DesktopError::Mcp(_) => "mcp",
+    }
+}
+
+fn log_ambiguous_confirmation(scan: &PendingScan, error: &DesktopError) {
+    tracing::warn!(
+        target: "pokedex.scan",
+        event = "scan.confirmation.retained",
+        operation = "confirm_scan",
+        scan_id = %scan.id,
+        mutation_id = %scan.mutation_id,
+        state = "claimed",
+        retryable = true,
+        error_class = desktop_error_class(error),
+        "scan claim retained because the collection mutation outcome is ambiguous"
+    );
 }
 
 fn object(value: Value) -> Result<Map<String, Value>> {
