@@ -149,11 +149,9 @@ async function readObjectText(art: R2Bucket, key: string): Promise<string> {
 describe('backup restore', () => {
   it('includes art metadata for cards that appear only in binder slots', async () => {
     const { db, art } = setup();
-    await art.put(
-      'cards/custom-a/high/hash.webp',
-      Uint8Array.from([1, 2, 3]),
-      { customMetadata: { ownerId: 'owner' } } as R2PutOptions,
-    );
+    await art.put('cards/custom-a/high/hash.webp', Uint8Array.from([1, 2, 3]), {
+      customMetadata: { ownerId: 'owner' },
+    } as R2PutOptions);
 
     const backupId = 'backup_binder_art';
     await createBackup(db, art, 'owner', { backupId });
@@ -170,11 +168,9 @@ describe('backup restore', () => {
 
   it('removes newer custom catalogue graph rows when restoring an older backup', async () => {
     const { database, db, art } = setup();
-    await art.put(
-      'cards/custom-a/high/hash.webp',
-      Uint8Array.from([1, 2, 3]),
-      { customMetadata: { ownerId: 'owner' } } as R2PutOptions,
-    );
+    await art.put('cards/custom-a/high/hash.webp', Uint8Array.from([1, 2, 3]), {
+      customMetadata: { ownerId: 'owner' },
+    } as R2PutOptions);
 
     const backupId = 'backup_restore_custom';
     await createBackup(db, art, 'owner', { backupId });
@@ -201,20 +197,22 @@ describe('backup restore', () => {
     await restoreBackup(db, art, 'owner', backupId);
 
     expect(
-      database.prepare('SELECT id, name FROM catalogue_cards WHERE is_custom = 1 ORDER BY id').all(),
+      database
+        .prepare('SELECT id, name FROM catalogue_cards WHERE is_custom = 1 ORDER BY id')
+        .all(),
     ).toEqual([{ id: 'custom-a', name: 'Custom A' }]);
     expect(
       database.prepare('SELECT source_id, card_id FROM card_sources ORDER BY source_id').all(),
     ).toEqual([{ source_id: 'source-a', card_id: 'custom-a' }]);
     expect(
-      database.prepare('SELECT card_id, variant FROM art_manifest WHERE card_id LIKE ? ORDER BY variant').all(
-        'custom-%',
-      ),
+      database
+        .prepare('SELECT card_id, variant FROM art_manifest WHERE card_id LIKE ? ORDER BY variant')
+        .all('custom-%'),
     ).toEqual([{ card_id: 'custom-a', variant: 'high' }]);
     expect(
-      database.prepare('SELECT card_id FROM catalogue_search WHERE card_id LIKE ? ORDER BY card_id').all(
-        'custom-%',
-      ),
+      database
+        .prepare('SELECT card_id FROM catalogue_search WHERE card_id LIKE ? ORDER BY card_id')
+        .all('custom-%'),
     ).toEqual([{ card_id: 'custom-a' }]);
   });
 });
