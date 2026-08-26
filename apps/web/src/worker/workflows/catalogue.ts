@@ -145,6 +145,10 @@ async function fetchLanguageCards(
       return results.filter((card): card is ImportedCard => card !== null);
     });
     cards.push(...transformed);
+    // Free-plan external subrequests are capped per Worker invocation, not per
+    // step. Sleeping yields the Workflow so the next fetch batch resumes with
+    // a fresh invocation budget.
+    await step.sleep(`yield-after-detail-${language}-${page}`, 1);
   }
 
   const setIds = [...new Set(cards.map((card) => card.setId))].sort();
@@ -163,6 +167,7 @@ async function fetchLanguageCards(
       }),
     );
     for (const set of setDates) releaseDates.set(set.id, set.releaseDate);
+    await step.sleep(`yield-after-sets-${language}-${page}`, 1);
   }
   return Promise.all(
     cards.map((card) => setImportedCardReleaseDate(card, releaseDates.get(card.setId) ?? null)),
