@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +13,8 @@ const exec = promisify(execFile);
 const app = fileURLToPath(new URL('..', import.meta.url));
 const wrangler = join(app, 'node_modules/.bin/wrangler');
 const persist = await mkdtemp(join(tmpdir(), 'pokedex-desktop-routes-'));
+const assets = join(persist, 'assets');
+await mkdir(assets);
 const port = await new Promise((resolve, reject) => {
   const server = createServer();
   server.once('error', reject);
@@ -60,6 +62,8 @@ try {
       '--local',
       '--persist-to',
       persist,
+      '--assets',
+      assets,
       '--port',
       String(port),
     ],
