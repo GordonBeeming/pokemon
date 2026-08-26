@@ -13,10 +13,11 @@ import {
 import { nowSeconds } from '../lib/db';
 import { describeError, logInfo } from '../lib/log';
 import { recordWorkflowFailure } from '../lib/workflow-failure';
+import { catalogueRequestChunks } from './catalogue-batching';
 
 const LIST_MAX_BYTES = 25 * 1024 * 1024;
 const DETAIL_MAX_BYTES = 2 * 1024 * 1024;
-const DETAIL_CHUNK_SIZE = 250;
+const CATALOGUE_STAGE_CHUNK_SIZE = 250;
 const OUTBOUND_CONCURRENCY = 5;
 const FETCH_STEP_CONFIG = {
   retries: { limit: 4, delay: 1_000, backoff: 'exponential' },
@@ -130,9 +131,7 @@ async function fetchLanguageCards(
     return parsed.data.map((card) => card.id);
   });
   const cards: ImportedCard[] = [];
-  for (let offset = 0; offset < briefs.length; offset += DETAIL_CHUNK_SIZE) {
-    const ids = briefs.slice(offset, offset + DETAIL_CHUNK_SIZE);
-    const page = Math.floor(offset / DETAIL_CHUNK_SIZE);
+  for (const [page, ids] of catalogueRequestChunks(briefs).entries()) {
     const transformed = await step.do(`detail-${language}-${page}`, FETCH_STEP_CONFIG, async () => {
       const values = await mapConcurrent(ids, OUTBOUND_CONCURRENCY, (id) =>
         fetchTcgdex(
@@ -150,9 +149,7 @@ async function fetchLanguageCards(
 
   const setIds = [...new Set(cards.map((card) => card.setId))].sort();
   const releaseDates = new Map<string, string | null>();
-  for (let offset = 0; offset < setIds.length; offset += DETAIL_CHUNK_SIZE) {
-    const ids = setIds.slice(offset, offset + DETAIL_CHUNK_SIZE);
-    const page = Math.floor(offset / DETAIL_CHUNK_SIZE);
+  for (const [page, ids] of catalogueRequestChunks(setIds).entries()) {
     const setDates = await step.do(`sets-${language}-${page}`, FETCH_STEP_CONFIG, async () =>
       mapConcurrent(ids, OUTBOUND_CONCURRENCY, async (id) => {
         const parsed = setSchema.safeParse(
@@ -213,9 +210,9 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
           })
         : await fetchLanguageCards(language, step);
 
-      for (let offset = 0; offset < cards.length; offset += DETAIL_CHUNK_SIZE) {
-        const page = Math.floor(offset / DETAIL_CHUNK_SIZE);
-        const chunk = cards.slice(offset, offset + DETAIL_CHUNK_SIZE);
+      for (let offset = 0; offset < cards.length; offset += CATALOGUE_STAGE_CHUNK_SIZE) {
+        const page = Math.floor(offset / CATALOGUE_STAGE_CHUNK_SIZE);
+        const chunk = cards.slice(offset, offset + CATALOGUE_STAGE_CHUNK_SIZE);
         currentStep = `stage-${language}-${page}`;
         await step.do(`stage-${language}-${page}`, async () => {
           await stageCatalogueCards(this.env.DB, runId, chunk);
