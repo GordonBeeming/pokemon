@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { BinderVersionPages } from '@pokedex/shared';
 import { createArtUploadToken, createArtUploadTokens } from '../../lib/art';
 import { listCatalogueSources } from '../../lib/catalogue';
 import { asPositiveInt } from '../../lib/db';
@@ -19,6 +20,18 @@ import {
 } from './contracts';
 
 export const desktopApiRoutes = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
+
+export async function loadAllBinderPages(
+  load: (offset: number, limit: number) => Promise<BinderVersionPages>,
+): Promise<BinderVersionPages['pages']> {
+  const firstPages = await load(0, 4);
+  const pages = [...firstPages.pages];
+  for (let offset = 4; offset < firstPages.version.pageCount; offset += 4) {
+    const nextPages = await load(offset, 4);
+    pages.push(...nextPages.pages);
+  }
+  return pages;
+}
 
 const requireDesktopBearer = async (
   c: import('hono').Context<{ Bindings: CloudflareEnv; Variables: AuthVars }>,
@@ -270,15 +283,16 @@ desktopApiRoutes.post('/desktop/binders/versions/:id/swap', async (c) => {
 desktopApiRoutes.get('/desktop/binders/versions/:id/suggest', async (c) => {
   try {
     const operations = ownerOperations(c.env, await desktopOwner(c, 'binders:write'));
-    const [binder, shortagePage] = await Promise.all([
-      operations.binderVersion(c.req.param('id')),
-      operations.binderShortages(c.req.param('id')),
+    const versionId = c.req.param('id');
+    const [pages, shortagePage] = await Promise.all([
+      loadAllBinderPages((offset, limit) => operations.binderVersion(versionId, offset, limit)),
+      operations.binderShortages(versionId),
     ]);
     return c.json({
       ok: true,
       shortages: shortagePage.shortages,
       nextOffset: shortagePage.nextOffset,
-      emptySlots: binder.pages.flatMap((page) => page.slots.filter((slot) => slot.cardId === null)),
+      emptySlots: pages.flatMap((page) => page.slots.filter((slot) => slot.cardId === null)),
     });
   } catch (error) {
     return apiFailure(c, error);

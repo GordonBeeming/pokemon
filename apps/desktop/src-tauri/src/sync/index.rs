@@ -14,21 +14,26 @@ struct LegacySourceIndex {
     cards: BTreeMap<String, IndexedCard>,
 }
 
+fn source_identity(provider: &str, source_id: &str, language: &str) -> String {
+    format!("{provider}\0{source_id}\0{language}")
+}
+
 impl SourceIndex {
     pub(super) fn open(path: &Path) -> Result<Self> {
-        let connection = rusqlite::Connection::open(path)?;
+        let mut connection = rusqlite::Connection::open(path)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         connection.execute_batch(
             r#"PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              CREATE TABLE IF NOT EXISTS source_cards (
-               card_id TEXT PRIMARY KEY NOT NULL,
+               card_id TEXT NOT NULL,
                provider TEXT NOT NULL,
                source_id TEXT NOT NULL,
                language TEXT NOT NULL,
                source_updated_at INTEGER NOT NULL,
                source_checksum TEXT NOT NULL,
-               variants_json TEXT NOT NULL
+               variants_json TEXT NOT NULL,
+               PRIMARY KEY (provider, source_id, language)
              );
              CREATE TABLE IF NOT EXISTS remote_manifest (
                card_id TEXT NOT NULL,
@@ -47,6 +52,36 @@ impl SourceIndex {
                source_checksum TEXT NOT NULL
              );"#,
         )?;
+        let primary_key = {
+            let mut statement = connection.prepare(
+                "SELECT name FROM pragma_table_info('source_cards') WHERE pk > 0 ORDER BY pk",
+            )?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()?
+        };
+        if primary_key == ["card_id"] {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(
+                r#"ALTER TABLE source_cards RENAME TO source_cards_by_card;
+                   CREATE TABLE source_cards (
+                     card_id TEXT NOT NULL,
+                     provider TEXT NOT NULL,
+                     source_id TEXT NOT NULL,
+                     language TEXT NOT NULL,
+                     source_updated_at INTEGER NOT NULL,
+                     source_checksum TEXT NOT NULL,
+                     variants_json TEXT NOT NULL,
+                     PRIMARY KEY (provider, source_id, language)
+                   );
+                   INSERT INTO source_cards
+                     (card_id, provider, source_id, language, source_updated_at,
+                      source_checksum, variants_json)
+                   SELECT card_id, provider, source_id, language, source_updated_at,
+                     source_checksum, variants_json FROM source_cards_by_card;
+                   DROP TABLE source_cards_by_card;"#,
+            )?;
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
 
@@ -133,14 +168,16 @@ impl SourceIndex {
         )?;
         let mut rows = statement.query([&card_ids_json])?;
         while let Some(row) = rows.next()? {
-            let card_id: String = row.get(0)?;
+            let provider: String = row.get(1)?;
+            let source_id: String = row.get(2)?;
+            let language: String = row.get(3)?;
             let variants_json: String = row.get(6)?;
             indexed_cards.insert(
-                card_id,
+                source_identity(&provider, &source_id, &language),
                 IndexedCard {
-                    provider: row.get(1)?,
-                    source_id: row.get(2)?,
-                    language: row.get(3)?,
+                    provider,
+                    source_id,
+                    language,
                     source_updated_at: row.get(4)?,
                     source_checksum: row.get(5)?,
                     variants: serde_json::from_str(&variants_json)?,
@@ -182,7 +219,13 @@ impl SourceIndex {
         Ok(entries
             .into_iter()
             .map(|source_entry| SourceCardWork {
-                indexed: indexed_cards.get(&source_entry.card_id).cloned(),
+                indexed: indexed_cards
+                    .get(&source_identity(
+                        &source_entry.provider,
+                        &source_entry.source_id,
+                        &source_entry.language,
+                    ))
+                    .cloned(),
                 remote_entries: remote_by_card
                     .get(&source_entry.card_id)
                     .cloned()
@@ -206,8 +249,8 @@ impl SourceIndex {
                     (card_id, provider, source_id, language, source_updated_at,
                      source_checksum, variants_json)
                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                   ON CONFLICT(card_id) DO UPDATE SET provider = excluded.provider,
-                     source_id = excluded.source_id, language = excluded.language,
+                   ON CONFLICT(provider, source_id, language) DO UPDATE SET
+                     card_id = excluded.card_id,
                      source_updated_at = excluded.source_updated_at,
                      source_checksum = excluded.source_checksum,
                      variants_json = excluded.variants_json"#,
@@ -243,8 +286,8 @@ impl SourceIndex {
             r#"INSERT INTO source_cards
               (card_id, provider, source_id, language, source_updated_at, source_checksum, variants_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT(card_id) DO UPDATE SET provider = excluded.provider,
-               source_id = excluded.source_id, language = excluded.language,
+             ON CONFLICT(provider, source_id, language) DO UPDATE SET
+               card_id = excluded.card_id,
                source_updated_at = excluded.source_updated_at,
                source_checksum = excluded.source_checksum,
                variants_json = excluded.variants_json"#,

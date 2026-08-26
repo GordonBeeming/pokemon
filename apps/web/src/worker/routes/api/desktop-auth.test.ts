@@ -1,9 +1,37 @@
 import { describe, expect, it } from 'vitest';
 import { apiRoutes, parseDesktopBearer } from './index';
+import { loadAllBinderPages } from './desktop';
 
 const token = 'a'.repeat(64);
 
 describe('desktop bearer parsing', () => {
+  it('loads every binder page for MCP suggestions', async () => {
+    const offsets: number[] = [];
+    const pages = await loadAllBinderPages((offset) => {
+      offsets.push(offset);
+      return Promise.resolve({
+        version: {
+          id: 'version-1',
+          binderId: 'binder-1',
+          versionNumber: 1,
+          status: 'draft' as const,
+          layout: { kind: '2x2' as const, rows: 2 as const, columns: 2 as const },
+          revision: 1,
+          pageCount: 5,
+        },
+        pages: Array.from({ length: offset === 0 ? 4 : 1 }, (_value, index) => ({
+          id: `page-${offset + index}`,
+          position: offset + index,
+          slots: [],
+        })),
+        nextPage: offset === 0 ? 4 : null,
+      });
+    });
+
+    expect(offsets).toEqual([0, 4]);
+    expect(pages.map((page) => page.position)).toEqual([0, 1, 2, 3, 4]);
+  });
+
   it('accepts an exact paired bearer token', () => {
     expect(parseDesktopBearer(`Bearer ${token}`)).toBe(token);
   });

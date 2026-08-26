@@ -1178,27 +1178,93 @@ fn source_index_loads_and_commits_a_whole_page() {
         source_checksum: "b".repeat(64),
         variants: BTreeMap::from([("high".to_string(), IndexedVariant::from(&remote_entry))]),
     };
+    let indexed_alias = IndexedCard {
+        provider: "tcgdex".to_string(),
+        source_id: "source-alias".to_string(),
+        language: "en".to_string(),
+        source_updated_at: 1,
+        source_checksum: "c".repeat(64),
+        variants: BTreeMap::from([("high".to_string(), IndexedVariant::from(&remote_entry))]),
+    };
     index
-        .apply_source_outcomes(&[SourceCardOutcome {
-            report: SyncReport::default(),
-            remote_updates: Vec::new(),
-            indexed_card: Some(("card-1".to_string(), indexed)),
-        }])
+        .apply_source_outcomes(&[
+            SourceCardOutcome {
+                report: SyncReport::default(),
+                remote_updates: Vec::new(),
+                indexed_card: Some(("card-1".to_string(), indexed)),
+            },
+            SourceCardOutcome {
+                report: SyncReport::default(),
+                remote_updates: Vec::new(),
+                indexed_card: Some(("card-1".to_string(), indexed_alias)),
+            },
+        ])
         .expect("page transaction");
 
     let work = index
         .load_page_work(vec![
             source_entry("card-1", "source-a"),
+            source_entry("card-1", "source-alias"),
             source_entry("card-2", "source-b"),
         ])
         .expect("page state");
 
-    assert_eq!(work.len(), 2);
+    assert_eq!(work.len(), 3);
     assert!(work[0]
         .indexed
         .as_ref()
         .is_some_and(|card| card.source_id == "source-a"));
+    assert!(work[1]
+        .indexed
+        .as_ref()
+        .is_some_and(|card| card.source_id == "source-alias"));
     assert_eq!(work[0].remote_entries, [remote_entry]);
-    assert!(work[1].indexed.is_none());
-    assert!(work[1].remote_entries.is_empty());
+    assert_eq!(work[1].remote_entries, work[0].remote_entries);
+    assert!(work[2].indexed.is_none());
+    assert!(work[2].remote_entries.is_empty());
+}
+
+#[test]
+fn source_index_migrates_the_card_key_to_complete_source_identity() {
+    let root = tempdir().expect("temp dir");
+    let path = root.path().join("index.sqlite3");
+    {
+        let connection = rusqlite::Connection::open(&path).expect("legacy index");
+        connection
+            .execute_batch(
+                r#"CREATE TABLE source_cards (
+                     card_id TEXT PRIMARY KEY NOT NULL,
+                     provider TEXT NOT NULL,
+                     source_id TEXT NOT NULL,
+                     language TEXT NOT NULL,
+                     source_updated_at INTEGER NOT NULL,
+                     source_checksum TEXT NOT NULL,
+                     variants_json TEXT NOT NULL
+                   );"#,
+            )
+            .expect("legacy schema");
+        connection
+            .execute(
+                "INSERT INTO source_cards VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    "card-1",
+                    "tcgdex",
+                    "source-a",
+                    "en",
+                    1,
+                    "a".repeat(64),
+                    "{}"
+                ],
+            )
+            .expect("legacy row");
+    }
+
+    let index = SourceIndex::open(&path).expect("migrated source index");
+    let work = index
+        .load_page_work(vec![source_entry("card-1", "source-a")])
+        .expect("migrated page");
+    assert!(work[0]
+        .indexed
+        .as_ref()
+        .is_some_and(|card| card.source_id == "source-a"));
 }
