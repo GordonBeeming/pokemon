@@ -74,15 +74,19 @@ try {
   worker.stderr?.on('data', (chunk) => {
     workerOutput += String(chunk);
   });
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+  let ready = false;
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    if (worker.exitCode !== null)
+      throw new Error(`local worker exited before becoming ready\n${workerOutput}`);
     try {
-      if ((await fetch(`${base}/api/live`)).status === 200) break;
-    } catch (error) {
-      if (attempt === 39) throw error;
+      ready = (await fetch(`${base}/api/live`)).status === 200;
+    } catch {
+      // The socket is expected to refuse connections until Wrangler is listening.
     }
+    if (ready) break;
     await new Promise((resolve) => setTimeout(resolve, 250));
-    if (attempt === 39) throw new Error('local worker did not start');
   }
+  if (!ready) throw new Error(`local worker did not start\n${workerOutput}`);
   const valid = await request('/api/desktop/catalogue/search', `Bearer ${ownerAToken}`);
   const sources = await request(
     '/api/desktop/catalogue/sources?limit=500',
