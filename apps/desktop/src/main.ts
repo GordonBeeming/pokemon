@@ -602,11 +602,14 @@ fileCapture.addEventListener('change', () => {
   void runAction(async () => {
     const file = fileCapture.files?.item(0);
     if (!file) return;
-    const preview = await encodeFilePreview(file);
-    await importCapture(file, preview, saveLocalCapture);
-    fileCapture.value = '';
-    await refresh();
-    return 'Image added to the pending inbox.';
+    try {
+      const preview = await encodeFilePreview(file);
+      await importCapture(file, preview, saveLocalCapture);
+      await refresh();
+      return 'Image added to the pending inbox.';
+    } finally {
+      fileCapture.value = '';
+    }
   });
 });
 

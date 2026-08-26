@@ -245,6 +245,43 @@ describe('desktop main DOM', () => {
     expect(document.querySelectorAll('.pending-item')).toHaveLength(0);
   });
 
+  it('clears the chosen image after a failed file import so the same file can be retried', async () => {
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'desktop_status') return Promise.resolve(status([]));
+      return Promise.resolve(undefined);
+    });
+    const createImageBitmapMock = vi.fn().mockRejectedValue(new Error('Preview failed.'));
+    vi.stubGlobal('createImageBitmap', createImageBitmapMock);
+
+    await import('./main');
+    const fileInput = document.querySelector<HTMLInputElement>('#file-capture');
+    expect(fileInput).toBeInstanceOf(HTMLInputElement);
+
+    const file = new File([Uint8Array.from([255, 216, 255, 217])], 'scan.jpg', {
+      type: 'image/jpeg',
+    });
+    let currentValue = 'scan.jpg';
+    Object.defineProperty(fileInput, 'files', {
+      configurable: true,
+      value: {
+        item: (index: number) => (index === 0 ? file : null),
+      },
+    });
+    Object.defineProperty(fileInput, 'value', {
+      configurable: true,
+      get: () => currentValue,
+      set: (value: string) => {
+        currentValue = value;
+      },
+    });
+
+    fileInput?.dispatchEvent(new Event('change'));
+    await waitFor(() => document.querySelector('#notice')?.textContent === 'Preview failed.');
+
+    expect(currentValue).toBe('');
+    expect(createImageBitmapMock).toHaveBeenCalledWith(file);
+  });
+
   it('explains why claimed and completed captures cannot be deleted', async () => {
     const claimed: PendingScan = {
       id: '01909a91-2fd5-77e0-b7e9-962c6f8b57ec',
