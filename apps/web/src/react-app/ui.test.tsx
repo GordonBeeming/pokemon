@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api';
-import { BinderView, containsCardSequence } from './binder-view';
+import { BinderView, binderMutationPage, containsCardSequence } from './binder-view';
 import { CatalogueView } from './catalogue-view';
 import { DevicesView, FacetsView, Login, Shell, userMessage } from './ui';
 
@@ -10,6 +10,23 @@ beforeEach(() => {
 });
 
 describe('accessible frontend structure', () => {
+  it('reloads a valid displayed binder page when a structural mutation omits it', () => {
+    const result = {
+      version: {
+        id: 'version-1',
+        binderId: 'binder-1',
+        versionNumber: 1,
+        status: 'draft' as const,
+        layout: { kind: '3x3' as const, rows: 3 as const, columns: 3 as const },
+        revision: 2,
+        pageCount: 2,
+      },
+      pages: [{ id: 'page-1', position: 0, slots: [] }],
+    };
+    expect(binderMutationPage(result, 1)).toEqual({ position: 1, page: null });
+    expect(binderMutationPage(result, 2)).toEqual({ position: 1, page: null });
+  });
+
   it('renders enrolment as a labelled form with a persistent alert region', () => {
     const html = renderToStaticMarkup(<Login onAuthenticated={() => undefined} />);
     expect(html).toContain('<form');

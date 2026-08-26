@@ -1,13 +1,64 @@
-import { describe, expect, it } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
+import { afterEach, describe, expect, it } from 'vitest';
 import { artObjectKey, isWebp } from './art';
 import { escapedFtsQuery } from './db';
 import { extractTcgdexPrices, selectConservativePrice } from './pricing';
-import { catalogueSyncLanguage, resolveStagedCardId, transformTcgdexCard } from './catalogue';
+import {
+  beginStagedCatalogueRun,
+  catalogueSyncLanguage,
+  resolveStagedCardId,
+  stageCatalogueCards,
+  transformTcgdexCard,
+} from './catalogue';
+import { applyAllMigrations, sqliteD1 } from './d1-test-helper';
+
+const databases: DatabaseSync[] = [];
+
+afterEach(() => {
+  for (const database of databases.splice(0)) database.close();
+});
 
 describe('catalogue cloud invariants', () => {
   it('defaults scheduled catalogue refreshes to the English collection', () => {
     expect(catalogueSyncLanguage(undefined)).toBe('en');
     expect(catalogueSyncLanguage('ja')).toBe('ja');
+  });
+
+  it('reuses a physical printing identity staged by an earlier workflow chunk', async () => {
+    const database = new DatabaseSync(':memory:');
+    databases.push(database);
+    database.exec('PRAGMA foreign_keys = ON');
+    applyAllMigrations(database);
+    const db = sqliteD1(database);
+    await beginStagedCatalogueRun(db, 'en', { runId: 'run-1', complete: true });
+    const printing = {
+      checksum: 'a'.repeat(64),
+      sourceUpdatedAt: 1,
+      name: 'Squirtle',
+      language: 'en' as const,
+      category: 'pokemon' as const,
+      setId: 'set-1',
+      setName: 'Set One',
+      number: '7',
+      numberSort: 7,
+      supertype: 'Pokémon',
+      subtype: 'Basic',
+      species: 'Squirtle',
+      rarity: 'Common',
+      artist: 'Artist',
+      releaseDate: '2026-01-01',
+      pokedexNumber: 7,
+    };
+    await stageCatalogueCards(db, 'run-1', [{ ...printing, sourceId: 'source-a' }]);
+    await stageCatalogueCards(db, 'run-1', [{ ...printing, sourceId: 'source-b' }]);
+
+    expect(
+      database
+        .prepare(
+          "SELECT COUNT(*) AS sources, COUNT(DISTINCT card_id) AS cards FROM catalogue_stage_cards WHERE run_id = 'run-1'",
+        )
+        .get(),
+    ).toEqual({ sources: 2, cards: 1 });
   });
 
   it('builds bounded FTS prefixes without exposing FTS operators', () => {

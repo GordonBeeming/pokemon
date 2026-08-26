@@ -41,6 +41,17 @@ export function containsCardSequence(slots: Array<string | null>, sequence: stri
   return false;
 }
 
+export function binderMutationPage(
+  result: BinderMutationResult,
+  currentPage: number,
+): { position: number; page: BinderMutationResult['pages'][number] | null } {
+  const position = Math.max(0, Math.min(currentPage, result.version.pageCount - 1));
+  return {
+    position,
+    page: result.pages.find((item) => item.position === position) ?? null,
+  };
+}
+
 async function loadAllShortages(
   versionId: string,
   signal: AbortSignal,
@@ -259,12 +270,18 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     await loadVersion(versionId, 0);
   }
 
-  function mergeMutation(result: BinderMutationResult): void {
-    setBinder((current) => {
-      if (!current) return { version: result.version, pages: result.pages, nextPage: null };
-      const affected = result.pages.find((item) => item.position === page);
-      return { ...current, version: result.version, pages: affected ? [affected] : current.pages };
-    });
+  async function mergeMutation(result: BinderMutationResult): Promise<void> {
+    const { position: nextPage, page: affected } = binderMutationPage(result, page);
+    if (!affected) {
+      await loadVersion(result.version.id, nextPage);
+      return;
+    }
+    setBinder((current) =>
+      current
+        ? { ...current, version: result.version, pages: [affected] }
+        : { version: result.version, pages: [affected], nextPage: null },
+    );
+    setPage(nextPage);
   }
 
   async function mutate(
@@ -276,7 +293,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     onNotice(null);
     try {
       const result = await action();
-      mergeMutation(result);
+      await mergeMutation(result);
       setPlannerStatus(success);
       onNotice({ kind: 'success', message: success });
     } catch (error) {

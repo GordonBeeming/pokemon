@@ -196,6 +196,8 @@ export class ApiError extends Error {
   }
 }
 
+export const AUTH_LOST_EVENT = 'pokedex:authentication-lost';
+
 async function purgePrivateCaches(): Promise<void> {
   navigator.serviceWorker?.controller?.postMessage({ type: 'PURGE_PRIVATE_CACHES' });
   if (!('caches' in globalThis)) return;
@@ -237,7 +239,11 @@ async function request<Output, Definition extends z.ZodTypeDef, Input>(
       ? (failure.data.requestId ?? response.headers.get('x-request-id'))
       : response.headers.get('x-request-id');
     const retryAfter = Number.parseInt(response.headers.get('retry-after') ?? '', 10);
-    if (response.status === 401) await purgePrivateCaches();
+    if (response.status === 401) {
+      await purgePrivateCaches();
+      if (typeof globalThis.dispatchEvent === 'function')
+        globalThis.dispatchEvent(new Event(AUTH_LOST_EVENT));
+    }
     throw new ApiError(
       code,
       failure.success ? (failure.data.message ?? code) : 'The server returned an invalid response.',

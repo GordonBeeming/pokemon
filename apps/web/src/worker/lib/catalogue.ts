@@ -420,14 +420,24 @@ export async function stageCatalogueCards(
     const input = cards.slice(offset, offset + MAX_STAGE_ROWS);
     const existing = await db
       .prepare(
-        `SELECT card.id, card.language, card.set_name, card.number, card.name
+        `WITH candidate(value) AS (SELECT value FROM json_each(?1))
+         SELECT card.id, card.language, card.set_name, card.number, card.name
          FROM catalogue_cards card
-         JOIN json_each(?1) candidate
+         JOIN candidate
            ON card.language = json_extract(candidate.value, '$.language')
           AND lower(card.set_name) = lower(json_extract(candidate.value, '$.setName'))
           AND card.number = json_extract(candidate.value, '$.number')
           AND lower(card.name) = lower(json_extract(candidate.value, '$.name'))
-         WHERE card.is_custom = 0`,
+         WHERE card.is_custom = 0
+         UNION ALL
+         SELECT staged.card_id AS id, staged.language, staged.set_name, staged.number, staged.name
+         FROM catalogue_stage_cards staged
+         JOIN candidate
+           ON staged.language = json_extract(candidate.value, '$.language')
+          AND lower(staged.set_name) = lower(json_extract(candidate.value, '$.setName'))
+          AND staged.number = json_extract(candidate.value, '$.number')
+          AND lower(staged.name) = lower(json_extract(candidate.value, '$.name'))
+         WHERE staged.run_id = ?2`,
       )
       .bind(
         JSON.stringify(
@@ -438,6 +448,7 @@ export async function stageCatalogueCards(
             name: card.name,
           })),
         ),
+        runId,
       )
       .all<{ id: string; language: string; set_name: string; number: string; name: string }>();
     for (const card of existing.results) {

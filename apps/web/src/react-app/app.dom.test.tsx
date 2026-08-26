@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './app';
 import { BinderView } from './binder-view';
 import { CatalogueView } from './catalogue-view';
+import { AUTH_LOST_EVENT } from './api';
 import { DevicesView } from './ui';
 
 const apiMocks = vi.hoisted(() => ({
@@ -132,6 +133,76 @@ describe('async frontend announcements', () => {
     expect(apiMocks.tokens).toHaveBeenCalledTimes(2);
     expect(container.textContent).not.toContain('Devices could not load.');
     expect(container.textContent).not.toContain('The request could not be completed.');
+  });
+
+  it('returns to passkey login when an authenticated session is lost', async () => {
+    apiMocks.me.mockResolvedValue({ user: { id: 'owner' } });
+    apiMocks.tokens.mockResolvedValue([]);
+
+    act(() => root.render(<App />));
+    await waitFor(() => container.textContent?.includes('No scanner is paired.') === true);
+    act(() => {
+      dispatchEvent(new Event(AUTH_LOST_EVENT));
+    });
+    await waitFor(() => container.textContent?.includes('Open your collection.') === true);
+
+    expect(container.textContent).toContain('Continue with passkey');
+  });
+
+  it('preserves the chosen set language when opening its catalogue', async () => {
+    location.hash = '#sets';
+    apiMocks.me.mockResolvedValue({ user: { id: 'owner' } });
+    apiMocks.sets.mockResolvedValue([
+      { setId: 'shared-set', setName: 'Shared set', language: 'fr', total: 10, owned: 0 },
+    ]);
+    apiMocks.search.mockResolvedValue({ ok: true, total: 0, cards: [], cursor: null });
+
+    act(() => root.render(<App />));
+    await waitFor(() => container.querySelector('.set-row') !== null);
+    act(() => container.querySelector<HTMLButtonElement>('.set-row')?.click());
+    await settle();
+
+    const params = new URLSearchParams(location.hash.split('?', 2)[1] ?? '');
+    expect(params.get('setId')).toBe('shared-set');
+    expect(params.get('language')).toBe('fr');
+  });
+
+  it('searches with newly applied catalogue parameters after a mounted-route change', async () => {
+    const firstSearch = deferred<{ ok: true; total: number; cards: []; cursor: null }>();
+    const secondSearch = deferred<{ ok: true; total: number; cards: []; cursor: null }>();
+    apiMocks.search
+      .mockReturnValueOnce(firstSearch.promise)
+      .mockReturnValueOnce(secondSearch.promise);
+    const view = (params: URLSearchParams) => (
+      <CatalogueView
+        initialParams={params}
+        refreshKey={0}
+        indexing={false}
+        indexingError={null}
+        indexingResult={null}
+        retryIndexing={() => undefined}
+        onBackToNational={() => undefined}
+        onBackToSets={() => undefined}
+        onNotice={() => undefined}
+      />
+    );
+
+    act(() => root.render(view(new URLSearchParams({ q: 'old', owned: 'true' }))));
+    await waitFor(() => apiMocks.search.mock.calls.length === 1);
+    await act(async () => {
+      firstSearch.resolve({ ok: true, total: 0, cards: [], cursor: null });
+      await firstSearch.promise;
+    });
+    act(() => root.render(view(new URLSearchParams({ q: 'new', owned: 'false' }))));
+    await waitFor(() => apiMocks.search.mock.calls.length === 2);
+    await act(async () => {
+      secondSearch.resolve({ ok: true, total: 0, cards: [], cursor: null });
+      await secondSearch.promise;
+    });
+
+    const params = apiMocks.search.mock.calls[1]?.[0] as URLSearchParams;
+    expect(params.get('q')).toBe('new');
+    expect(params.get('owned')).toBe('false');
   });
 
   it('reports clipboard rejection and leaves the visible code available', async () => {

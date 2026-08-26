@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactElement } from 'react';
 import {
   api,
   ApiError,
+  AUTH_LOST_EVENT,
   type Dashboard,
   type DesktopToken,
   type PairingCode,
@@ -138,6 +139,16 @@ export function App(): ReactElement {
         }
       });
     return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    const authenticationLost = (): void => {
+      loadController.current?.abort();
+      setNotice(null);
+      setAuth('anonymous');
+    };
+    addEventListener(AUTH_LOST_EVENT, authenticationLost);
+    return () => removeEventListener(AUTH_LOST_EVENT, authenticationLost);
   }, []);
 
   useEffect(() => {
@@ -333,12 +344,16 @@ export function App(): ReactElement {
           total: item.total,
         }))}
         onChoose={(selected) => {
-          const [setId] = selected.split(':', 1);
-          if (!setId) return;
-          const setName = sets.find(
-            (item) => `${item.setId}:${item.language}` === selected,
-          )?.setName;
-          navigate('catalogue', new URLSearchParams({ setId, ...(setName ? { setName } : {}) }));
+          const chosen = sets.find((item) => `${item.setId}:${item.language}` === selected);
+          if (!chosen) return;
+          navigate(
+            'catalogue',
+            new URLSearchParams({
+              setId: chosen.setId,
+              setName: chosen.setName,
+              language: chosen.language,
+            }),
+          );
         }}
       />
     ) : routeError ? (

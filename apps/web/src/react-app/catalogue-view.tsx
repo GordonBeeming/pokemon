@@ -15,6 +15,15 @@ import { CardTile } from './card-tile';
 import { Pagination } from './pagination';
 
 const PAGE_SIZE = 50;
+type CatalogueOwnership = 'all' | 'owned' | 'missing';
+
+function ownershipFromParams(params: URLSearchParams): CatalogueOwnership {
+  return params.get('owned') === 'true'
+    ? 'owned'
+    : params.get('owned') === 'false'
+      ? 'missing'
+      : 'all';
+}
 
 function Art({
   card,
@@ -310,12 +319,8 @@ export function CatalogueView({
   onNotice: (notice: Notice) => void;
 }): ReactElement {
   const [query, setQuery] = useState(initialParams.get('q') ?? '');
-  const [ownership, setOwnership] = useState<'all' | 'owned' | 'missing'>(
-    initialParams.get('owned') === 'true'
-      ? 'owned'
-      : initialParams.get('owned') === 'false'
-        ? 'missing'
-        : 'all',
+  const [ownership, setOwnership] = useState<CatalogueOwnership>(() =>
+    ownershipFromParams(initialParams),
   );
   const [customName, setCustomName] = useState('');
   const [cards, setCards] = useState<CatalogueCardView[]>([]);
@@ -348,7 +353,11 @@ export function CatalogueView({
       ? requestedPokedexNumber
       : null;
 
-  async function search(nextPage: number, params = initialParams): Promise<void> {
+  async function search(
+    nextPage: number,
+    params = initialParams,
+    filters: { query: string; ownership: CatalogueOwnership } = { query, ownership },
+  ): Promise<void> {
     const moved = nextPage !== page;
     const generation = ++searchGeneration.current;
     searchController.current?.abort();
@@ -357,10 +366,10 @@ export function CatalogueView({
     setLoading(true);
     onNotice(null);
     const next = new URLSearchParams(params);
-    if (query.trim()) next.set('q', query.trim());
+    if (filters.query.trim()) next.set('q', filters.query.trim());
     else next.delete('q');
-    if (ownership === 'owned') next.set('owned', 'true');
-    else if (ownership === 'missing') next.set('owned', 'false');
+    if (filters.ownership === 'owned') next.set('owned', 'true');
+    else if (filters.ownership === 'missing') next.set('owned', 'false');
     else next.delete('owned');
     next.set('limit', String(PAGE_SIZE));
     next.delete('cursor');
@@ -384,15 +393,13 @@ export function CatalogueView({
   }
 
   useEffect(() => {
-    setQuery(initialParams.get('q') ?? '');
-    setOwnership(
-      initialParams.get('owned') === 'true'
-        ? 'owned'
-        : initialParams.get('owned') === 'false'
-          ? 'missing'
-          : 'all',
+    const nextQuery = initialParams.get('q') ?? '';
+    const nextOwnership = ownershipFromParams(initialParams);
+    setQuery(nextQuery);
+    setOwnership(nextOwnership);
+    void search(0, initialParams, { query: nextQuery, ownership: nextOwnership }).finally(() =>
+      setCompletedRefresh(refreshKey),
     );
-    void search(0, initialParams).finally(() => setCompletedRefresh(refreshKey));
     return () => {
       searchController.current?.abort();
       detailController.current?.abort();
