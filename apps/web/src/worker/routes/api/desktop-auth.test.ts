@@ -51,4 +51,10 @@ describe('desktop bearer parsing', () => {
     expect(response.headers.get('retry-after')).toBe('42');
     await expect(response.json()).resolves.toMatchObject({ ok: false, error: 'rate_limited' });
   });
+
+  it('never accepts an art upload credential from the URL path', async () => {
+    const response = await apiRoutes.request(`/desktop/art/uploads/${token}`, { method: 'PUT' });
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ error: 'art_upload_token_invalid' });
+  });
 });

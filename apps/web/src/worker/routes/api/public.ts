@@ -25,12 +25,10 @@ publicApiRoutes.post('/desktop/pair/redeem', async (c) => {
   }
 });
 
-publicApiRoutes.put('/desktop/art/uploads/:token', async (c) => {
+publicApiRoutes.put('/desktop/art/uploads/:ticket', async (c) => {
   try {
-    const pathTicket = c.req.param('token');
-    const token =
-      parseDesktopBearer(c.req.header('authorization')) ??
-      (/^[a-f0-9]{64}$/iu.test(pathTicket) ? pathTicket : null);
+    const pathTicket = c.req.param('ticket');
+    const token = parseDesktopBearer(c.req.header('authorization'));
     if (!token)
       return c.json(
         { ok: false, error: 'art_upload_token_invalid', requestId: c.get('requestId') },

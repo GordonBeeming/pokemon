@@ -7,6 +7,7 @@ import {
   getPriceSyncCursor,
   prunePricingData,
   setPriceSyncCursor,
+  stagePriceTargets,
   stagePrices,
   upsertFxRate,
   type PriceCandidate,
@@ -16,7 +17,7 @@ import { describeError, logInfo } from '../lib/log';
 import { nowSeconds } from '../lib/db';
 import { recordWorkflowFailure } from '../lib/workflow-failure';
 
-const PRICE_SOURCE_PAGE = 250;
+const PRICE_SOURCE_PAGE = 1_000;
 const OUTBOUND_CONCURRENCY = 5;
 const DETAIL_MAX_BYTES = 2 * 1024 * 1024;
 const PRICE_OBJECT_MAX_BYTES = 25 * 1024 * 1024;
@@ -111,10 +112,10 @@ async function sourcePage(db: D1Database): Promise<{ ids: string[]; cursor: stri
 async function cardRowsForSources(
   db: D1Database,
   prices: Array<{ sourceId: string; candidates: PriceCandidate[] }>,
-): Promise<StagedPriceRow[]> {
+): Promise<{ cardIds: string[]; rows: StagedPriceRow[] }> {
   const bySource = new Map(prices.map((price) => [price.sourceId, price.candidates]));
   const sourceIds = [...bySource.keys()];
-  if (sourceIds.length === 0) return [];
+  if (sourceIds.length === 0) return { cardIds: [], rows: [] };
   const rows = await db
     .prepare(
       `SELECT source.card_id, source.source_id
@@ -124,12 +125,15 @@ async function cardRowsForSources(
     )
     .bind(JSON.stringify(sourceIds))
     .all<{ card_id: string; source_id: string }>();
-  return rows.results.flatMap((row) =>
-    (bySource.get(row.source_id) ?? []).map((candidate) => ({
-      ...candidate,
-      cardId: row.card_id,
-    })),
-  );
+  return {
+    cardIds: [...new Set(rows.results.map((row) => row.card_id))],
+    rows: rows.results.flatMap((row) =>
+      (bySource.get(row.source_id) ?? []).map((candidate) => ({
+        ...candidate,
+        cardId: row.card_id,
+      })),
+    ),
+  };
 }
 
 async function ensureFxRates(db: D1Database, currencies: string[]): Promise<string> {
@@ -166,6 +170,7 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
     try {
       await step.do('begin-price-run', () => beginPriceSyncRun(this.env.DB, runId));
       let rows: StagedPriceRow[];
+      let targetCardIds: string[];
       let cursor: string | null = null;
       if (event.payload.objectKey) {
         currentStep = 'read-price-object';
@@ -177,6 +182,7 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
           if (!parsed.success) throw new Error('price_stage_invalid');
           return parsed.data;
         });
+        targetCardIds = [...new Set(rows.map((row) => row.cardId))];
       } else {
         currentStep = 'select-price-sources';
         const page = await step.do('select-price-sources', () => sourcePage(this.env.DB));
@@ -190,10 +196,14 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
           ),
         );
         currentStep = 'map-price-sources';
-        rows = await step.do('map-price-sources', () => cardRowsForSources(this.env.DB, prices));
+        const mapped = await step.do('map-price-sources', () =>
+          cardRowsForSources(this.env.DB, prices),
+        );
+        rows = mapped.rows;
+        targetCardIds = mapped.cardIds;
       }
 
-      if (rows.length === 0) {
+      if (targetCardIds.length === 0) {
         currentStep = 'complete-empty-price-run';
         await step.do('complete-empty-price-run', async () => {
           await this.env.DB.prepare(
@@ -207,6 +217,12 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
         });
         return;
       }
+
+      currentStep = 'stage-price-targets';
+      await step.do('stage-price-targets', async () => {
+        await stagePriceTargets(this.env.DB, runId, targetCardIds);
+        return targetCardIds.length;
+      });
 
       const fxDate =
         event.payload.fxDate ??

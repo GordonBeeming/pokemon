@@ -182,16 +182,41 @@ export async function stagePrices(
   }
 }
 
+export async function stagePriceTargets(
+  db: D1Database,
+  runId: string,
+  cardIds: string[],
+): Promise<void> {
+  await beginPriceSyncRun(db, runId);
+  const uniqueCardIds = [...new Set(cardIds)].sort();
+  for (let offset = 0; offset < uniqueCardIds.length; offset += MAX_STAGE_ROWS) {
+    await db
+      .prepare(
+        `INSERT INTO price_stage_targets (run_id, card_id)
+         SELECT ?1, value FROM json_each(?2) WHERE true
+         ON CONFLICT(run_id, card_id) DO NOTHING`,
+      )
+      .bind(runId, JSON.stringify(uniqueCardIds.slice(offset, offset + MAX_STAGE_ROWS)))
+      .run();
+  }
+}
+
 export async function applyStagedPrices(
   db: D1Database,
   runId: string,
   fxDate: string,
 ): Promise<number> {
-  const count = await db
-    .prepare('SELECT COUNT(*) AS count FROM price_stage_rows WHERE run_id = ?1')
-    .bind(runId)
-    .first<{ count: number }>();
-  if (!count || count.count === 0) throw new Error('staged_price_empty');
+  const [count, targetCount] = await Promise.all([
+    db
+      .prepare('SELECT COUNT(*) AS count FROM price_stage_rows WHERE run_id = ?1')
+      .bind(runId)
+      .first<{ count: number }>(),
+    db
+      .prepare('SELECT COUNT(*) AS count FROM price_stage_targets WHERE run_id = ?1')
+      .bind(runId)
+      .first<{ count: number }>(),
+  ]);
+  if (!count || !targetCount || targetCount.count === 0) throw new Error('staged_price_empty');
   const now = nowSeconds();
   await db.batch([
     db
@@ -224,8 +249,25 @@ export async function applyStagedPrices(
       .bind(fxDate, now, runId),
     db
       .prepare(
+        `INSERT INTO price_source_availability (card_id, source, available, checked_at)
+         WITH sources(source) AS (VALUES ('tcgplayer'), ('cardmarket'))
+         SELECT target.card_id, sources.source,
+           CASE WHEN EXISTS (
+             SELECT 1 FROM price_stage_rows stage
+             WHERE stage.run_id = target.run_id AND stage.card_id = target.card_id
+               AND stage.source = sources.source
+           ) THEN 1 ELSE 0 END,
+           ?2
+         FROM price_stage_targets target CROSS JOIN sources
+         WHERE target.run_id = ?1
+         ON CONFLICT(card_id, source) DO UPDATE SET
+           available = excluded.available, checked_at = excluded.checked_at`,
+      )
+      .bind(runId, now),
+    db
+      .prepare(
         `DELETE FROM card_current_prices
-         WHERE card_id IN (SELECT card_id FROM price_stage_rows WHERE run_id = ?1)`,
+         WHERE card_id IN (SELECT card_id FROM price_stage_targets WHERE run_id = ?1)`,
       )
       .bind(runId),
     db
@@ -234,14 +276,19 @@ export async function applyStagedPrices(
           (card_id, source, native_amount_micros, native_currency, source_captured_at,
            fx_date, amount_aud_micros, updated_at)
          WITH affected AS (
-           SELECT DISTINCT card_id FROM price_stage_rows WHERE run_id = ?1
+           SELECT card_id FROM price_stage_targets WHERE run_id = ?1
          ), latest AS (
            SELECT snapshot.*,
              ROW_NUMBER() OVER (
                PARTITION BY snapshot.card_id, snapshot.source
                ORDER BY snapshot.source_captured_at DESC, snapshot.created_at DESC
              ) AS source_rank
-           FROM price_snapshots snapshot JOIN affected ON affected.card_id = snapshot.card_id
+           FROM price_snapshots snapshot
+           JOIN affected ON affected.card_id = snapshot.card_id
+           JOIN price_source_availability availability
+             ON availability.card_id = snapshot.card_id
+             AND availability.source = snapshot.source
+             AND availability.available = 1
          ), ranked AS (
            SELECT latest.*,
              ROW_NUMBER() OVER (
@@ -257,6 +304,7 @@ export async function applyStagedPrices(
       )
       .bind(runId, now),
     db.prepare('DELETE FROM price_stage_rows WHERE run_id = ?1').bind(runId),
+    db.prepare('DELETE FROM price_stage_targets WHERE run_id = ?1').bind(runId),
     db
       .prepare(
         `UPDATE price_sync_runs SET completed_at = ?1, status = 'complete', row_count = ?2,
@@ -324,6 +372,7 @@ export async function recordPrice(
   fxDate: string,
 ): Promise<PriceBaseline> {
   const runId = await beginPriceSyncRun(db);
+  await stagePriceTargets(db, runId, [cardId]);
   await stagePrices(db, runId, [{ ...candidate, cardId }]);
   await applyStagedPrices(db, runId, fxDate);
   return priceForCard(db, cardId);

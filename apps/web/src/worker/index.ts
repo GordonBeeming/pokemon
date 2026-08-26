@@ -96,7 +96,7 @@ const app = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
 
 const READINESS_MAX_AGE_SECONDS = {
   backup: 36 * 60 * 60,
-  catalogue: 36 * 60 * 60,
+  catalogue: 35 * 24 * 60 * 60,
   pricing: 36 * 60 * 60,
   fx: 36 * 60 * 60,
 } as const;

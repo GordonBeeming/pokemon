@@ -1,4 +1,4 @@
-const CACHE_NAME = 'pokedex-shell-v2';
+const CACHE_NAME = 'pokedex-shell-v3';
 const CACHE_PREFIX = 'pokedex-';
 const SHELL_PATHS = ['/', '/index.html'];
 
@@ -50,7 +50,7 @@ self.addEventListener('fetch', (event) => {
         .then(async (response) => {
           if (response.ok) {
             const cache = await caches.open(CACHE_NAME);
-            await cache.put('/', response.clone());
+            await Promise.all(SHELL_PATHS.map((path) => cache.put(path, response.clone())));
           }
           return response;
         })

@@ -14,7 +14,9 @@ describe('service worker cache policy', () => {
     const handlers = new Map<string, (event: WorkerEvent) => void>();
     const fetch = vi.fn(() => Promise.resolve(new Response('network')));
     const deleteCache = vi.fn(() => Promise.resolve(true));
-    const put = vi.fn(() => Promise.resolve());
+    const put = vi
+      .fn<(path: string, response: Response) => Promise<void>>()
+      .mockResolvedValue(undefined);
     const cache = { addAll: vi.fn(() => Promise.resolve()), put };
     const caches = {
       match: vi.fn(() => Promise.resolve(cached)),
@@ -68,7 +70,8 @@ describe('service worker cache policy', () => {
     });
     await expect(response).resolves.toBeInstanceOf(Response);
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(put).toHaveBeenCalledTimes(1);
+    expect(put).toHaveBeenCalledTimes(2);
+    expect(put.mock.calls.map(([path]) => path)).toEqual(['/', '/index.html']);
   });
 
   it('never intercepts private API or art requests', () => {

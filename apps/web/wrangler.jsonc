@@ -39,7 +39,7 @@
       "binding": "PRICE_SYNC",
       "name": "pokedex-price-sync",
       "class_name": "PriceSyncWorkflow",
-      "schedules": ["20 3 * * *"],
+      "schedules": ["0 * * * *"],
     },
     {
       "binding": "FX_SYNC",
