@@ -3,29 +3,37 @@ name: Release desktop scanner
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and publish
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: desktop-release-${{ github.event.release.tag_name }}
+  group: desktop-release-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 
 jobs:
   macos:
     name: Sign, notarize, and release macOS scanner
-    if: github.event.release.tag_name != 'assets'
+    if: (github.event.release.tag_name || inputs.tag) != 'assets'
     runs-on: macos-15
     timeout-minutes: 90
     environment: prod
     permissions:
       contents: write
     env:
-      APPLE_SIGNING_IDENTITY: 'Developer ID Application: Gordon Beeming (89DBN36T4T)'
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
 
       - name: Set up pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -57,13 +65,13 @@ jobs:
       - name: Set release version
         shell: bash
         run: |
-          if [[ "${GITHUB_REF_NAME}" =~ ^v([0-9]+)\.([0-9]+)(-beta\.[0-9]+)?$ ]]; then
-            export RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "${RELEASE_TAG}" =~ ^v([0-9]+)\.([0-9]+)(-beta\.[0-9]+)?$ ]]; then
+            export RELEASE_VERSION="${RELEASE_TAG#v}"
             export APP_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${GITHUB_RUN_NUMBER}${BASH_REMATCH[3]}"
             echo "RELEASE_VERSION=${RELEASE_VERSION}" >> "${GITHUB_ENV}"
             echo "APP_VERSION=${APP_VERSION}" >> "${GITHUB_ENV}"
           else
-            echo "Release tag must look like v0.1 or v0.1-beta.1; got ${GITHUB_REF_NAME}." >&2
+            echo "Release tag must look like v0.1 or v0.1-beta.1; got ${RELEASE_TAG}." >&2
             exit 1
           fi
 
@@ -111,6 +119,8 @@ jobs:
         run: pnpm --dir apps/desktop tauri build --bundles app
 
       - name: Sign and verify app
+        env:
+          APPLE_SIGNING_IDENTITY: 'Developer ID Application: Gordon Beeming (89DBN36T4T)'
         shell: bash
         run: |
           APP_BUNDLE="apps/desktop/src-tauri/target/release/bundle/macos/Pokédex Scanner.app"
@@ -140,6 +150,7 @@ jobs:
 
       - name: Create, sign, notarize, and validate DMG
         env:
+          APPLE_SIGNING_IDENTITY: 'Developer ID Application: Gordon Beeming (89DBN36T4T)'
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
@@ -184,7 +195,7 @@ jobs:
       - name: Upload release DMG
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${GITHUB_REF_NAME}" "dist/release/pokedex-scanner-${RELEASE_VERSION}-aarch64.dmg" --clobber
+        run: gh release upload "${RELEASE_TAG}" "dist/release/pokedex-scanner-${RELEASE_VERSION}-aarch64.dmg" --clobber
 
       - name: Update Homebrew cask
         env:
