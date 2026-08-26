@@ -135,6 +135,27 @@ describe('desktop main DOM', () => {
     });
   });
 
+  it('exposes the persisted server URL for hosted and self-hosted deployments', async () => {
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'desktop_status') {
+        return Promise.resolve(status([], 'https://cards.example.com'));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await import('./main');
+    await waitFor(
+      () =>
+        document.querySelector<HTMLInputElement>('#cloud-url')?.value ===
+        'https://cards.example.com',
+    );
+
+    const input = document.querySelector<HTMLInputElement>('#cloud-url');
+    expect(input?.labels?.[0]?.textContent).toBe('Pokédex server URL');
+    expect(input?.getAttribute('aria-describedby')).toBe('cloud-url-help');
+    expect(document.querySelector('#cloud-url-help')?.textContent).toContain('own deployment');
+  });
+
   it('turns native camera denial into actionable macOS recovery guidance', async () => {
     mocks.invoke.mockImplementation((command: string) => {
       if (command === 'desktop_status') return Promise.resolve(status([]));

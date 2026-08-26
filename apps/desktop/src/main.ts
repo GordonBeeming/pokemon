@@ -98,8 +98,9 @@ app.innerHTML = `
           <form id="settings-form">
             <label for="library-path">Image library path</label>
             <input id="library-path" name="library-path" spellcheck="false" required />
-            <label for="cloud-url">Cloud origin</label>
-            <input id="cloud-url" name="cloud-url" type="url" spellcheck="false" required />
+            <label for="cloud-url">Pokédex server URL</label>
+            <input id="cloud-url" name="cloud-url" type="url" spellcheck="false" aria-describedby="cloud-url-help" required />
+            <small id="cloud-url-help">Use the hosted Pokédex or the HTTPS origin of your own deployment.</small>
             <label for="device-label">Device label</label>
             <input id="device-label" name="device-label" maxlength="80" required />
             <div class="form-actions">
