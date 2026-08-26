@@ -98,6 +98,25 @@ function origin(c: { req: { raw: Request }; env: CloudflareEnv }): string {
   return c.env.PUBLIC_ORIGIN || new URL(c.req.raw.url).origin;
 }
 
+export function passkeyIdentity(ownerLabel: string): {
+  rpName: string;
+  userName: string;
+  userDisplayName: string;
+} {
+  const userDisplayName = ownerLabel.trim();
+  const userName = userDisplayName
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '.')
+    .replace(/^\.+|\.+$/gu, '');
+  return {
+    rpName: `${userDisplayName || 'Owner'}'s Pokédex`,
+    userName: userName || 'owner',
+    userDisplayName: userDisplayName || 'Owner',
+  };
+}
+
 function responseChallenge(clientDataJSON: string): string | null {
   try {
     const decoded = new TextDecoder().decode(base64UrlDecode(clientDataJSON));
@@ -139,11 +158,13 @@ passkeyRoutes.post('/register/options', requireEnrolAuth, async (c) => {
   }
   const owner = await getOrCreateOwner(c.env.DB, c.env.OWNER_LABEL);
   const existing = await getPasskeys(c.env.DB, owner.id);
+  const identity = passkeyIdentity(owner.label);
   const options = await generateRegistrationOptions({
-    rpName: 'Pokédex',
+    rpName: identity.rpName,
     rpID: new URL(origin(c)).hostname,
     userID: new TextEncoder().encode(owner.id),
-    userName: `owner@${owner.label.toLowerCase()}`,
+    userName: identity.userName,
+    userDisplayName: identity.userDisplayName,
     attestationType: 'none',
     authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
     excludeCredentials: existing.map((passkey) => ({

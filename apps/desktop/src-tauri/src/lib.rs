@@ -879,14 +879,14 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let paths = AppPaths::new(app.path().app_data_dir()?, app.path().app_config_dir()?);
-            let mut config = config::load_or_create(&paths)?;
+            let config = config::load_or_create(&paths)?;
             #[cfg(debug_assertions)]
-            {
+            let config = {
                 let cloud_override = option_env!("POKEDEX_DEV_CLOUD_BASE_URL")
                     .map(str::to_string)
                     .or_else(|| std::env::var("POKEDEX_DEV_CLOUD_BASE_URL").ok());
-                config = config::with_dev_cloud_override(config, cloud_override.as_deref())?;
-            }
+                config::with_dev_cloud_override(config, cloud_override.as_deref())?
+            };
             let mcp_token = secrets::load_or_create_mcp_token(&paths.mcp_token_file)?;
             let services = Arc::new(DesktopServices::new(
                 paths,

@@ -1,0 +1,231 @@
+name: Release desktop scanner
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  macos:
+    name: Sign, notarize, and release macOS scanner
+    if: github.event.release.tag_name != 'assets'
+    runs-on: macos-15
+    timeout-minutes: 90
+    environment: prod
+    permissions:
+      contents: write
+    env:
+      APPLE_SIGNING_IDENTITY: 'Developer ID Application: Gordon Beeming (89DBN36T4T)'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.30.3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+
+      - name: Cache Rust build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: macos-scanner-release-${{ hashFiles('apps/desktop/src-tauri/Cargo.lock') }}
+          restore-keys: macos-scanner-release-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set release version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" =~ ^v([0-9]+)\.([0-9]+)(-beta\.[0-9]+)?$ ]]; then
+            export RELEASE_VERSION="${GITHUB_REF_NAME#v}"
+            export APP_VERSION="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${GITHUB_RUN_NUMBER}${BASH_REMATCH[3]}"
+            echo "RELEASE_VERSION=${RELEASE_VERSION}" >> "${GITHUB_ENV}"
+            echo "APP_VERSION=${APP_VERSION}" >> "${GITHUB_ENV}"
+          else
+            echo "Release tag must look like v0.1 or v0.1-beta.1; got ${GITHUB_REF_NAME}." >&2
+            exit 1
+          fi
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const version = process.env.APP_VERSION;
+          const packagePath = 'apps/desktop/package.json';
+          const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+          packageJson.version = version;
+          fs.writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+
+          const configPath = 'apps/desktop/src-tauri/tauri.conf.json';
+          const tauriConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          tauriConfig.version = version;
+          fs.writeFileSync(configPath, `${JSON.stringify(tauriConfig, null, 2)}\n`);
+
+          const cargoPath = 'apps/desktop/src-tauri/Cargo.toml';
+          const cargoToml = fs.readFileSync(cargoPath, 'utf8');
+          fs.writeFileSync(cargoPath, cargoToml.replace(/^version = "[^"]+"/m, `version = "${version}"`));
+          NODE
+
+      - name: Import Developer ID certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_PASSWORD }}
+        shell: bash
+        run: |
+          test -n "${CERTIFICATE_BASE64}" || { echo "DEVELOPER_ID_CERTIFICATE is not set." >&2; exit 1; }
+          test -n "${CERTIFICATE_PASSWORD}" || { echo "DEVELOPER_ID_PASSWORD is not set." >&2; exit 1; }
+          printf '%s' "${CERTIFICATE_BASE64}" | base64 -d > "${RUNNER_TEMP}/developer-id.p12"
+          KEYCHAIN_PATH="${RUNNER_TEMP}/pokedex-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security default-keychain -s "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security import "${RUNNER_TEMP}/developer-id.p12" \
+            -k "${KEYCHAIN_PATH}" -P "${CERTIFICATE_PASSWORD}" -T /usr/bin/codesign
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security find-identity -v -p codesigning "${KEYCHAIN_PATH}"
+          rm -f "${RUNNER_TEMP}/developer-id.p12"
+
+      - name: Build release app
+        run: pnpm --dir apps/desktop tauri build --bundles app
+
+      - name: Sign and verify app
+        shell: bash
+        run: |
+          APP_BUNDLE="apps/desktop/src-tauri/target/release/bundle/macos/Pokédex Scanner.app"
+          test -d "${APP_BUNDLE}" || { echo "Release app was not created at ${APP_BUNDLE}." >&2; exit 1; }
+          codesign --deep --force --options runtime --timestamp \
+            --sign "${APPLE_SIGNING_IDENTITY}" "${APP_BUNDLE}"
+          codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
+
+      - name: Notarize and staple app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        shell: bash
+        run: |
+          test -n "${APPLE_ID}" || { echo "APPLE_ID is not set." >&2; exit 1; }
+          test -n "${APPLE_TEAM_ID}" || { echo "APPLE_TEAM_ID is not set." >&2; exit 1; }
+          test -n "${APPLE_APP_PASSWORD}" || { echo "APPLE_APP_PASSWORD is not set." >&2; exit 1; }
+          APP_BUNDLE="apps/desktop/src-tauri/target/release/bundle/macos/Pokédex Scanner.app"
+          NOTARY_ZIP="${RUNNER_TEMP}/pokedex-scanner-notarize.zip"
+          ditto -c -k --keepParent "${APP_BUNDLE}" "${NOTARY_ZIP}"
+          xcrun notarytool submit "${NOTARY_ZIP}" \
+            --apple-id "${APPLE_ID}" --team-id "${APPLE_TEAM_ID}" \
+            --password "${APPLE_APP_PASSWORD}" --wait
+          xcrun stapler staple "${APP_BUNDLE}"
+          xcrun stapler validate "${APP_BUNDLE}"
+
+      - name: Create, sign, notarize, and validate DMG
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        shell: bash
+        run: |
+          APP_BUNDLE="apps/desktop/src-tauri/target/release/bundle/macos/Pokédex Scanner.app"
+          DMG="dist/release/pokedex-scanner-${RELEASE_VERSION}-aarch64.dmg"
+          mkdir -p dist/release
+          hdiutil create -volname "Pokédex Scanner" -srcfolder "${APP_BUNDLE}" \
+            -ov -format UDZO "${DMG}"
+          codesign --force --timestamp --sign "${APPLE_SIGNING_IDENTITY}" "${DMG}"
+          codesign --verify --strict --verbose=2 "${DMG}"
+          xcrun notarytool submit "${DMG}" \
+            --apple-id "${APPLE_ID}" --team-id "${APPLE_TEAM_ID}" \
+            --password "${APPLE_APP_PASSWORD}" --wait
+          xcrun stapler staple "${DMG}"
+          xcrun stapler validate "${DMG}"
+          hdiutil verify "${DMG}"
+          spctl --assess --type open --context context:primary-signature --verbose=2 "${DMG}"
+
+      - name: Validate quarantined consumer installation
+        shell: bash
+        run: |
+          DMG="dist/release/pokedex-scanner-${RELEASE_VERSION}-aarch64.dmg"
+          MOUNT_POINT="$(mktemp -d "${RUNNER_TEMP}/pokedex-dmg.XXXXXX")"
+          INSTALL_DIR="$(mktemp -d "${RUNNER_TEMP}/pokedex-install.XXXXXX")"
+          cleanup() {
+            hdiutil detach "${MOUNT_POINT}" -force >/dev/null 2>&1 || true
+            rm -rf -- "${MOUNT_POINT}" "${INSTALL_DIR}"
+          }
+          trap cleanup EXIT
+          hdiutil attach "${DMG}" -nobrowse -noautoopen -mountpoint "${MOUNT_POINT}"
+          ditto "${MOUNT_POINT}/Pokédex Scanner.app" "${INSTALL_DIR}/Pokédex Scanner.app"
+          xattr -r -w com.apple.quarantine "0081;$(printf '%x' "$(date +%s)");;$(uuidgen)" \
+            "${INSTALL_DIR}/Pokédex Scanner.app"
+          codesign --verify --deep --strict --verbose=2 "${INSTALL_DIR}/Pokédex Scanner.app"
+          xcrun stapler validate "${INSTALL_DIR}/Pokédex Scanner.app"
+          /usr/bin/gktool scan "${INSTALL_DIR}/Pokédex Scanner.app"
+          spctl --assess --type execute --verbose=2 "${INSTALL_DIR}/Pokédex Scanner.app"
+          syspolicy_check distribution "${INSTALL_DIR}/Pokédex Scanner.app"
+
+      - name: Upload release DMG
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" "dist/release/pokedex-scanner-${RELEASE_VERSION}-aarch64.dmg" --clobber
+
+      - name: Update Homebrew cask
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        shell: bash
+        run: |
+          test -n "${HOMEBREW_TAP_DEPLOY_KEY}" || { echo "HOMEBREW_TAP_DEPLOY_KEY is not set." >&2; exit 1; }
+          DMG="dist/release/pokedex-scanner-${RELEASE_VERSION}-aarch64.dmg"
+          SHA256="$(shasum -a 256 "${DMG}" | awk '{print $1}')"
+          KEY_PATH="${RUNNER_TEMP}/pokedex-homebrew-key"
+          printf '%s\n' "${HOMEBREW_TAP_DEPLOY_KEY}" > "${KEY_PATH}"
+          chmod 600 "${KEY_PATH}"
+          mkdir -p ~/.ssh
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ${KEY_PATH} -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
+          TAP_DIR="$(mktemp -d "${RUNNER_TEMP}/homebrew-tap.XXXXXX")"
+          git clone git@github.com:GordonBeeming/homebrew-tap.git "${TAP_DIR}"
+          mkdir -p "${TAP_DIR}/Casks"
+          cat > "${TAP_DIR}/Casks/pokedex-scanner.rb" <<CASK
+          cask "pokedex-scanner" do
+            version "${RELEASE_VERSION}"
+            sha256 "${SHA256}"
+
+            url "https://github.com/GordonBeeming/pokemon/releases/download/v#{version}/pokedex-scanner-#{version}-aarch64.dmg"
+            name "Pokédex Scanner"
+            desc "Local scanner and art synchronizer for a private Pokémon card catalogue"
+            homepage "https://github.com/GordonBeeming/pokemon"
+
+            depends_on macos: :ventura
+            app "Pokédex Scanner.app"
+
+            zap trash: [
+              "~/Library/Application Support/com.gordonbeeming.pokedex.scanner",
+              "~/Library/Caches/com.gordonbeeming.pokedex.scanner",
+              "~/Library/Preferences/com.gordonbeeming.pokedex.scanner.plist",
+            ]
+          end
+          CASK
+          git -C "${TAP_DIR}" config user.name "github-actions[bot]"
+          git -C "${TAP_DIR}" config user.email "github-actions[bot]@users.noreply.github.com"
+          git -C "${TAP_DIR}" add Casks/pokedex-scanner.rb
+          git -C "${TAP_DIR}" commit -m "Update pokedex-scanner to ${RELEASE_VERSION}"
+          git -C "${TAP_DIR}" push
+          rm -f "${KEY_PATH}"

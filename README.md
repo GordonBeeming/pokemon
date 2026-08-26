@@ -53,3 +53,27 @@ pnpm wrangler:dry-run
 ```
 
 Local Worker state is isolated by Wrangler despite sharing the production binding names in `apps/web/wrangler.jsonc`. Put development secrets and the local `PUBLIC_ORIGIN` override in `apps/web/.dev.vars`; production secrets belong in Wrangler. Do not commit either secret value.
+
+## Production catalogue
+
+The production Worker exposes catalogue, pricing, FX, and backup Workflows without paid-plan schedules. Start the initial English catalogue import with:
+
+```sh
+pnpm --dir apps/web exec wrangler workflows trigger pokedex-catalogue-sync \
+  --params '{"language":"en"}' --config wrangler.jsonc
+```
+
+Monitor it with:
+
+```sh
+pnpm --dir apps/web exec wrangler workflows instances list pokedex-catalogue-sync \
+  --config wrangler.jsonc
+```
+
+Cloudflare requires a paid Workers plan before schedules can be attached directly to these Workflows; on-demand imports remain available without those schedule declarations.
+
+## Scanner configuration and releases
+
+The scanner defaults to `https://pokedex.gordonbeeming.com`. Its **Pokédex server URL** setting is persisted in the private desktop config, so another deployment can use its own HTTPS origin; loopback HTTP remains available for local development.
+
+Publishing a `v{major}.{minor}` or `v{major}.{minor}-beta.{n}` GitHub release builds an Apple Developer ID-signed scanner, notarizes and staples the app and DMG, validates a quarantined consumer installation, uploads the DMG, and updates the `pokedex-scanner` Homebrew cask. Release credentials live in the protected `prod` GitHub environment.
