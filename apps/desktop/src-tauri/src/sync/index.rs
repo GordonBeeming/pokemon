@@ -185,6 +185,26 @@ impl SourceIndex {
             );
         }
 
+        let mut canonical_by_card = HashMap::<String, String>::new();
+        let mut statement = self.connection.prepare(
+            r#"SELECT card_id, provider, source_id, language FROM (
+                 SELECT card_id, provider, source_id, language,
+                   ROW_NUMBER() OVER (
+                     PARTITION BY card_id ORDER BY provider, language, source_id
+                   ) AS source_rank
+                 FROM source_queue
+                 WHERE card_id IN (SELECT value FROM json_each(?1))
+               ) WHERE source_rank = 1"#,
+        )?;
+        let mut rows = statement.query([&card_ids_json])?;
+        while let Some(row) = rows.next()? {
+            let card_id: String = row.get(0)?;
+            let provider: String = row.get(1)?;
+            let source_id: String = row.get(2)?;
+            let language: String = row.get(3)?;
+            canonical_by_card.insert(card_id, source_identity(&provider, &source_id, &language));
+        }
+
         let mut remote_by_card = HashMap::<String, Vec<ArtManifestEntry>>::new();
         let mut statement = self.connection.prepare(
             r#"SELECT card_id, variant, sha256, bytes
@@ -218,19 +238,28 @@ impl SourceIndex {
 
         Ok(entries
             .into_iter()
-            .map(|source_entry| SourceCardWork {
-                indexed: indexed_cards
-                    .get(&source_identity(
-                        &source_entry.provider,
-                        &source_entry.source_id,
-                        &source_entry.language,
-                    ))
-                    .cloned(),
-                remote_entries: remote_by_card
+            .map(|source_entry| {
+                let identity = source_identity(
+                    &source_entry.provider,
+                    &source_entry.source_id,
+                    &source_entry.language,
+                );
+                let canonical = canonical_by_card
                     .get(&source_entry.card_id)
-                    .cloned()
-                    .unwrap_or_default(),
-                source_entry,
+                    .is_none_or(|candidate| candidate == &identity);
+                SourceCardWork {
+                    indexed: indexed_cards.get(&identity).cloned(),
+                    remote_entries: if canonical {
+                        remote_by_card
+                            .get(&source_entry.card_id)
+                            .cloned()
+                            .unwrap_or_default()
+                    } else {
+                        Vec::new()
+                    },
+                    source_entry,
+                    canonical,
+                }
             })
             .collect())
     }

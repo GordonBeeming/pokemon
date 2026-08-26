@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import type { BinderVersionPages } from '@pokedex/shared';
+import type { BinderShortage, BinderVersionPages } from '@pokedex/shared';
 import { createArtUploadToken, createArtUploadTokens } from '../../lib/art';
 import { listCatalogueSources } from '../../lib/catalogue';
 import { asPositiveInt } from '../../lib/db';
@@ -31,6 +31,24 @@ export async function loadAllBinderPages(
     pages.push(...nextPages.pages);
   }
   return pages;
+}
+
+export async function loadAllBinderShortages(
+  load: (
+    offset: number,
+    limit: number,
+  ) => Promise<{ shortages: BinderShortage[]; nextOffset: number | null }>,
+): Promise<BinderShortage[]> {
+  const shortages: BinderShortage[] = [];
+  let offset: number | null = 0;
+  while (offset !== null) {
+    const page = await load(offset, 100);
+    shortages.push(...page.shortages);
+    if (page.nextOffset !== null && page.nextOffset <= offset)
+      throw new Error('binder shortage cursor did not advance');
+    offset = page.nextOffset;
+  }
+  return shortages;
 }
 
 const requireDesktopBearer = async (
@@ -284,15 +302,21 @@ desktopApiRoutes.get('/desktop/binders/versions/:id/suggest', async (c) => {
   try {
     const operations = ownerOperations(c.env, await desktopOwner(c, 'binders:write'));
     const versionId = c.req.param('id');
-    const [pages, shortagePage] = await Promise.all([
+    const [pages, shortages] = await Promise.all([
       loadAllBinderPages((offset, limit) => operations.binderVersion(versionId, offset, limit)),
-      operations.binderShortages(versionId),
+      loadAllBinderShortages((offset, limit) =>
+        operations.binderShortages(versionId, offset, limit),
+      ),
     ]);
     return c.json({
       ok: true,
-      shortages: shortagePage.shortages,
-      nextOffset: shortagePage.nextOffset,
-      emptySlots: pages.flatMap((page) => page.slots.filter((slot) => slot.cardId === null)),
+      shortages,
+      nextOffset: null,
+      emptySlots: pages.flatMap((page) =>
+        page.slots
+          .filter((slot) => slot.cardId === null)
+          .map((slot) => ({ ...slot, page: page.position })),
+      ),
     });
   } catch (error) {
     return apiFailure(c, error);

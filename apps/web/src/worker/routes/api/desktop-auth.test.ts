@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import { cardIdSchema } from '@pokedex/shared';
 import { apiRoutes, parseDesktopBearer } from './index';
-import { loadAllBinderPages } from './desktop';
+import { loadAllBinderPages, loadAllBinderShortages } from './desktop';
 
 const token = 'a'.repeat(64);
 
@@ -30,6 +31,26 @@ describe('desktop bearer parsing', () => {
 
     expect(offsets).toEqual([0, 4]);
     expect(pages.map((page) => page.position)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('loads every binder shortage page for MCP suggestions', async () => {
+    const offsets: number[] = [];
+    const shortages = await loadAllBinderShortages((offset) => {
+      offsets.push(offset);
+      const count = offset === 0 ? 100 : 1;
+      return Promise.resolve({
+        shortages: Array.from({ length: count }, (_value, index) => ({
+          cardId: cardIdSchema.parse(`card-${offset + index}`),
+          required: 2,
+          owned: 1,
+          missing: 1,
+        })),
+        nextOffset: offset === 0 ? 100 : null,
+      });
+    });
+
+    expect(offsets).toEqual([0, 100]);
+    expect(shortages).toHaveLength(101);
   });
 
   it('accepts an exact paired bearer token', () => {

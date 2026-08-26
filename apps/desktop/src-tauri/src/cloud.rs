@@ -310,6 +310,16 @@ pub struct BinderSlot {
     pub card_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BinderSuggestedSlot {
+    pub page_id: String,
+    pub page: u32,
+    pub row: u32,
+    pub column: u32,
+    pub card_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BinderLayout {
@@ -434,7 +444,7 @@ pub struct BinderGetResult {
 pub struct BinderSuggestionResult {
     pub shortages: Vec<BinderShortage>,
     pub next_offset: Option<u32>,
-    pub empty_slots: Vec<BinderSlot>,
+    pub empty_slots: Vec<BinderSuggestedSlot>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -505,7 +515,7 @@ struct BinderShortagesResponse {
 struct BinderSuggestionResponse {
     shortages: Vec<BinderShortage>,
     next_offset: Option<u32>,
-    empty_slots: Vec<BinderSlot>,
+    empty_slots: Vec<BinderSuggestedSlot>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1498,7 +1508,7 @@ mod tests {
                 "ok": true,
                 "shortages": [{ "cardId": "card-1", "required": 2, "owned": 1, "missing": 1 }],
                 "nextOffset": null,
-                "emptySlots": [{ "pageId": "page-1", "row": 0, "column": 0, "cardId": null }]
+                "emptySlots": [{ "pageId": "page-1", "page": 4, "row": 0, "column": 0, "cardId": null }]
             }))
         }
         let base = spawn(
@@ -1526,6 +1536,7 @@ mod tests {
         assert_eq!(suggestions.shortages[0].missing, 1);
         assert!(suggestions.next_offset.is_none());
         assert_eq!(suggestions.empty_slots.len(), 1);
+        assert_eq!(suggestions.empty_slots[0].page, 4);
     }
 
     #[tokio::test]

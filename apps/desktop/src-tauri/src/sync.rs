@@ -769,7 +769,40 @@ impl ArtSyncEngine {
             source_entry,
             indexed,
             remote_entries,
+            canonical,
         } = work;
+        if !canonical {
+            if indexed
+                .as_ref()
+                .is_some_and(|card| card.matches_source(&source_entry))
+            {
+                return Ok(SourceCardOutcome {
+                    report: SyncReport {
+                        skipped: 1,
+                        ..SyncReport::default()
+                    },
+                    ..SourceCardOutcome::default()
+                });
+            }
+            return Ok(SourceCardOutcome {
+                report: SyncReport {
+                    skipped: 1,
+                    ..SyncReport::default()
+                },
+                indexed_card: Some((
+                    source_entry.card_id,
+                    IndexedCard {
+                        provider: source_entry.provider,
+                        source_id: source_entry.source_id,
+                        language: source_entry.language,
+                        source_updated_at: source_entry.source_updated_at,
+                        source_checksum: source_entry.source_checksum,
+                        variants: BTreeMap::new(),
+                    },
+                )),
+                ..SourceCardOutcome::default()
+            });
+        }
         if indexed
             .as_ref()
             .is_some_and(|card| card.matches_source(&source_entry))
@@ -1118,6 +1151,7 @@ struct SourceCardWork {
     source_entry: CatalogueSourceEntry,
     indexed: Option<IndexedCard>,
     remote_entries: Vec<ArtManifestEntry>,
+    canonical: bool,
 }
 
 #[derive(Default)]

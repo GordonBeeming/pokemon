@@ -752,7 +752,8 @@ async fn duplicate_source_rows_for_one_card_are_serialized() {
 
     let report = engine.synchronize().await.expect("same-card source sync");
 
-    assert_eq!(report.missing_images, 2);
+    assert_eq!(report.missing_images, 1);
+    assert_eq!(report.skipped, 1);
     assert_eq!(source.maximum.load(Ordering::SeqCst), 1);
 }
 
@@ -1201,13 +1202,13 @@ fn source_index_loads_and_commits_a_whole_page() {
         ])
         .expect("page transaction");
 
-    let work = index
-        .load_page_work(vec![
-            source_entry("card-1", "source-a"),
-            source_entry("card-1", "source-alias"),
-            source_entry("card-2", "source-b"),
-        ])
-        .expect("page state");
+    let entries = vec![
+        source_entry("card-1", "source-a"),
+        source_entry("card-1", "source-alias"),
+        source_entry("card-2", "source-b"),
+    ];
+    index.stage_source_page(1, &entries).expect("source queue");
+    let work = index.load_page_work(entries).expect("page state");
 
     assert_eq!(work.len(), 3);
     assert!(work[0]
@@ -1218,8 +1219,10 @@ fn source_index_loads_and_commits_a_whole_page() {
         .indexed
         .as_ref()
         .is_some_and(|card| card.source_id == "source-alias"));
+    assert!(work[0].canonical);
+    assert!(!work[1].canonical);
     assert_eq!(work[0].remote_entries, [remote_entry]);
-    assert_eq!(work[1].remote_entries, work[0].remote_entries);
+    assert!(work[1].remote_entries.is_empty());
     assert!(work[2].indexed.is_none());
     assert!(work[2].remote_entries.is_empty());
 }
