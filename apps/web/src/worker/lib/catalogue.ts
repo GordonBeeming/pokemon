@@ -408,6 +408,13 @@ export async function stageCatalogueCards(
   runId: string,
   cards: ImportedCard[],
 ): Promise<void> {
+  const run = await db
+    .prepare('SELECT language, status FROM sync_runs WHERE id = ?1')
+    .bind(runId)
+    .first<{ language: LanguageCode; status: string }>();
+  if (!run || run.status !== 'running') throw new ApplicationError('staged_sync_not_running', 409);
+  if (cards.some((card) => card.language !== run.language))
+    throw new ApplicationError('language_mismatch', 400);
   const sourceIds = new Set<string>();
   for (const card of cards) {
     const key = `${card.language}\u0000${card.sourceId}`;
@@ -509,6 +516,17 @@ export async function stageCatalogueCards(
         .bind(runId, JSON.stringify(chunk))
         .run();
   }
+}
+
+export async function latestFullEnglishCatalogueSync(db: D1Database): Promise<number | null> {
+  const row = await db
+    .prepare(
+      `SELECT MAX(completed_at) AS completed_at FROM sync_runs
+       WHERE status = 'complete' AND provider = 'tcgdex' AND language = 'en'
+         AND complete_source = 1`,
+    )
+    .first<{ completed_at: number | null }>();
+  return row?.completed_at ?? null;
 }
 
 export async function applyStagedCatalogueRun(

@@ -7,6 +7,7 @@ import { sessionRoutes } from './routes/auth/session';
 import type { ChallengeKind, RateLimitResult } from './lib/guards';
 import { ApplicationError, describeError, logError, logInfo } from './lib/log';
 import { applySecurityHeaders } from './lib/security-headers';
+import { latestFullEnglishCatalogueSync } from './lib/catalogue';
 import type { AuthVars } from './lib/types';
 export { BackupWorkflow } from './workflows/backup';
 export { CatalogueSyncWorkflow } from './workflows/catalogue';
@@ -161,9 +162,7 @@ const ready = async (c: Context<{ Bindings: CloudflareEnv; Variables: AuthVars }
       )
         .bind('owner')
         .first<{ created_at: number | null }>(),
-      c.env.DB.prepare(
-        "SELECT MAX(completed_at) AS completed_at FROM sync_runs WHERE status = 'complete'",
-      ).first<{ completed_at: number | null }>(),
+      latestFullEnglishCatalogueSync(c.env.DB).then((completed_at) => ({ completed_at })),
       c.env.DB.prepare(
         "SELECT MAX(completed_at) AS completed_at FROM price_sync_runs WHERE status = 'complete'",
       ).first<{ completed_at: number | null }>(),

@@ -6,6 +6,7 @@ import { extractTcgdexPrices, selectConservativePrice } from './pricing';
 import {
   beginStagedCatalogueRun,
   catalogueSyncLanguage,
+  latestFullEnglishCatalogueSync,
   resolveStagedCardId,
   stageCatalogueCards,
   transformTcgdexCard,
@@ -59,6 +60,51 @@ describe('catalogue cloud invariants', () => {
         )
         .get(),
     ).toEqual({ sources: 2, cards: 1 });
+  });
+
+  it('rejects a staged page whose language differs from its run', async () => {
+    const database = new DatabaseSync(':memory:');
+    databases.push(database);
+    database.exec('PRAGMA foreign_keys = ON');
+    applyAllMigrations(database);
+    const db = sqliteD1(database);
+    await beginStagedCatalogueRun(db, 'en', { runId: 'run-language', complete: true });
+
+    await expect(
+      stageCatalogueCards(db, 'run-language', [
+        {
+          sourceId: 'source-fr',
+          checksum: 'a'.repeat(64),
+          sourceUpdatedAt: 1,
+          name: 'Carapuce',
+          language: 'fr',
+          category: 'pokemon',
+          setId: 'set-fr',
+          setName: 'Set FR',
+          number: '7',
+        },
+      ]),
+    ).rejects.toMatchObject({ code: 'language_mismatch' });
+    expect(database.prepare('SELECT COUNT(*) AS count FROM catalogue_stage_cards').get()).toEqual({
+      count: 0,
+    });
+  });
+
+  it('uses only complete English catalogue runs for readiness freshness', async () => {
+    const database = new DatabaseSync(':memory:');
+    databases.push(database);
+    database.exec('PRAGMA foreign_keys = ON');
+    applyAllMigrations(database);
+    database.exec(`
+      INSERT INTO sync_runs
+        (id, provider, language, started_at, completed_at, status, complete_source)
+      VALUES
+        ('full-en', 'tcgdex', 'en', 1, 100, 'complete', 1),
+        ('partial-en', 'tcgdex', 'en', 2, 300, 'complete', 0),
+        ('full-fr', 'tcgdex', 'fr', 3, 400, 'complete', 1);
+    `);
+
+    await expect(latestFullEnglishCatalogueSync(sqliteD1(database))).resolves.toBe(100);
   });
 
   it('builds bounded FTS prefixes without exposing FTS operators', () => {
