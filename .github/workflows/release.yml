@@ -229,9 +229,11 @@ jobs:
             app "Pokédex Scanner.app"
 
             postflight do
-              system_command "/usr/bin/gktool",
-                             args:         ["scan", "#{appdir}/Pokédex Scanner.app"],
-                             must_succeed: true
+              if File.executable?("/usr/bin/gktool")
+                system_command "/usr/bin/gktool",
+                               args:         ["scan", "#{appdir}/Pokédex Scanner.app"],
+                               must_succeed: true
+              end
             end
 
             zap trash: [

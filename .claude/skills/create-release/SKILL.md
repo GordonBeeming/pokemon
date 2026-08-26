@@ -46,16 +46,18 @@ authorization before creating the tag or GitHub release.
    ```sh
    git branch --show-current
    git status --short
-   git log -1 --show-signature --format=fuller
    ```
 
-   Stop on a dirty tree, a branch other than `main`, or an unverifiable commit.
+   Stop on a dirty tree or a branch other than `main`.
 
-2. Bring `main` forward without rewriting it:
+2. Bring `main` forward without rewriting it, then verify the resulting `HEAD`:
 
    ```sh
    git pull --ff-only
+   git log -1 --show-signature --format=fuller
    ```
+
+   Stop if the post-pull commit signature is not verifiable.
 
 3. Inspect existing releases and changes:
 
