@@ -6,10 +6,14 @@ import {
   type DesktopToken,
   type PairingCode,
   type SetFacet,
-  type SpeciesFacet,
+  type NationalPokedexCoverage,
+  type NationalPokedexPreview,
 } from './api';
 import { BinderView } from './binder-view';
 import { CatalogueView } from './catalogue-view';
+import { NationalPokedexView, type OwnershipFilter } from './national-pokedex-view';
+import { NATIONAL_POKEDEX, type NationalPokedexEntry } from './national-pokedex';
+import { LoadingOverlay } from './loading-overlay';
 import {
   DashboardView,
   DevicesView,
@@ -23,6 +27,38 @@ import {
 } from './ui';
 
 type AuthState = 'checking' | 'authenticated' | 'anonymous' | 'error';
+const DISCOVERY_CACHE_MS = 6 * 60 * 60 * 1000;
+
+function discoveryCacheKey(number: number): string {
+  return `pokedex:species-discovery:${number}`;
+}
+
+function recentlyDiscovered(number: number): boolean {
+  try {
+    const checkedAt = Number(localStorage.getItem(discoveryCacheKey(number)) ?? 0);
+    return checkedAt > Date.now() - DISCOVERY_CACHE_MS;
+  } catch {
+    return false;
+  }
+}
+
+function rememberDiscovery(number: number): void {
+  try {
+    localStorage.setItem(discoveryCacheKey(number), String(Date.now()));
+  } catch {
+    // Storage can be unavailable in private or locked-down browser contexts.
+  }
+}
+
+function hashRoute(): Route {
+  const key = location.hash.slice(1).split('?', 1)[0];
+  return routes.find(([route]) => route === key)?.[0] ?? 'dashboard';
+}
+
+function hashParams(): URLSearchParams {
+  const query = location.hash.slice(1).split('?', 2)[1];
+  return new URLSearchParams(query ?? '');
+}
 
 function LoadingPage({ message }: { message: string }): ReactElement {
   return (
@@ -55,13 +91,21 @@ function RouteLoadError({ route, retry }: { route: string; retry: () => void }):
 
 export function App(): ReactElement {
   const [auth, setAuth] = useState<AuthState>('checking');
-  const [route, setRoute] = useState<Route>(
-    () => routes.find(([key]) => `#${key}` === location.hash)?.[0] ?? 'dashboard',
-  );
+  const [route, setRoute] = useState<Route>(hashRoute);
   const [notice, setNotice] = useState<Notice>(null);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [sets, setSets] = useState<SetFacet[] | null>(null);
-  const [species, setSpecies] = useState<SpeciesFacet[] | null>(null);
+  const [species, setSpecies] = useState<NationalPokedexCoverage[] | null>(null);
+  const [speciesPreviews, setSpeciesPreviews] = useState<NationalPokedexPreview[]>([]);
+  const [discoveringSpecies, setDiscoveringSpecies] = useState<number | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<{ number: number; message: string } | null>(
+    null,
+  );
+  const [discoveryResult, setDiscoveryResult] = useState<{
+    number: number;
+    message: string;
+  } | null>(null);
+  const [catalogueRefresh, setCatalogueRefresh] = useState(0);
   const [tokens, setTokens] = useState<DesktopToken[] | null>(null);
   const [pairCode, setPairCode] = useState<PairingCode | null>(null);
   const [routeLoading, setRouteLoading] = useState(false);
@@ -69,7 +113,14 @@ export function App(): ReactElement {
   const [routeError, setRouteError] = useState<string | null>(null);
   const [routeReload, setRouteReload] = useState(0);
   const [pairPending, setPairPending] = useState(false);
-  const [catalogueParams, setCatalogueParams] = useState(new URLSearchParams());
+  const [catalogueParams, setCatalogueParams] = useState(() =>
+    hashRoute() === 'catalogue' ? hashParams() : new URLSearchParams(),
+  );
+  const [nationalQuery, setNationalQuery] = useState('');
+  const [nationalOwnership, setNationalOwnership] = useState<OwnershipFilter>('all');
+  const [nationalPage, setNationalPage] = useState(0);
+  const [nationalFocus, setNationalFocus] = useState<number | null>(null);
+  const [nationalScrollY, setNationalScrollY] = useState(0);
   const loadGeneration = useRef(0);
   const loadController = useRef<AbortController | null>(null);
 
@@ -90,8 +141,11 @@ export function App(): ReactElement {
   }, []);
 
   useEffect(() => {
-    const update = (): void =>
-      setRoute(routes.find(([key]) => `#${key}` === location.hash)?.[0] ?? 'dashboard');
+    const update = (): void => {
+      const next = hashRoute();
+      setRoute(next);
+      if (next === 'catalogue') setCatalogueParams(hashParams());
+    };
     addEventListener('hashchange', update);
     return () => removeEventListener('hashchange', update);
   }, []);
@@ -118,9 +172,29 @@ export function App(): ReactElement {
               return `${value.length} set checklists loaded.`;
             })
           : route === 'species'
-            ? api.species(controller.signal).then((value) => {
-                setSpecies(value);
-                return `${value.length} National Pokédex entries loaded.`;
+            ? api.nationalPokedex(controller.signal).then((coverage) => {
+                setSpecies(coverage);
+                void api
+                  .nationalPokedexPreviews(
+                    NATIONAL_POKEDEX.map((entry) => entry.name),
+                    controller.signal,
+                  )
+                  .then((previews) => {
+                    if (generation === loadGeneration.current) {
+                      setSpeciesPreviews(previews);
+                      setRouteStatus(
+                        `1,025 National Pokédex entries and ${previews.length} card previews loaded.`,
+                      );
+                    }
+                  })
+                  .catch((error: unknown) => {
+                    if (error instanceof DOMException && error.name === 'AbortError') return;
+                    if (generation === loadGeneration.current)
+                      setRouteStatus(
+                        'National Pokédex loaded. Some automatic card previews are unavailable.',
+                      );
+                  });
+                return '1,025 National Pokédex entries loaded. Card previews are loading.';
               })
             : route === 'devices'
               ? api.tokens(controller.signal).then((value) => {
@@ -151,10 +225,55 @@ export function App(): ReactElement {
     setRouteReload((current) => current + 1);
   };
 
-  function navigate(next: Route): void {
-    if (location.hash !== `#${next}`) location.hash = next;
+  function navigate(next: Route, params?: URLSearchParams): void {
+    const query = params && [...params].length ? `?${params}` : '';
+    const hash = `#${next}${query}`;
+    if (next === 'catalogue') setCatalogueParams(params ?? new URLSearchParams());
+    if (location.hash !== hash) location.hash = hash;
     setRoute(next);
     setNotice(null);
+  }
+
+  function discoverSpecies(entry: NationalPokedexEntry, force = false): void {
+    if (!force && recentlyDiscovered(entry.number)) {
+      setDiscoveryError(null);
+      setDiscoveryResult({
+        number: entry.number,
+        message: `${entry.name} printings are ready from the recent index.`,
+      });
+      return;
+    }
+    setDiscoveringSpecies(entry.number);
+    setDiscoveryError(null);
+    setDiscoveryResult(null);
+    void api
+      .discoverSpecies(entry.number, entry.name)
+      .then((imported) => {
+        rememberDiscovery(entry.number);
+        setCatalogueRefresh((current) => current + 1);
+        setDiscoveryResult({
+          number: entry.number,
+          message: imported
+            ? `${imported} ${entry.name} printings are indexed.`
+            : `No additional English ${entry.name} printings were found.`,
+        });
+      })
+      .catch((error: unknown) => {
+        const message = userMessage(error);
+        if (message) setDiscoveryError({ number: entry.number, message });
+      })
+      .finally(() => setDiscoveringSpecies(null));
+  }
+
+  function openSpecies(entry: NationalPokedexEntry): void {
+    const params = new URLSearchParams({
+      species: entry.name,
+      pokedexNumber: String(entry.number),
+    });
+    setNationalFocus(entry.number);
+    setNationalScrollY(window.scrollY);
+    navigate('catalogue', params);
+    discoverSpecies(entry);
   }
 
   if (auth === 'checking') return <LoadingPage message="Checking your session…" />;
@@ -176,7 +295,31 @@ export function App(): ReactElement {
 
   let content: ReactElement;
   if (route === 'catalogue')
-    content = <CatalogueView initialParams={catalogueParams} onNotice={setNotice} />;
+    content = (
+      <CatalogueView
+        initialParams={catalogueParams}
+        refreshKey={catalogueRefresh}
+        indexing={discoveringSpecies === Number(catalogueParams.get('pokedexNumber'))}
+        indexingError={
+          discoveryError?.number === Number(catalogueParams.get('pokedexNumber'))
+            ? discoveryError.message
+            : null
+        }
+        indexingResult={
+          discoveryResult?.number === Number(catalogueParams.get('pokedexNumber'))
+            ? discoveryResult.message
+            : null
+        }
+        retryIndexing={() => {
+          const number = Number(catalogueParams.get('pokedexNumber'));
+          const name = catalogueParams.get('species');
+          if (Number.isInteger(number) && name) discoverSpecies({ number, name }, true);
+        }}
+        onBackToNational={() => navigate('species')}
+        onBackToSets={() => navigate('sets')}
+        onNotice={setNotice}
+      />
+    );
   else if (route === 'binders') content = <BinderView onNotice={setNotice} />;
   else if (route === 'sets')
     content = sets ? (
@@ -186,12 +329,16 @@ export function App(): ReactElement {
           id: `${item.setId}:${item.language}`,
           label: item.setName,
           detail: `${item.owned} of ${item.total} owned · ${item.language}`,
+          owned: item.owned,
+          total: item.total,
         }))}
         onChoose={(selected) => {
           const [setId] = selected.split(':', 1);
           if (!setId) return;
-          setCatalogueParams(new URLSearchParams({ setId }));
-          navigate('catalogue');
+          const setName = sets.find(
+            (item) => `${item.setId}:${item.language}` === selected,
+          )?.setName;
+          navigate('catalogue', new URLSearchParams({ setId, ...(setName ? { setName } : {}) }));
         }}
       />
     ) : routeError ? (
@@ -201,17 +348,19 @@ export function App(): ReactElement {
     );
   else if (route === 'species')
     content = species ? (
-      <FacetsView
-        title="National Pokédex"
-        items={species.map((item) => ({
-          id: item.species,
-          label: item.species,
-          detail: `${item.owned} of ${item.total} owned · ${item.languages.join(', ')}`,
-        }))}
-        onChoose={(selected) => {
-          setCatalogueParams(new URLSearchParams({ species: selected }));
-          navigate('catalogue');
-        }}
+      <NationalPokedexView
+        coverage={species}
+        previews={speciesPreviews}
+        query={nationalQuery}
+        ownership={nationalOwnership}
+        page={nationalPage}
+        focusNumber={nationalFocus}
+        restoreScrollY={nationalScrollY}
+        pendingNumber={discoveringSpecies}
+        onQueryChange={setNationalQuery}
+        onOwnershipChange={setNationalOwnership}
+        onPageChange={setNationalPage}
+        onChoose={openSpecies}
       />
     ) : routeError ? (
       <RouteLoadError route={routeError} retry={retryRoute} />
@@ -266,7 +415,12 @@ export function App(): ReactElement {
     );
   else
     content = dashboard ? (
-      <DashboardView data={dashboard} />
+      <DashboardView
+        data={dashboard}
+        browse={() => navigate('catalogue')}
+        plan={() => navigate('species')}
+        chooseCard={(card) => navigate('catalogue', new URLSearchParams({ q: card.name }))}
+      />
     ) : routeError ? (
       <RouteLoadError route={routeError} retry={retryRoute} />
     ) : (
@@ -280,7 +434,12 @@ export function App(): ReactElement {
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {routeStatus}
       </p>
-      <div aria-busy={routeLoading}>{content}</div>
+      <div className="route-frame loading-stage" aria-busy={routeLoading}>
+        {routeLoading ? (
+          <LoadingOverlay message={routeStatus || 'Opening your collection…'} />
+        ) : null}
+        {content}
+      </div>
     </Shell>
   );
 }

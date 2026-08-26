@@ -54,6 +54,7 @@ export interface CatalogueFilters {
   offset: number;
   setId?: string;
   species?: string;
+  pokedexNumber?: number;
   cursor?: string | null;
 }
 
@@ -360,6 +361,20 @@ interface StagedCard extends ImportedCard {
   cardId: string;
 }
 
+function physicalPrintingKey(card: {
+  language: string;
+  setName: string;
+  number: string;
+  name: string;
+}): string {
+  return [
+    card.language,
+    card.setName.toLocaleLowerCase('en'),
+    card.number,
+    card.name.toLocaleLowerCase('en'),
+  ].join('\u0000');
+}
+
 function stageChunks(rows: StagedCard[]): StagedCard[][] {
   const chunks: StagedCard[][] = [];
   let current: StagedCard[] = [];
@@ -395,12 +410,51 @@ export async function stageCatalogueCards(
     sourceIds.add(key);
   }
   const noExistingIds = new Map<string, string>();
+  const physicalIds = new Map<string, string>();
   for (let offset = 0; offset < cards.length; offset += MAX_STAGE_ROWS) {
+    const input = cards.slice(offset, offset + MAX_STAGE_ROWS);
+    const existing = await db
+      .prepare(
+        `SELECT card.id, card.language, card.set_name, card.number, card.name
+         FROM catalogue_cards card
+         JOIN json_each(?1) candidate
+           ON card.language = json_extract(candidate.value, '$.language')
+          AND lower(card.set_name) = lower(json_extract(candidate.value, '$.setName'))
+          AND card.number = json_extract(candidate.value, '$.number')
+          AND lower(card.name) = lower(json_extract(candidate.value, '$.name'))
+         WHERE card.is_custom = 0`,
+      )
+      .bind(
+        JSON.stringify(
+          input.map((card) => ({
+            language: card.language,
+            setName: card.setName,
+            number: card.number,
+            name: card.name,
+          })),
+        ),
+      )
+      .all<{ id: string; language: string; set_name: string; number: string; name: string }>();
+    for (const card of existing.results) {
+      physicalIds.set(
+        physicalPrintingKey({
+          language: card.language,
+          setName: card.set_name,
+          number: card.number,
+          name: card.name,
+        }),
+        card.id,
+      );
+    }
     const prepared = await Promise.all(
-      cards.slice(offset, offset + MAX_STAGE_ROWS).map(async (card) => ({
-        ...card,
-        cardId: await resolveStagedCardId(noExistingIds, card.sourceId, card.language),
-      })),
+      input.map(async (card) => {
+        const key = physicalPrintingKey(card);
+        const cardId =
+          physicalIds.get(key) ??
+          (await resolveStagedCardId(noExistingIds, card.sourceId, card.language));
+        physicalIds.set(key, cardId);
+        return { ...card, cardId };
+      }),
     );
     for (const chunk of stageChunks(prepared))
       await db
@@ -448,10 +502,16 @@ export async function applyStagedCatalogueRun(
 ): Promise<{ imported: number; inactive: number }> {
   const run = await db
     .prepare(
-      'SELECT provider, language, complete_source FROM sync_runs WHERE id = ?1 AND status = ?2',
+      `SELECT provider, language, complete_source, started_at
+       FROM sync_runs WHERE id = ?1 AND status = ?2`,
     )
     .bind(runId, 'running')
-    .first<{ provider: string; language: LanguageCode; complete_source: number }>();
+    .first<{
+      provider: string;
+      language: LanguageCode;
+      complete_source: number;
+      started_at: number;
+    }>();
   if (!run || run.provider !== 'tcgdex') throw new ApplicationError('staged_sync_not_running', 409);
   try {
     const staged = await scalarCount(
@@ -460,6 +520,15 @@ export async function applyStagedCatalogueRun(
       runId,
     );
     if (staged === 0) throw new ApplicationError('staged_sync_empty', 400);
+    const superseded = await db
+      .prepare(
+        `SELECT 1 AS found FROM sync_runs
+         WHERE provider = ?1 AND language = ?2 AND complete_source = 1
+           AND started_at > ?3 AND status IN ('running', 'complete') LIMIT 1`,
+      )
+      .bind(run.provider, run.language, run.started_at)
+      .first<{ found: number }>();
+    if (run.complete_source === 1 && superseded) throw new ApplicationError('sync_superseded', 409);
     const existing = await scalarCount(
       db,
       'SELECT COUNT(*) AS count FROM card_sources WHERE provider = ?1 AND language = ?2 AND active = 1',
@@ -486,6 +555,16 @@ export async function applyStagedCatalogueRun(
     const claimToken = crypto.randomUUID();
     const now = nowSeconds();
     const results = await db.batch([
+      db
+        .prepare(
+          `SELECT CASE WHEN ?1 = 0 OR NOT EXISTS (
+            SELECT 1 FROM sync_runs newer JOIN sync_runs current ON current.id = ?2
+            WHERE newer.provider = current.provider AND newer.language = current.language
+              AND newer.complete_source = 1 AND newer.started_at > current.started_at
+              AND newer.status IN ('running', 'complete')
+          ) THEN 1 ELSE json_extract('sync_superseded', '$') END AS valid`,
+        )
+        .bind(run.complete_source, runId),
       db
         .prepare(
           'INSERT INTO sync_run_claims (run_id, claim_token, claimed_at) VALUES (?1, ?2, ?3) ON CONFLICT(run_id) DO NOTHING',
@@ -592,7 +671,9 @@ export async function applyStagedCatalogueRun(
   } catch (error) {
     const message = error instanceof ApplicationError ? error.code : String(error);
     const status =
-      message === 'sync_count_drop_rejected' || message === 'staged_sync_empty'
+      message === 'sync_count_drop_rejected' ||
+      message === 'staged_sync_empty' ||
+      message === 'sync_superseded'
         ? 'rejected'
         : 'failed';
     await db
@@ -606,8 +687,209 @@ export async function applyStagedCatalogueRun(
   }
 }
 
-function artUrl(cardId: string, variant: 'high' | 'low', key: string | null): string | null {
-  return key ? `/api/art/${encodeURIComponent(cardId)}/${variant}` : null;
+function artUrl(
+  cardId: string,
+  variant: 'high' | 'low',
+  key: string | null,
+  sourceProvider: string | null,
+): string | null {
+  return key || sourceProvider === 'tcgdex'
+    ? `/api/art/${encodeURIComponent(cardId)}/${variant}`
+    : null;
+}
+
+export interface NationalPokedexCoverage {
+  number: number;
+  totalCards: number;
+  ownedCards: number;
+  types: string[];
+  representative: {
+    cardId: string;
+    cardName: string;
+    setName: string;
+    number: string;
+    imageLowUrl: string | null;
+    imageHighUrl: string | null;
+    explicit: boolean;
+  };
+}
+
+export async function listNationalPokedexCoverage(
+  db: D1Database,
+  ownerId: string,
+): Promise<NationalPokedexCoverage[]> {
+  const result = await db
+    .prepare(
+      `WITH coverage AS (
+         SELECT c.pokedex_number,
+           COUNT(DISTINCT c.id) AS total_cards,
+           COUNT(DISTINCT CASE WHEN cc.quantity > 0 THEN c.id END) AS owned_cards,
+           GROUP_CONCAT(DISTINCT c.subtype) AS types
+         FROM catalogue_cards c
+         LEFT JOIN collection_cards cc ON cc.card_id = c.id AND cc.owner_id = ?1
+         WHERE c.is_active = 1 AND c.category = 'pokemon'
+           AND c.pokedex_number BETWEEN 1 AND 1025
+         GROUP BY c.pokedex_number
+       ), ranked AS (
+         SELECT c.pokedex_number, c.id, c.name, c.set_name, c.number,
+           low.object_key AS low_key, high.object_key AS high_key,
+           EXISTS (
+             SELECT 1 FROM card_sources source
+             WHERE source.card_id = c.id AND source.provider = 'tcgdex' AND source.active = 1
+           ) AS has_tcgdex_source,
+           ROW_NUMBER() OVER (
+             PARTITION BY c.pokedex_number
+             ORDER BY CASE WHEN c.release_date IS NULL THEN 1 ELSE 0 END, c.release_date,
+               c.set_name, CASE WHEN c.number_sort IS NULL THEN 1 ELSE 0 END,
+               c.number_sort, c.number, c.id
+           ) AS rank
+         FROM catalogue_cards c
+         LEFT JOIN art_manifest low ON low.card_id = c.id AND low.variant = 'low'
+         LEFT JOIN art_manifest high ON high.card_id = c.id AND high.variant = 'high'
+         WHERE c.is_active = 1 AND c.category = 'pokemon'
+           AND c.pokedex_number BETWEEN 1 AND 1025
+       ), preferred AS (
+         SELECT choice.pokedex_number, card.id, card.name, card.set_name, card.number,
+           low.object_key AS low_key, high.object_key AS high_key,
+           EXISTS (
+             SELECT 1 FROM card_sources source
+             WHERE source.card_id = card.id AND source.provider = 'tcgdex' AND source.active = 1
+           ) AS has_tcgdex_source
+         FROM species_representatives choice
+         JOIN catalogue_cards card ON card.id = choice.card_id
+           AND card.is_active = 1 AND card.category = 'pokemon'
+         LEFT JOIN art_manifest low ON low.card_id = card.id AND low.variant = 'low'
+         LEFT JOIN art_manifest high ON high.card_id = card.id AND high.variant = 'high'
+         WHERE choice.owner_id = ?1
+       )
+       SELECT coverage.pokedex_number, coverage.total_cards, coverage.owned_cards, coverage.types,
+         CASE WHEN preferred.id IS NOT NULL THEN preferred.id ELSE ranked.id END AS id,
+         CASE WHEN preferred.id IS NOT NULL THEN preferred.name ELSE ranked.name END AS name,
+         CASE WHEN preferred.id IS NOT NULL THEN preferred.set_name ELSE ranked.set_name END AS set_name,
+         CASE WHEN preferred.id IS NOT NULL THEN preferred.number ELSE ranked.number END AS number,
+         CASE WHEN preferred.id IS NOT NULL THEN preferred.low_key ELSE ranked.low_key END AS low_key,
+         CASE WHEN preferred.id IS NOT NULL THEN preferred.high_key ELSE ranked.high_key END AS high_key,
+         CASE WHEN preferred.id IS NOT NULL THEN preferred.has_tcgdex_source
+           ELSE ranked.has_tcgdex_source END AS has_tcgdex_source,
+         CASE WHEN preferred.id IS NOT NULL THEN 1 ELSE 0 END AS is_explicit
+       FROM coverage JOIN ranked
+         ON ranked.pokedex_number = coverage.pokedex_number AND ranked.rank = 1
+       LEFT JOIN preferred ON preferred.pokedex_number = coverage.pokedex_number
+       ORDER BY coverage.pokedex_number`,
+    )
+    .bind(ownerId)
+    .all<{
+      pokedex_number: number;
+      total_cards: number;
+      owned_cards: number;
+      types: string | null;
+      id: string;
+      name: string;
+      set_name: string;
+      number: string;
+      low_key: string | null;
+      high_key: string | null;
+      has_tcgdex_source: number;
+      is_explicit: number;
+    }>();
+  return result.results.map((row) => ({
+    number: row.pokedex_number,
+    totalCards: row.total_cards,
+    ownedCards: row.owned_cards,
+    types: Array.from(
+      new Set(
+        (row.types ?? '')
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
+      ),
+    ).sort((left, right) => left.localeCompare(right, 'en-AU')),
+    representative: {
+      cardId: row.id,
+      cardName: row.name,
+      setName: row.set_name,
+      number: row.number,
+      imageLowUrl:
+        row.low_key || row.has_tcgdex_source === 1
+          ? `/api/art/${encodeURIComponent(row.id)}/low`
+          : null,
+      imageHighUrl:
+        row.high_key || row.has_tcgdex_source === 1
+          ? `/api/art/${encodeURIComponent(row.id)}/high`
+          : null,
+      explicit: row.is_explicit === 1,
+    },
+  }));
+}
+
+export async function setNationalPokedexRepresentative(
+  db: D1Database,
+  ownerId: string,
+  pokedexNumber: number,
+  cardId: string,
+): Promise<void> {
+  const matching = await db
+    .prepare(
+      `SELECT id FROM catalogue_cards
+       WHERE id = ?1 AND pokedex_number = ?2 AND category = 'pokemon' AND is_active = 1`,
+    )
+    .bind(cardId, pokedexNumber)
+    .first<{ id: string }>();
+  if (!matching) throw new ApplicationError('national_representative_mismatch', 400);
+  await db
+    .prepare(
+      `INSERT INTO species_representatives (owner_id, pokedex_number, card_id, updated_at)
+       VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT(owner_id, pokedex_number) DO UPDATE SET
+         card_id = excluded.card_id, updated_at = excluded.updated_at`,
+    )
+    .bind(ownerId, pokedexNumber, cardId, nowSeconds())
+    .run();
+}
+
+export async function setNationalRepresentativesFromSources(
+  db: D1Database,
+  ownerId: string,
+  choices: Array<{ number: number; name: string; sourceId: string }>,
+): Promise<Array<{ number: number; cardId: string }>> {
+  if (new Set(choices.map((choice) => choice.number)).size !== choices.length)
+    throw new ApplicationError('national_representatives_invalid', 400);
+  const encoded = JSON.stringify(choices);
+  const resolved = await db
+    .prepare(
+      `SELECT CAST(json_extract(choice.value, '$.number') AS INTEGER) AS pokedex_number,
+        source.card_id
+       FROM json_each(?1) choice
+       JOIN card_sources source
+         ON source.provider = 'tcgdex' AND source.language = 'en' AND source.active = 1
+        AND source.source_id = json_extract(choice.value, '$.sourceId')
+       JOIN catalogue_cards card ON card.id = source.card_id AND card.is_active = 1
+        AND card.category = 'pokemon'
+        AND lower(card.name) = lower(json_extract(choice.value, '$.name'))
+       ORDER BY pokedex_number`,
+    )
+    .bind(encoded)
+    .all<{ pokedex_number: number; card_id: string }>();
+  if (resolved.results.length !== choices.length)
+    throw new ApplicationError('national_representatives_incomplete', 409);
+  await db
+    .prepare(
+      `INSERT INTO species_representatives (owner_id, pokedex_number, card_id, updated_at)
+       SELECT ?1, CAST(json_extract(choice.value, '$.number') AS INTEGER), source.card_id, ?3
+       FROM json_each(?2) choice
+       JOIN card_sources source
+         ON source.provider = 'tcgdex' AND source.language = 'en' AND source.active = 1
+        AND source.source_id = json_extract(choice.value, '$.sourceId')
+       JOIN catalogue_cards card ON card.id = source.card_id AND card.is_active = 1
+        AND card.category = 'pokemon'
+        AND lower(card.name) = lower(json_extract(choice.value, '$.name'))
+       WHERE true
+       ON CONFLICT(owner_id, pokedex_number) DO UPDATE SET
+         card_id = excluded.card_id, updated_at = excluded.updated_at`,
+    )
+    .bind(ownerId, encoded, nowSeconds())
+    .run();
+  return resolved.results.map((row) => ({ number: row.pokedex_number, cardId: row.card_id }));
 }
 
 function brief(row: CardRow): CatalogueBrief {
@@ -619,7 +901,7 @@ function brief(row: CardRow): CatalogueBrief {
     setId: row.set_id,
     setName: row.set_name,
     number: row.number,
-    imageLowUrl: artUrl(row.id, 'low', row.low_key),
+    imageLowUrl: artUrl(row.id, 'low', row.low_key, row.source_provider),
   };
 }
 
@@ -684,7 +966,7 @@ function detail(row: CardRow): CatalogueDetailView {
     species: row.species,
     rarity: row.rarity,
     artist: row.artist,
-    imageHighUrl: artUrl(row.id, 'high', row.high_key),
+    imageHighUrl: artUrl(row.id, 'high', row.high_key, row.source_provider),
     source,
     notes: row.notes,
     collection: collection(row),
@@ -693,7 +975,12 @@ function detail(row: CardRow): CatalogueDetailView {
 }
 
 function view(row: CardRow): CatalogueCardView {
-  return { ...brief(row), collection: collection(row), price: cardPrice(row) };
+  return {
+    ...brief(row),
+    imageHighUrl: artUrl(row.id, 'high', row.high_key, row.source_provider),
+    collection: collection(row),
+    price: cardPrice(row),
+  };
 }
 
 const cardSelect = `
@@ -708,11 +995,36 @@ const cardSelect = `
     price.source_captured_at AS price_source_captured_at, price.fx_date AS price_fx_date,
     price.amount_aud_micros AS price_aud_micros
   FROM catalogue_cards c
-  LEFT JOIN card_sources s ON s.card_id = c.id AND s.active = 1
+  LEFT JOIN card_sources s ON s.rowid = (
+    SELECT source.rowid FROM card_sources source
+    WHERE source.card_id = c.id AND source.active = 1
+    ORDER BY source.imported_at DESC, source.provider, source.source_id
+    LIMIT 1
+  )
   LEFT JOIN collection_cards cc ON cc.card_id = c.id AND cc.owner_id = ?1
   LEFT JOIN art_manifest low ON low.card_id = c.id AND low.variant = 'low'
   LEFT JOIN art_manifest high ON high.card_id = c.id AND high.variant = 'high'
   LEFT JOIN card_current_prices price ON price.card_id = c.id`;
+
+export async function resolveCatalogueCards(
+  db: D1Database,
+  ownerId: string,
+  cardIds: string[],
+): Promise<CatalogueCardView[]> {
+  if (cardIds.length === 0) return [];
+  if (cardIds.length > 200 || new Set(cardIds).size !== cardIds.length)
+    throw new ApplicationError('invalid_card_ids', 400);
+  const result = await db
+    .prepare(
+      `${cardSelect}
+       WHERE c.id IN (SELECT value FROM json_each(?2))
+       ORDER BY c.set_name, CASE WHEN c.number_sort IS NULL THEN 1 ELSE 0 END,
+         c.number_sort, c.number, c.name, c.id`,
+    )
+    .bind(ownerId, JSON.stringify(cardIds))
+    .all<CardRow>();
+  return result.results.map(view);
+}
 
 export async function searchCards(
   db: D1Database,
@@ -742,6 +1054,10 @@ export async function searchCards(
     where.push(`c.species = ?${values.length + 1}`);
     values.push(filters.species);
   }
+  if (filters.pokedexNumber !== undefined) {
+    where.push(`c.pokedex_number = ?${values.length + 1}`);
+    values.push(filters.pokedexNumber);
+  }
   if (filters.owned !== undefined) {
     where.push(filters.owned ? 'COALESCE(cc.quantity, 0) > 0' : 'COALESCE(cc.quantity, 0) = 0');
   }
@@ -754,6 +1070,7 @@ export async function searchCards(
     category: filters.category ?? null,
     setId: filters.setId ?? null,
     species: filters.species ?? null,
+    pokedexNumber: filters.pokedexNumber ?? null,
     owned: filters.owned ?? null,
   });
   if (cursor && cursor.filterKey !== filterKey)

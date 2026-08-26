@@ -1,6 +1,7 @@
 import {
   DESKTOP_SCOPES,
   apiErrorSchema,
+  artUrlSchema,
   binderLayoutSchema,
   binderMutationResultSchema,
   binderShortageSchema,
@@ -45,6 +46,7 @@ const dashboardSchema = successSchema.extend({
   pricing: z.object({ priced: z.number(), missing: z.number(), estimateAud: z.number() }).strict(),
   binderCount: z.number(),
   activeShortages: z.array(binderShortageSchema),
+  cards: z.array(catalogueCardViewSchema),
 });
 const searchSchema = successSchema.extend({
   total: z.number().int().nonnegative(),
@@ -56,6 +58,16 @@ const collectionSchema = successSchema.merge(collectionMutationResultSchema);
 const bindersSchema = successSchema.extend({ binders: z.array(binderViewSchema) });
 const binderPagesEnvelopeSchema = successSchema.extend({ binder: binderVersionPagesSchema });
 const binderMutationEnvelopeSchema = successSchema.extend({ binder: binderMutationResultSchema });
+const binderCardsEnvelopeSchema = binderMutationEnvelopeSchema.extend({
+  added: z.number().int().positive(),
+});
+const workflowStartedSchema = successSchema.extend({ workflowId: z.string().min(1) });
+const catalogueSyncStatusSchema = successSchema.extend({ status: z.string().min(1) });
+const nationalRepresentativesSchema = successSchema.extend({
+  representatives: z.array(
+    z.object({ number: z.number().int().min(1).max(1025), cardId: z.string().min(1) }).strict(),
+  ),
+});
 const shortagePageSchema = successSchema.extend({
   shortages: z.array(binderShortageSchema),
   nextOffset: z.number().int().nonnegative().nullable(),
@@ -81,6 +93,41 @@ const speciesSchema = successSchema.extend({
         total: z.number(),
         owned: z.number(),
         languages: z.array(z.string()),
+      })
+      .strict(),
+  ),
+});
+const nationalPokedexSchema = successSchema.extend({
+  entries: z.array(
+    z
+      .object({
+        number: z.number().int().min(1).max(1025),
+        totalCards: z.number().int().nonnegative(),
+        ownedCards: z.number().int().nonnegative(),
+        types: z.array(z.string()),
+        representative: z
+          .object({
+            cardId: z.string(),
+            cardName: z.string(),
+            setName: z.string(),
+            number: z.string(),
+            imageLowUrl: artUrlSchema,
+            imageHighUrl: artUrlSchema,
+            explicit: z.boolean(),
+          })
+          .strict(),
+      })
+      .strict(),
+  ),
+});
+const nationalPokedexPreviewsSchema = successSchema.extend({
+  previews: z.array(
+    z
+      .object({
+        name: z.string(),
+        sourceId: z.string().min(1),
+        imageLowUrl: z.string().regex(/^\/api\/art\/preview\/low\?source=/u),
+        imageHighUrl: z.string().regex(/^\/api\/art\/preview\/high\?source=/u),
       })
       .strict(),
   ),
@@ -131,6 +178,10 @@ export type DesktopToken = z.infer<typeof tokenSchema>;
 export type PairingCode = z.infer<typeof pairCodeSchema>;
 export type SetFacet = z.infer<typeof setsSchema>['sets'][number];
 export type SpeciesFacet = z.infer<typeof speciesSchema>['species'][number];
+export type NationalPokedexCoverage = z.infer<typeof nationalPokedexSchema>['entries'][number];
+export type NationalPokedexPreview = z.infer<
+  typeof nationalPokedexPreviewsSchema
+>['previews'][number];
 
 export class ApiError extends Error {
   constructor(
@@ -240,12 +291,45 @@ export const api = {
     request('/api/dashboard', dashboardSchema, { signal }),
   search: (params: URLSearchParams, signal?: AbortSignal): Promise<z.infer<typeof searchSchema>> =>
     request(`/api/catalogue/search?${params}`, searchSchema, { signal }),
+  resolveCards: (cardIds: string[], signal?: AbortSignal): Promise<CatalogueCardView[]> =>
+    request(
+      '/api/catalogue/cards/resolve',
+      successSchema.extend({ cards: z.array(catalogueCardViewSchema) }),
+      {
+        method: 'POST',
+        body: json({ cardIds }),
+        signal,
+      },
+    ).then((body) => body.cards),
   sets: (signal?: AbortSignal): Promise<SetFacet[]> =>
     request('/api/catalogue/facets/sets', setsSchema, { signal }).then((body) => body.sets),
   species: (signal?: AbortSignal): Promise<SpeciesFacet[]> =>
     request('/api/catalogue/facets/species', speciesSchema, { signal }).then(
       (body) => body.species,
     ),
+  nationalPokedex: (signal?: AbortSignal): Promise<NationalPokedexCoverage[]> =>
+    request('/api/catalogue/national', nationalPokedexSchema, { signal }).then(
+      (body) => body.entries,
+    ),
+  nationalPokedexPreviews: (
+    names: string[],
+    signal?: AbortSignal,
+  ): Promise<NationalPokedexPreview[]> =>
+    request('/api/catalogue/national/previews', nationalPokedexPreviewsSchema, {
+      method: 'POST',
+      body: json({ names }),
+      signal,
+    }).then((body) => body.previews),
+  discoverSpecies: (number: number, name: string): Promise<number> =>
+    request('/api/catalogue/national/discover', successSchema.extend({ imported: z.number() }), {
+      method: 'POST',
+      body: json({ number, name }),
+    }).then((body) => body.imported),
+  setNationalRepresentative: (number: number, cardId: string): Promise<void> =>
+    request(`/api/catalogue/national/${number}/representative`, successSchema, {
+      method: 'PUT',
+      body: json({ cardId }),
+    }).then(() => undefined),
   card: (id: string, signal?: AbortSignal): Promise<CatalogueDetailView> =>
     request(`/api/catalogue/${encoded(id)}`, detailSchema, { signal }).then((body) => body.card),
   createCustomCard: (input: {
@@ -305,6 +389,39 @@ export const api = {
       method: 'POST',
       body: json({ name, layout: binderLayoutSchema.parse(layout) }),
     }).then((body) => body.binder),
+  addCardsToBinder: (
+    id: string,
+    cardIds: string[],
+    expectedRevision: number,
+  ): Promise<{ binder: BinderMutationResult; added: number }> =>
+    request(`/api/binders/versions/${encoded(id)}/cards`, binderCardsEnvelopeSchema, {
+      method: 'POST',
+      body: json({ cardIds, expectedRevision }),
+    }).then((body) => ({ binder: body.binder, added: body.added })),
+  setBinderCards: (
+    id: string,
+    assignments: Array<BinderSlotLocation & { cardId: string }>,
+    expectedRevision: number,
+  ): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/cards`, binderMutationEnvelopeSchema, {
+      method: 'PUT',
+      body: json({ assignments, expectedRevision }),
+    }).then((body) => body.binder),
+  startCatalogueSync: (signal?: AbortSignal): Promise<string> =>
+    request('/api/catalogue/full-sync', workflowStartedSchema, { method: 'POST', signal }).then(
+      (body) => body.workflowId,
+    ),
+  catalogueSyncStatus: (id: string, signal?: AbortSignal): Promise<string> =>
+    request(`/api/catalogue/full-sync/${encoded(id)}`, catalogueSyncStatusSchema, { signal }).then(
+      (body) => body.status,
+    ),
+  resolveNationalRepresentatives: (
+    choices: Array<{ number: number; name: string; sourceId: string }>,
+  ): Promise<Array<{ number: number; cardId: string }>> =>
+    request('/api/catalogue/national/representatives', nationalRepresentativesSchema, {
+      method: 'POST',
+      body: json({ choices }),
+    }).then((body) => body.representatives),
   cloneBinder: (id: string, expectedRevision: number): Promise<BinderMutationResult> =>
     request(`/api/binders/versions/${encoded(id)}/clone`, binderMutationEnvelopeSchema, {
       method: 'POST',

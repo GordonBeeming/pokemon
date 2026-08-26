@@ -2,15 +2,21 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { languageSchema } from '@pokedex/shared';
 import { activeBinderShortages } from '../../lib/binders';
+import { getTcgdexPreviewArtResponse } from '../../lib/art';
 import {
   applyStagedCatalogueRun,
   beginStagedCatalogueRun,
   createCustomCard,
+  listNationalPokedexCoverage,
+  resolveCatalogueCards,
   listSetFacets,
   listSpeciesFacets,
+  setNationalPokedexRepresentative,
+  setNationalRepresentativesFromSources,
   stageCatalogueCards,
   importCatalogueLanguage,
 } from '../../lib/catalogue';
+import { cachedTcgdexSpeciesPreviews, discoverTcgdexSpecies } from '../../lib/tcgdex-discovery';
 import { collectionSummary } from '../../lib/collection';
 import { asPositiveInt } from '../../lib/db';
 import { requireSession } from '../../lib/guards';
@@ -43,6 +49,57 @@ import {
 
 export const browserApiRoutes = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
 
+const nationalDiscoveryBody = z
+  .object({ number: z.number().int().min(1).max(1025), name: z.string().trim().min(1).max(120) })
+  .strict();
+const nationalRepresentativeBody = z.object({ cardId: z.string().trim().min(1).max(128) }).strict();
+const nationalRepresentativeSourcesBody = z
+  .object({
+    choices: z
+      .array(
+        z
+          .object({
+            number: z.number().int().min(1).max(1025),
+            name: z.string().trim().min(1).max(120),
+            sourceId: z.string().trim().min(1).max(256),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(1025),
+  })
+  .strict();
+const nationalPreviewsBody = z
+  .object({ names: z.array(z.string().trim().min(1).max(120)).min(1).max(1025) })
+  .strict();
+const resolveCardsBody = z
+  .object({ cardIds: z.array(z.string().trim().min(1).max(128)).max(200) })
+  .strict();
+const binderCardsBody = z
+  .object({
+    cardIds: z.array(z.string().trim().min(1).max(128)).min(1).max(2000),
+    expectedRevision: z.number().int().positive(),
+  })
+  .strict();
+const binderCardAssignmentsBody = z
+  .object({
+    assignments: z
+      .array(
+        z
+          .object({
+            page: z.number().int().nonnegative(),
+            row: z.number().int().nonnegative(),
+            column: z.number().int().nonnegative(),
+            cardId: z.string().trim().min(1).max(128),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(2000),
+    expectedRevision: z.number().int().positive(),
+  })
+  .strict();
+
 browserApiRoutes.use('/dashboard*', requireSession);
 browserApiRoutes.use('/catalogue*', requireSession);
 browserApiRoutes.use('/collection*', requireSession);
@@ -55,13 +112,26 @@ browserApiRoutes.use('/art*', requireSession);
 browserApiRoutes.get('/dashboard', async (c) => {
   try {
     const ownerId = sessionOwner(c);
-    const [collection, pricing, binders, activeShortages] = await Promise.all([
+    const [collection, pricing, binders, activeShortages, ownedCards] = await Promise.all([
       collectionSummary(c.env.DB, ownerId),
       priceCoverage(c.env.DB, ownerId),
       ownerOperations(c.env, ownerId).listBinders(),
       activeBinderShortages(c.env.DB, ownerId),
+      ownerOperations(c.env, ownerId).searchCatalogue({
+        owned: true,
+        limit: 8,
+        offset: 0,
+        cursor: null,
+      }),
     ]);
-    return c.json({ ok: true, collection, pricing, binderCount: binders.length, activeShortages });
+    return c.json({
+      ok: true,
+      collection,
+      pricing,
+      binderCount: binders.length,
+      activeShortages,
+      cards: ownedCards.cards,
+    });
   } catch (error) {
     return apiFailure(c, error);
   }
@@ -73,6 +143,169 @@ browserApiRoutes.get('/catalogue/search', async (c) => {
       catalogueFilters(c.req.query(), true),
     );
     return c.json({ ok: true, ...result });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.post('/catalogue/cards/resolve', async (c) => {
+  try {
+    const parsed = resolveCardsBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      cards: await resolveCatalogueCards(c.env.DB, sessionOwner(c), parsed.data.cardIds),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.get('/catalogue/national', async (c) => {
+  try {
+    return c.json({
+      ok: true,
+      entries: await listNationalPokedexCoverage(c.env.DB, sessionOwner(c)),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.post('/catalogue/national/previews', async (c) => {
+  try {
+    const rate = await c.env.AUTH_COORDINATOR.getByName(`catalogue:${sessionOwner(c)}`).rateLimit(
+      'national-previews',
+      30,
+      60,
+      Math.floor(Date.now() / 1000),
+    );
+    if (!rate.allowed) {
+      c.header('retry-after', String(rate.retryAfter));
+      return c.json({ ok: false, error: 'rate_limited' }, 429);
+    }
+    const parsed = nationalPreviewsBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success || new Set(parsed.data.names).size !== parsed.data.names.length)
+      return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const previews = await cachedTcgdexSpeciesPreviews(c.env.ART, parsed.data.names);
+    return c.json({
+      ok: true,
+      previews: previews.map((preview) => ({
+        name: preview.name,
+        sourceId: preview.sourceId,
+        imageLowUrl: `/api/art/preview/low?${new URLSearchParams({ source: preview.imageBase })}`,
+        imageHighUrl: `/api/art/preview/high?${new URLSearchParams({ source: preview.imageBase })}`,
+      })),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.post('/catalogue/national/discover', async (c) => {
+  try {
+    const rate = await c.env.AUTH_COORDINATOR.getByName(`catalogue:${sessionOwner(c)}`).rateLimit(
+      'species-discovery',
+      60,
+      60 * 60,
+      Math.floor(Date.now() / 1000),
+    );
+    if (!rate.allowed) {
+      c.header('retry-after', String(rate.retryAfter));
+      return c.json({ ok: false, error: 'rate_limited' }, 429);
+    }
+    const parsed = nationalDiscoveryBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const result = await discoverTcgdexSpecies(c.env.DB, parsed.data.name, parsed.data.number);
+    await logAudit(c.env.DB, {
+      actor: sessionOwner(c),
+      action: 'catalogue.species_discover',
+      target: String(parsed.data.number),
+      meta: { name: parsed.data.name, imported: result.imported },
+    });
+    return c.json({ ok: true, ...result });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.post('/catalogue/full-sync', async (c) => {
+  try {
+    const running = await c.env.DB.prepare(
+      `SELECT id FROM sync_runs
+       WHERE provider = 'tcgdex' AND language = 'en' AND complete_source = 1
+         AND status = 'running'
+       ORDER BY started_at DESC LIMIT 1`,
+    ).first<{ id: string }>();
+    if (running) return c.json({ ok: true, workflowId: running.id.replace(/^sync_/u, '') }, 202);
+    const ownerId = sessionOwner(c);
+    const rate = await c.env.AUTH_COORDINATOR.getByName(`catalogue:${ownerId}`).rateLimit(
+      'full-sync',
+      2,
+      24 * 60 * 60,
+      Math.floor(Date.now() / 1000),
+    );
+    if (!rate.allowed) {
+      c.header('retry-after', String(rate.retryAfter));
+      return c.json({ ok: false, error: 'rate_limited' }, 429);
+    }
+    const workflow = await c.env.CATALOGUE_SYNC.create({
+      id: `catalogue-${crypto.randomUUID()}`,
+      params: { language: 'en', actorId: ownerId, requestId: c.get('requestId') },
+    });
+    await logAudit(c.env.DB, {
+      actor: ownerId,
+      action: 'catalogue.full_sync_started',
+      target: workflow.id,
+      meta: { language: 'en', requestId: c.get('requestId') },
+    });
+    return c.json({ ok: true, workflowId: workflow.id }, 202);
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.get('/catalogue/full-sync/:id', async (c) => {
+  try {
+    const workflow = await c.env.CATALOGUE_SYNC.get(c.req.param('id'));
+    const status = await workflow.status();
+    if (status.status === 'errored' || status.status === 'terminated')
+      return c.json({ ok: false, error: 'catalogue_sync_failed' }, 503);
+    return c.json({ ok: true, status: status.status }, status.status === 'complete' ? 200 : 202);
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.post('/catalogue/national/representatives', async (c) => {
+  try {
+    const parsed = nationalRepresentativeSourcesBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const representatives = await setNationalRepresentativesFromSources(
+      c.env.DB,
+      sessionOwner(c),
+      parsed.data.choices,
+    );
+    await logAudit(c.env.DB, {
+      actor: sessionOwner(c),
+      action: 'catalogue.representatives_set',
+      target: 'national-pokedex',
+      meta: { count: representatives.length },
+    });
+    return c.json({
+      ok: true,
+      representatives,
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.put('/catalogue/national/:number/representative', async (c) => {
+  try {
+    const number = Number.parseInt(c.req.param('number'), 10);
+    const parsed = nationalRepresentativeBody.safeParse(await parsedJson(c.req.raw));
+    if (!Number.isInteger(number) || number < 1 || number > 1025 || !parsed.success)
+      return c.json({ ok: false, error: 'invalid_body' }, 400);
+    await setNationalPokedexRepresentative(c.env.DB, sessionOwner(c), number, parsed.data.cardId);
+    return c.json({ ok: true });
   } catch (error) {
     return apiFailure(c, error);
   }
@@ -271,6 +504,36 @@ browserApiRoutes.post('/binders', async (c) => {
       },
       201,
     );
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.post('/binders/versions/:id/cards', async (c) => {
+  try {
+    const parsed = binderCardsBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const result = await ownerOperations(c.env, sessionOwner(c)).addCardsToBinderVersion(
+      c.req.param('id'),
+      parsed.data.cardIds,
+      parsed.data.expectedRevision,
+    );
+    return c.json({ ok: true, ...result });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.put('/binders/versions/:id/cards', async (c) => {
+  try {
+    const parsed = binderCardAssignmentsBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await ownerOperations(c.env, sessionOwner(c)).setBinderSlots(
+        c.req.param('id'),
+        parsed.data.assignments,
+        parsed.data.expectedRevision,
+      ),
+    });
   } catch (error) {
     return apiFailure(c, error);
   }
@@ -536,6 +799,19 @@ browserApiRoutes.get('/art/manifest', async (c) => {
         asPositiveInt(c.req.query('limit'), 100, 500),
       )),
     });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.get('/art/preview/:variant', async (c) => {
+  try {
+    const variant = c.req.param('variant');
+    if (variant !== 'high' && variant !== 'low')
+      return c.json({ ok: false, error: 'invalid_variant' }, 400);
+    const source = c.req.query('source');
+    if (!source) return c.json({ ok: false, error: 'invalid_art_source' }, 400);
+    const response = await getTcgdexPreviewArtResponse(c.env.ART, source, variant);
+    return response ?? c.json({ ok: false, error: 'art_not_found' }, 404);
   } catch (error) {
     return apiFailure(c, error);
   }

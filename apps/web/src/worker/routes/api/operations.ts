@@ -9,6 +9,7 @@ import { cardCategorySchema, languageSchema } from '@pokedex/shared';
 import { getArtResponse, listArtManifest } from '../../lib/art';
 import {
   createBinder,
+  addCardsToBinderVersion,
   cloneBinderVersion,
   activateBinderVersion,
   addBinderPage,
@@ -19,6 +20,7 @@ import {
   listBinders,
   reorderBinderPages,
   setBinderSlot,
+  setBinderSlots,
   swapBinderSlots,
   type ArrangementMode,
 } from '../../lib/binders';
@@ -48,12 +50,19 @@ export function catalogueFilters(
           ? false
           : null;
   if (owned === null) throw new ApplicationError('invalid_filter', 400);
+  const pokedexNumber = query.pokedexNumber ? Number.parseInt(query.pokedexNumber, 10) : undefined;
+  if (
+    pokedexNumber !== undefined &&
+    (!Number.isInteger(pokedexNumber) || pokedexNumber < 1 || pokedexNumber > 1025)
+  )
+    throw new ApplicationError('invalid_filter', 400);
   return {
     query: query.q,
     language: language?.success ? language.data : undefined,
     category: category?.success ? category.data : undefined,
     setId: query.setId,
-    species: query.species,
+    species: pokedexNumber === undefined ? query.species : undefined,
+    pokedexNumber,
     owned,
     limit: asPositiveInt(query.limit, 50, 100),
     offset: Math.max(0, Number.parseInt(query.offset ?? '0', 10) || 0),
@@ -88,6 +97,8 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       getBinderVersionShortages(env.DB, ownerId, versionId, offset, limit),
     createBinder: (name: string, layout: BinderLayout) =>
       createBinder(env.DB, ownerId, name, layout),
+    addCardsToBinderVersion: (versionId: string, cardIds: string[], expectedRevision: number) =>
+      addCardsToBinderVersion(env.DB, ownerId, versionId, cardIds, expectedRevision),
     cloneBinderVersion: (versionId: string, expectedRevision: number) =>
       cloneBinderVersion(env.DB, ownerId, versionId, expectedRevision),
     activateBinderVersion: (versionId: string, expectedRevision: number) =>
@@ -117,6 +128,11 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
         expectedRevision,
       );
     },
+    setBinderSlots: (
+      versionId: string,
+      assignments: Array<BinderSlotLocation & { cardId: string }>,
+      expectedRevision: number,
+    ) => setBinderSlots(env.DB, ownerId, versionId, assignments, expectedRevision),
     swapBinderSlots(
       versionId: string,
       source: BinderSlotLocation,

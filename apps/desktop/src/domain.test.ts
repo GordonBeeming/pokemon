@@ -4,6 +4,7 @@ import {
   imageDataUrl,
   importCapture,
   pairingPageUrl,
+  redactedMcpConfigSnippet,
   type SaveCapture,
 } from './domain';
 
@@ -89,5 +90,16 @@ describe('pairing page URL', () => {
 
   it('keeps loopback pairing on the configured development origin', () => {
     expect(pairingPageUrl('http://127.0.0.1:8787')).toBe('http://127.0.0.1:8787/#devices');
+  });
+});
+
+describe('MCP configuration display', () => {
+  it('masks the bearer token without changing the copyable configuration source', () => {
+    const source =
+      '[mcp_servers.pokedex]\nurl = "http://127.0.0.1:47837/mcp"\nhttp_headers = { Authorization = "Bearer secret-token" }';
+
+    expect(redactedMcpConfigSnippet(source)).toContain('Bearer ••••••••');
+    expect(redactedMcpConfigSnippet(source)).not.toContain('secret-token');
+    expect(source).toContain('secret-token');
   });
 });

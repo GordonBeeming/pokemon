@@ -402,6 +402,29 @@ fn validate_upload_path(root: &Path, candidate: &Path) -> Result<()> {
     Ok(())
 }
 
+fn validate_pairing_page_url(value: &str) -> Result<()> {
+    let url = url::Url::parse(value)?;
+    let allowed = url.scheme() == "https"
+        || (url.scheme() == "http"
+            && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "::1")));
+    if !allowed {
+        return Err(DesktopError::InvalidConfig(
+            "pairing page must use HTTPS or loopback HTTP".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn open_pairing_page(url: String) -> std::result::Result<(), String> {
+    validate_pairing_page_url(&url).map_err(display_error)?;
+    std::process::Command::new("open")
+        .arg(url)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| display_error(DesktopError::Io(error)))
+}
+
 fn display_error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
@@ -854,10 +877,16 @@ pub fn run() {
         .with_current_span(false)
         .try_init();
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let paths = AppPaths::new(app.path().app_data_dir()?, app.path().app_config_dir()?);
-            let config = config::load_or_create(&paths)?;
+            let mut config = config::load_or_create(&paths)?;
+            #[cfg(debug_assertions)]
+            {
+                let cloud_override = option_env!("POKEDEX_DEV_CLOUD_BASE_URL")
+                    .map(str::to_string)
+                    .or_else(|| std::env::var("POKEDEX_DEV_CLOUD_BASE_URL").ok());
+                config = config::with_dev_cloud_override(config, cloud_override.as_deref())?;
+            }
             let mcp_token = secrets::load_or_create_mcp_token(&paths.mcp_token_file)?;
             let services = Arc::new(DesktopServices::new(
                 paths,
@@ -911,6 +940,7 @@ pub fn run() {
             pending_scan_image,
             pending_scan_preview_path,
             delete_pending_scan,
+            open_pairing_page,
             synchronize_art,
             cancel_art_sync,
             upload_art_file

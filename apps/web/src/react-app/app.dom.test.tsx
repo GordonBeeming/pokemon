@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './app';
+import { BinderView } from './binder-view';
 import { CatalogueView } from './catalogue-view';
 import { DevicesView } from './ui';
 
@@ -16,6 +17,18 @@ const apiMocks = vi.hoisted(() => ({
   pair: vi.fn(),
   revokeToken: vi.fn(),
   search: vi.fn(),
+  card: vi.fn(),
+  binders: vi.fn(),
+  binder: vi.fn(),
+  binderShortages: vi.fn(),
+  resolveCards: vi.fn(),
+  nationalPokedex: vi.fn(),
+  addCardsToBinder: vi.fn(),
+  startCatalogueSync: vi.fn(),
+  nationalPokedexPreviews: vi.fn(),
+  catalogueSyncStatus: vi.fn(),
+  resolveNationalRepresentatives: vi.fn(),
+  setNationalRepresentative: vi.fn(),
 }));
 
 vi.mock('./api', async (importOriginal) => {
@@ -150,7 +163,7 @@ describe('async frontend announcements', () => {
     expect(container.textContent).toContain('A1B2-C3D4');
   });
 
-  it('uses keyset cursors for catalogue next and previous navigation', async () => {
+  it('uses numbered offsets for catalogue next and previous navigation', async () => {
     const firstPage = deferred<{ ok: true; total: number; cards: []; cursor: string }>();
     const secondPage = deferred<{ ok: true; total: number; cards: []; cursor: null }>();
     const previousPage = deferred<{ ok: true; total: number; cards: []; cursor: string }>();
@@ -161,7 +174,17 @@ describe('async frontend announcements', () => {
 
     act(() =>
       root.render(
-        <CatalogueView initialParams={new URLSearchParams()} onNotice={() => undefined} />,
+        <CatalogueView
+          initialParams={new URLSearchParams()}
+          refreshKey={0}
+          indexing={false}
+          indexingError={null}
+          indexingResult={null}
+          retryIndexing={() => undefined}
+          onBackToNational={() => undefined}
+          onBackToSets={() => undefined}
+          onNotice={() => undefined}
+        />,
       ),
     );
     await waitFor(() => apiMocks.search.mock.calls.length === 1);
@@ -174,21 +197,21 @@ describe('async frontend announcements', () => {
     });
 
     const next = Array.from(container.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Next 50',
+      (button) => button.textContent === 'Next',
     );
     expect(next?.disabled).toBe(false);
     act(() => next?.click());
     await waitFor(() => apiMocks.search.mock.calls.length === 2);
     const second = apiMocks.search.mock.calls[1]?.[0] as URLSearchParams;
-    expect(second.get('cursor')).toBe('cursor-2');
-    expect(second.has('offset')).toBe(false);
+    expect(second.has('cursor')).toBe(false);
+    expect(second.get('offset')).toBe('50');
     await act(async () => {
       secondPage.resolve({ ok: true, total: 100, cards: [], cursor: null });
       await secondPage.promise;
     });
 
     const previous = Array.from(container.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Previous 50',
+      (button) => button.textContent === 'Previous',
     );
     expect(previous?.disabled).toBe(false);
     act(() => previous?.click());
@@ -200,5 +223,142 @@ describe('async frontend announcements', () => {
       previousPage.resolve({ ok: true, total: 100, cards: [], cursor: 'cursor-2' });
       await previousPage.promise;
     });
+  });
+
+  it('keeps editing arrows inside lightbox fields and restores card focus on Escape', async () => {
+    const card = {
+      id: 'card-1',
+      name: 'Squirtle',
+      language: 'en',
+      category: 'pokemon',
+      setId: 'sv03.5',
+      setName: '151',
+      number: '007',
+      imageLowUrl: null,
+      imageHighUrl: null,
+      collection: null,
+      price: {
+        amountAud: null,
+        nativeAmount: null,
+        nativeCurrency: null,
+        source: null,
+        sourceCapturedAt: null,
+        fxDate: null,
+      },
+    } as const;
+    apiMocks.search.mockResolvedValue({ ok: true, total: 1, cards: [card], cursor: null });
+    apiMocks.card.mockResolvedValue({
+      ...card,
+      supertype: 'Pokemon',
+      subtype: 'Water',
+      species: 'Squirtle',
+      rarity: 'Common',
+      artist: 'Artist',
+      source: { provider: 'tcgdex', sourceId: 'sv03.5-007', updatedAt: '2026-08-25T00:00:00Z' },
+      notes: null,
+    });
+    apiMocks.binders.mockResolvedValue([]);
+    act(() =>
+      root.render(
+        <CatalogueView
+          initialParams={new URLSearchParams()}
+          refreshKey={0}
+          indexing={false}
+          indexingError={null}
+          indexingResult={null}
+          retryIndexing={() => undefined}
+          onBackToNational={() => undefined}
+          onBackToSets={() => undefined}
+          onNotice={() => undefined}
+        />,
+      ),
+    );
+    await waitFor(() => container.querySelector('.card-row') !== null);
+    const source = container.querySelector<HTMLButtonElement>('.card-row');
+    act(() => source?.click());
+    await waitFor(() => container.querySelector('[role="dialog"]') !== null);
+    const notes = container.querySelector<HTMLTextAreaElement>('textarea');
+    act(() => {
+      notes?.focus();
+      notes?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    });
+    expect(apiMocks.card).toHaveBeenCalledTimes(1);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    await settle();
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(source);
+  });
+
+  it('adds an already-indexed full Pokédex without starting another catalogue workflow', async () => {
+    const version = {
+      id: 'version-1',
+      binderId: 'binder-1',
+      versionNumber: 1,
+      status: 'active',
+      layout: { kind: '3x3', rows: 3, columns: 3 },
+      revision: 1,
+      pageCount: 1,
+    } as const;
+    const pages = [
+      {
+        id: 'page-1',
+        position: 0,
+        slots: Array.from({ length: 9 }, (_value, index) => ({
+          pageId: 'page-1',
+          row: Math.floor(index / 3),
+          column: index % 3,
+          cardId: null,
+        })),
+      },
+    ];
+    const coverage = Array.from({ length: 1025 }, (_value, index) => ({
+      number: index + 1,
+      totalCards: 1,
+      ownedCards: 0,
+      types: [],
+      representative: {
+        cardId: `card-${index + 1}`,
+        cardName: `Pokémon ${index + 1}`,
+        setName: 'Set',
+        number: String(index + 1),
+        imageLowUrl: null,
+        imageHighUrl: null,
+        explicit: false,
+      },
+    }));
+    apiMocks.binders.mockResolvedValue([
+      {
+        id: 'binder-1',
+        name: 'National binder',
+        activeVersionId: 'version-1',
+        latestVersionId: 'version-1',
+        updatedAt: '2026-08-25T00:00:00Z',
+      },
+    ]);
+    apiMocks.binder.mockResolvedValue({ version, pages, nextPage: null });
+    apiMocks.binderShortages.mockResolvedValue({ ok: true, shortages: [], nextOffset: null });
+    apiMocks.resolveCards.mockResolvedValue([]);
+    apiMocks.nationalPokedex.mockResolvedValue(coverage);
+    apiMocks.addCardsToBinder.mockResolvedValue({
+      added: 1025,
+      binder: { version: { ...version, revision: 2, pageCount: 114 }, pages, nextPage: null },
+    });
+
+    act(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    act(() => container.querySelector<HTMLButtonElement>('.binder-library-card')?.click());
+    await waitFor(() => container.textContent?.includes('Add full Pokédex') === true);
+    const add = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Add full Pokédex',
+    );
+    act(() => add?.click());
+    await waitFor(() => apiMocks.addCardsToBinder.mock.calls.length === 1);
+
+    expect(apiMocks.startCatalogueSync).not.toHaveBeenCalled();
+    expect(apiMocks.addCardsToBinder.mock.calls[0]?.[1]).toEqual(
+      Array.from({ length: 1025 }, (_value, index) => `card-${index + 1}`),
+    );
   });
 });

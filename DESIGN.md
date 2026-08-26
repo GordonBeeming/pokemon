@@ -4,11 +4,11 @@
 
 ## Direction
 
-Pokédex is a restrained Personal/Xylem operate-mode workbench. Its visual language should feel like a well-kept reference desk: quiet surfaces, clear measurements, readable tables, and precise state changes. Pokémon imagery and collection data provide the colour; the chrome stays calm enough for long catalogue sessions.
+Pokédex is a Personal/Xylem operate-mode collector's cabinet. The metaphor is behavioural rather than skeuomorphic: physical card proportions, visible pocket gaps, shelf continuity, and specimen-like labels make the collection feel tangible without fake wood, leather, glare, or ornamental depth. Pokémon card artwork provides the colour; the chrome stays calm enough for long catalogue sessions.
 
 ## Composition
 
-The dashboard is the first working surface. Desktop layouts use a stable navigation rail or top-level workspace navigation, a broad content region, and detail panels that can remain visible beside a catalogue. The narrow companion surfaces collapse to a single column and keep actions reachable without reproducing the desktop shell.
+The dashboard is a visual shelf and a set of useful continuation points. Desktop layouts use a dark cabinet-like navigation rail, a broad light work surface, gallery-first card browsing, and a selected-card inspector that remains visible beside the catalogue. National Pokédex tiles lead with one large physical card preview per species. Binder pages preserve the 0.72 card ratio and make empty pockets obvious. Narrow surfaces collapse to a single column; selected detail becomes a closeable drawer rather than falling below dozens of cards.
 
 ## Type and colour
 
@@ -16,7 +16,11 @@ Use a legible system sans for interface text and a monospace face only for ident
 
 ## Interaction
 
-Controls have visible keyboard focus and complete default, hover, active, disabled, loading, and error states. Quantity changes are explicit and idempotent. Drag and drop in binder planning always has a keyboard placement equivalent. Motion is short and communicates state; it does not delay loading the task.
+Controls have visible keyboard focus and complete default, hover, active, disabled, loading, and error states. Collection filters use app-native segmented controls rather than platform dropdowns on primary desktop paths. A filled check mark means owned, an outlined gap mark means missing, and quantities above one appear beside the mark; accessible labels always carry the full state. Species galleries navigate immediately, index printings in place, and preserve Pokédex query, scroll, and focus on return. Quantity changes are explicit and idempotent. Drag and drop in binder planning always has a keyboard placement equivalent. Motion is short and communicates state; it does not delay loading the task.
+
+## Vocabulary
+
+Use “physical printings indexed” for catalogue coverage, “card preview” for an automatic image before printings are loaded, “chosen representative” for the owner's explicit National Pokédex image, and “art unavailable” when the source has no image. “Owned” describes collection state only; it never implies that the currently pictured printing is owned when another printing supplies species coverage.
 
 ## Accessibility
 

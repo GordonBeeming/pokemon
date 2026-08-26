@@ -4,7 +4,9 @@ coverage/
 .turbo/
 .wrangler/
 apps/web/.dev.vars
+.codex/mcp.env
 apps/web/.env*
 !.env.example
 *.local
 .DS_Store
+.playwright-cli/

@@ -10,6 +10,7 @@ const card = {
   setName: 'Stellar Crown',
   number: '001',
   imageLowUrl: '/api/art/card-1/low',
+  imageHighUrl: '/api/art/card-1/high',
   collection: null,
   price: {
     amountAud: null,
@@ -55,6 +56,7 @@ describe('API client', () => {
       new URLSearchParams({ q: 'bulbasaur', limit: '50', offset: '0' }),
     );
     expect(result.cards[0]?.imageLowUrl).toBe('/api/art/card-1/low');
+    expect(result.cards[0]?.imageHighUrl).toBe('/api/art/card-1/high');
     expect(fetch).toHaveBeenCalledWith(
       '/api/catalogue/search?q=bulbasaur&limit=50&offset=0',
       expect.objectContaining({ credentials: 'same-origin' }),

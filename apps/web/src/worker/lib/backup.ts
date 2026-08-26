@@ -56,6 +56,13 @@ const collectionRow = z
     updated_at: z.number().int().nonnegative(),
   })
   .strict();
+const speciesRepresentativeRow = z
+  .object({
+    pokedex_number: z.number().int().min(1).max(1025),
+    card_id: z.string().min(1),
+    updated_at: z.number().int().nonnegative(),
+  })
+  .strict();
 const binderRow = z
   .object({
     id: z.string(),
@@ -131,6 +138,7 @@ const backupKindSchema = z.enum([
   'catalogue',
   'sources',
   'collection',
+  'species_representatives',
   'binders',
   'versions',
   'pages',
@@ -189,6 +197,7 @@ const backupRowSchemas = {
   catalogue: catalogueRow,
   sources: sourceRow,
   collection: collectionRow,
+  species_representatives: speciesRepresentativeRow,
   binders: binderRow,
   versions: versionRow,
   pages: pageRow,
@@ -210,6 +219,8 @@ const backupQueries: readonly BackupQuery[] = [
       c.created_at, c.updated_at
      FROM catalogue_cards c WHERE c.rowid > ?2 AND (c.is_custom = 1
        OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
+       OR EXISTS (SELECT 1 FROM species_representatives representative
+         WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
        OR EXISTS (SELECT 1 FROM binder_slots s JOIN binder_pages p ON p.id = s.binder_page_id
          JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
          WHERE b.owner_id = ?1 AND s.card_id = c.id))
@@ -222,6 +233,8 @@ const backupQueries: readonly BackupQuery[] = [
      FROM card_sources s WHERE s.rowid > ?2 AND EXISTS (
        SELECT 1 FROM catalogue_cards c WHERE c.id = s.card_id AND (c.is_custom = 1
          OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
+         OR EXISTS (SELECT 1 FROM species_representatives representative
+           WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
          OR EXISTS (SELECT 1 FROM binder_slots bs JOIN binder_pages p ON p.id = bs.binder_page_id
            JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
            WHERE b.owner_id = ?1 AND bs.card_id = c.id)))
@@ -232,6 +245,14 @@ const backupQueries: readonly BackupQuery[] = [
     sql: `SELECT cc.rowid AS backup_cursor, cc.card_id, cc.quantity, cc.notes, cc.revision,
       cc.updated_at FROM collection_cards cc
      WHERE cc.owner_id = ?1 AND cc.rowid > ?2 ORDER BY cc.rowid LIMIT ?3`,
+  },
+  {
+    kind: 'species_representatives',
+    sql: `SELECT representative.rowid AS backup_cursor, representative.pokedex_number,
+      representative.card_id, representative.updated_at
+     FROM species_representatives representative
+     WHERE representative.owner_id = ?1 AND representative.rowid > ?2
+     ORDER BY representative.rowid LIMIT ?3`,
   },
   {
     kind: 'binders',
@@ -266,7 +287,9 @@ const backupQueries: readonly BackupQuery[] = [
       m.sha256, m.bytes, m.version, m.updated_at, c.is_custom AS backup_is_custom
      FROM art_manifest m JOIN catalogue_cards c ON c.id = m.card_id
      WHERE m.rowid > ?2 AND (c.is_custom = 1
-       OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id))
+       OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
+       OR EXISTS (SELECT 1 FROM species_representatives representative
+         WHERE representative.owner_id = ?1 AND representative.card_id = c.id))
      ORDER BY m.rowid LIMIT ?3`,
   },
 ];
@@ -735,6 +758,7 @@ export async function restoreBackup(
       await db.batch([
         db.prepare('DELETE FROM collection_mutations WHERE owner_id = ?1').bind(ownerId),
         db.prepare('DELETE FROM collection_cards WHERE owner_id = ?1').bind(ownerId),
+        db.prepare('DELETE FROM species_representatives WHERE owner_id = ?1').bind(ownerId),
         db.prepare('DELETE FROM binders WHERE owner_id = ?1').bind(ownerId),
         db
           .prepare(
@@ -767,6 +791,12 @@ export async function restoreBackup(
           .prepare(
             `INSERT INTO collection_cards (owner_id,card_id,quantity,notes,revision,updated_at)
            SELECT ?2,json_extract(j.value,'$.card_id'),json_extract(j.value,'$.quantity'),json_extract(j.value,'$.notes'),json_extract(j.value,'$.revision'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='collection'`,
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO species_representatives (owner_id,pokedex_number,card_id,updated_at)
+           SELECT ?2,json_extract(j.value,'$.pokedex_number'),json_extract(j.value,'$.card_id'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='species_representatives'`,
           )
           .bind(restoreRunId, ownerId),
         db

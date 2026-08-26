@@ -1,10 +1,10 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { openUrl } from '@tauri-apps/plugin-opener';
 import {
   captureCameraFrame,
   formatBytes,
   importCapture,
   pairingPageUrl,
+  redactedMcpConfigSnippet,
   type AppConfig,
   type DesktopStatus,
   type EncodedFrame,
@@ -94,6 +94,7 @@ app.innerHTML = `
             <h2 id="library-heading">Art library</h2>
             <span class="sync-state" id="sync-state" role="status" aria-live="polite" aria-atomic="true">Ready</span>
           </div>
+          <p>Downloads high and low art for cards already indexed in the web catalogue. National previews cache as you browse.</p>
           <form id="settings-form">
             <label for="library-path">Image library path</label>
             <input id="library-path" name="library-path" spellcheck="false" required />
@@ -103,7 +104,7 @@ app.innerHTML = `
             <input id="device-label" name="device-label" maxlength="80" required />
             <div class="form-actions">
               <button type="submit">Save settings</button>
-              <button class="primary" id="sync-art" type="button">Sync high + low art</button>
+              <button class="primary" id="sync-art" type="button">Sync indexed card art</button>
               <button id="cancel-sync" type="button" hidden>Cancel sync</button>
             </div>
             <progress id="sync-progress" hidden aria-label="Art synchronization in progress"></progress>
@@ -212,7 +213,7 @@ function renderStatus(next: DesktopStatus): void {
   mcpStatus.textContent = next.mcp.running ? 'MCP running' : 'MCP unavailable';
   mcpStatus.dataset.state = next.mcp.running ? 'ok' : 'error';
   mcpEndpoint.textContent = next.mcp.running ? next.mcp.endpoint : 'Unavailable';
-  mcpConfig.textContent = next.mcp.configSnippet;
+  mcpConfig.textContent = redactedMcpConfigSnippet(next.mcp.configSnippet);
   libraryPath.value = next.config.imageLibraryPath;
   cloudUrl.value = next.config.cloudBaseUrl;
   deviceLabel.value = next.config.deviceLabel;
@@ -558,10 +559,23 @@ cameraToggle.addEventListener('click', () => {
           stopCamera();
           return;
         }
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
-          audio: false,
-        });
+        let stream: MediaStream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
+            audio: false,
+          });
+        } catch (error) {
+          if (error instanceof DOMException && error.name === 'NotAllowedError') {
+            throw new Error(
+              'Camera access is blocked. Enable Pokédex Scanner Dev in System Settings › Privacy & Security › Camera, then restart the scanner.',
+            );
+          }
+          if (error instanceof DOMException && error.name === 'NotFoundError') {
+            throw new Error('No camera is available. Connect one or choose an image instead.');
+          }
+          throw error;
+        }
         cameraStream = stream;
         camera.srcObject = stream;
         await camera.play();
@@ -599,7 +613,7 @@ fileCapture.addEventListener('change', () => {
 openPairing.addEventListener('click', () => {
   void runAction(async () => {
     const current = requireStatus();
-    await openUrl(pairingPageUrl(current.config.cloudBaseUrl));
+    await invoke('open_pairing_page', { url: pairingPageUrl(current.config.cloudBaseUrl) });
   });
 });
 

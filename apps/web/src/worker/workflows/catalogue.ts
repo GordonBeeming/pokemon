@@ -179,6 +179,8 @@ interface CatalogueWorkflowPayload {
   language?: string;
   objectKey?: string;
   allowDestructiveDrop?: boolean;
+  actorId?: string;
+  requestId?: string;
 }
 
 export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
@@ -246,6 +248,8 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
         imported: applied.imported,
         inactive: applied.inactive,
         durationMs: Date.now() - startedAt,
+        actorId: event.payload.actorId,
+        requestId: event.payload.requestId,
       });
     } catch (error) {
       const message = describeError(error);
@@ -259,6 +263,8 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
           durationMs: Date.now() - startedAt,
           err: message,
           stack: error instanceof Error ? error.stack : undefined,
+          actorId: event.payload.actorId,
+          requestId: event.payload.requestId,
         },
         async () => {
           await this.env.DB.prepare(

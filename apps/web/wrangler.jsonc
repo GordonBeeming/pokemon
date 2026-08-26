@@ -11,13 +11,13 @@
   },
   "vars": {
     "OWNER_LABEL": "Owner",
-    "PUBLIC_ORIGIN": "http://localhost:5173",
+    "PUBLIC_ORIGIN": "https://pokedex.gordonbeeming.com",
   },
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "pokedex-local",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_name": "pokedex",
+      "database_id": "5e955d9c-188b-476a-80e9-8b1908f20f54",
       "migrations_dir": "./migrations",
     },
   ],
@@ -27,13 +27,13 @@
   "exports": {
     "AuthCoordinator": { "type": "durable-object", "storage": "sqlite" },
   },
-  "r2_buckets": [{ "binding": "ART", "bucket_name": "pokedex-art-local" }],
+  "r2_buckets": [{ "binding": "ART", "bucket_name": "pokedex-art" }],
   "workflows": [
     {
       "binding": "CATALOGUE_SYNC",
       "name": "pokedex-catalogue-sync",
       "class_name": "CatalogueSyncWorkflow",
-      "schedules": ["0 3 * * *"],
+      "schedules": ["0 3 1 * *"],
     },
     {
       "binding": "PRICE_SYNC",

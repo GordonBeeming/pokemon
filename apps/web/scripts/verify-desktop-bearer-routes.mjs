@@ -41,7 +41,7 @@ let worker;
 let workerOutput = '';
 
 try {
-  await run(['d1', 'migrations', 'apply', 'pokedex-local', '--local', '--persist-to', persist]);
+  await run(['d1', 'migrations', 'apply', 'DB', '--local', '--persist-to', persist]);
   const sql = [
     "INSERT INTO users (id,label,created_at) VALUES ('owner-a','A',1),('owner-b','B',1);",
     "INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,is_custom,is_active,created_at,updated_at) VALUES ('card-a','Fixture','en','pokemon','set','Set','1',0,1,1,1);",
@@ -53,7 +53,7 @@ try {
   await run([
     'd1',
     'execute',
-    'pokedex-local',
+    'DB',
     '--local',
     '--persist-to',
     persist,

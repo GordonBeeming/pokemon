@@ -521,10 +521,14 @@ export async function getArtResponse(
   variant: ArtVariant,
   request: Request,
 ): Promise<Response | null> {
-  const manifest = await db
+  let manifest = await db
     .prepare('SELECT object_key FROM art_manifest WHERE card_id = ?1 AND variant = ?2')
     .bind(cardId, variant)
     .first<{ object_key: string }>();
+  if (!manifest) {
+    const cached = await cacheTcgdexArt(db, art, cardId, variant);
+    if (cached) manifest = { object_key: cached };
+  }
   if (!manifest) return null;
   const rangeHeader = request.headers.get('range');
   if (!validRangeHeader(rangeHeader))
@@ -547,6 +551,118 @@ export async function getArtResponse(
     headers.set('content-length', String(object.size));
   }
   return new Response(object.body, { headers, status: object.range ? 206 : 200 });
+}
+
+async function cacheTcgdexArt(
+  db: D1Database,
+  art: R2Bucket,
+  cardId: string,
+  variant: ArtVariant,
+): Promise<string | null> {
+  const source = await db
+    .prepare(
+      `SELECT source_id, language FROM card_sources
+       WHERE card_id = ?1 AND provider = 'tcgdex' AND active = 1
+       ORDER BY imported_at DESC LIMIT 1`,
+    )
+    .bind(cardId)
+    .first<{ source_id: string; language: string }>();
+  if (!source || !/^[a-z]{2}(?:-[a-z]{2})?$/u.test(source.language)) return null;
+  try {
+    const detail = await fetch(
+      `https://api.tcgdex.net/v2/${encodeURIComponent(source.language)}/cards/${encodeURIComponent(source.source_id)}`,
+      { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(30_000) },
+    );
+    if (!detail.ok) return null;
+    const payload: unknown = await detail.json();
+    const image =
+      payload && typeof payload === 'object' && 'image' in payload
+        ? (payload as { image?: unknown }).image
+        : null;
+    if (typeof image !== 'string') return null;
+    const imageBase = new URL(image);
+    if (imageBase.protocol !== 'https:' || imageBase.hostname !== 'assets.tcgdex.net') return null;
+    const response = await fetch(`${imageBase.href.replace(/\/+$/u, '')}/${variant}.webp`, {
+      headers: { accept: 'image/webp' },
+      signal: AbortSignal.timeout(30_000),
+    });
+    const declared = Number(response.headers.get('content-length') ?? 0);
+    if (!response.ok || declared > MAX_ART_BYTES) return null;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > MAX_ART_BYTES || !isWebp(bytes)) return null;
+    const checksum = await sha256(bytes);
+    const objectKey = artObjectKey(cardId, variant, checksum);
+    await art.put(objectKey, bytes, { httpMetadata: { contentType: 'image/webp' } });
+    await db
+      .prepare(
+        `INSERT INTO art_manifest (card_id, variant, object_key, sha256, bytes, version, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
+         ON CONFLICT(card_id, variant) DO UPDATE SET
+           object_key = excluded.object_key, sha256 = excluded.sha256, bytes = excluded.bytes,
+           version = art_manifest.version + 1, updated_at = excluded.updated_at
+         WHERE art_manifest.sha256 <> excluded.sha256`,
+      )
+      .bind(cardId, variant, objectKey, checksum, bytes.byteLength, nowSeconds())
+      .run();
+    return objectKey;
+  } catch (error) {
+    logWarn({
+      evt: 'art.tcgdex_cache_failed',
+      cardId,
+      variant,
+      err: describeError(error),
+    });
+    return null;
+  }
+}
+
+export async function getTcgdexPreviewArtResponse(
+  art: R2Bucket,
+  imageBaseValue: string,
+  variant: ArtVariant,
+): Promise<Response | null> {
+  let imageBase: URL;
+  try {
+    imageBase = new URL(imageBaseValue);
+  } catch {
+    return null;
+  }
+  if (
+    imageBase.protocol !== 'https:' ||
+    imageBase.hostname !== 'assets.tcgdex.net' ||
+    imageBase.pathname.includes('/tcgp/') ||
+    imageBase.search ||
+    imageBase.hash
+  )
+    return null;
+  const source = imageBase.href.replace(/\/+$/u, '');
+  const identity = await sha256(new TextEncoder().encode(`${source}\u0000${variant}`));
+  const objectKey = `previews/${identity}/${variant}.webp`;
+  let object = await art.get(objectKey);
+  if (!object || !('body' in object)) {
+    try {
+      const response = await fetch(`${source}/${variant}.webp`, {
+        headers: { accept: 'image/webp', 'user-agent': 'pokedex-national-preview/1' },
+        signal: AbortSignal.timeout(30_000),
+      });
+      const declared = Number(response.headers.get('content-length') ?? 0);
+      if (!response.ok || declared > MAX_ART_BYTES) return null;
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength > MAX_ART_BYTES || !isWebp(bytes)) return null;
+      await art.put(objectKey, bytes, { httpMetadata: { contentType: 'image/webp' } });
+      object = await art.get(objectKey);
+    } catch (error) {
+      logWarn({ evt: 'art.tcgdex_preview_failed', variant, err: describeError(error) });
+      return null;
+    }
+  }
+  if (!object || !('body' in object)) return null;
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set('etag', object.httpEtag);
+  headers.set('content-length', String(object.size));
+  headers.set('cache-control', 'private, max-age=31536000, immutable');
+  return new Response(object.body, { headers });
 }
 
 export async function listArtManifest(

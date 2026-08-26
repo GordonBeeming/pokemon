@@ -48,6 +48,39 @@ function applyMigrationSix(database: DatabaseSync): void {
   }
 }
 
+function applyMigrationSeven(database: DatabaseSync): void {
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    database.exec(migration('007_national_pokedex.sql'));
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function applyMigrationEight(database: DatabaseSync): void {
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    database.exec(migration('008_physical_printing_identity.sql'));
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+function applyMigrationNine(database: DatabaseSync): void {
+  database.exec('BEGIN IMMEDIATE');
+  try {
+    database.exec(migration('009_species_discovery_cache.sql'));
+    database.exec('COMMIT');
+  } catch (error) {
+    database.exec('ROLLBACK');
+    throw error;
+  }
+}
+
 describe('migration 006 legacy-data safety', () => {
   it('aborts before rewriting a contradictory standard layout', () => {
     const database = databaseAtMigrationFive();
@@ -355,5 +388,141 @@ describe('migration 006 legacy-data safety', () => {
         )
         .get(),
     ).toEqual({ valid: 1, mutation_epoch: 0, backup_epoch: 4 });
+  });
+});
+
+describe('migration 007 National Pokédex representatives', () => {
+  it('keeps one owner-scoped representative per National Pokédex number', () => {
+    const database = databaseAtMigrationFive();
+    applyMigrationSix(database);
+    applyMigrationSeven(database);
+    database.exec(`
+      UPDATE catalogue_cards SET pokedex_number = 7 WHERE id = 'card-1';
+      INSERT INTO species_representatives (owner_id, pokedex_number, card_id, updated_at)
+      VALUES ('owner-a', 7, 'card-1', 1), ('owner-b', 7, 'card-1', 1);
+    `);
+
+    expect(
+      database
+        .prepare(
+          'SELECT owner_id, pokedex_number, card_id FROM species_representatives ORDER BY owner_id',
+        )
+        .all(),
+    ).toEqual([
+      { owner_id: 'owner-a', pokedex_number: 7, card_id: 'card-1' },
+      { owner_id: 'owner-b', pokedex_number: 7, card_id: 'card-1' },
+    ]);
+    expect(() =>
+      database
+        .prepare(
+          'INSERT INTO species_representatives (owner_id, pokedex_number, card_id, updated_at) VALUES (?1, ?2, ?3, ?4)',
+        )
+        .run('owner-a', 0, 'card-1', 1),
+    ).toThrow(/CHECK constraint/u);
+  });
+});
+
+describe('migration 008 physical printing identity', () => {
+  it('merges aliased source cards into one printing without losing owner state', () => {
+    const database = databaseAtMigrationFive();
+    applyMigrationSix(database);
+    applyMigrationSeven(database);
+    database.exec(`
+      UPDATE catalogue_cards SET pokedex_number = 7 WHERE id = 'card-1';
+      INSERT INTO catalogue_cards
+        (id, name, language, category, set_id, set_name, number, number_sort,
+         pokedex_number, created_at, updated_at)
+      VALUES ('card-alias', 'Card', 'en', 'pokemon', 'set-alias', 'Set', '1', 1, 7, 2, 2);
+      INSERT INTO card_sources
+        (provider, source_id, card_id, language, source_updated_at, checksum, imported_at)
+      VALUES
+        ('tcgdex', 'set-1', 'card-1', 'en', 1, 'one', 1),
+        ('tcgdex', 'set-alias-1', 'card-alias', 'en', 1, 'two', 1);
+      INSERT INTO collection_cards (owner_id, card_id, quantity, notes, revision, updated_at)
+      VALUES
+        ('owner-a', 'card-1', 1, 'binder note', 1, 1),
+        ('owner-a', 'card-alias', 2, 'sleeved', 1, 2);
+      INSERT INTO collection_mutations
+        (owner_id, mutation_id, card_id, response_json, created_at, request_hash)
+      VALUES ('owner-a', 'mutation-alias', 'card-alias', '{}', 2, 'stale-hash');
+      INSERT INTO binders (id, owner_id, name, created_at, updated_at)
+      VALUES ('binder-merge', 'owner-a', 'Binder', 1, 1);
+      INSERT INTO binder_versions
+        (id, binder_id, version_number, status, layout_kind, rows, columns, created_at)
+      VALUES ('version-merge', 'binder-merge', 1, 'draft', '3x3', 3, 3, 1);
+      INSERT INTO binder_pages (id, binder_version_id, position)
+      VALUES ('page-merge', 'version-merge', 0);
+      INSERT INTO binder_slots (binder_page_id, row_index, column_index, card_id)
+      VALUES ('page-merge', 0, 0, 'card-1');
+      INSERT INTO species_representatives (owner_id, pokedex_number, card_id, updated_at)
+      VALUES ('owner-a', 7, 'card-1', 1);
+      INSERT INTO art_manifest
+        (card_id, variant, object_key, sha256, bytes, version, updated_at)
+      VALUES ('card-1', 'low', 'cards/card-1/low/hash.webp', '${'c'.repeat(64)}', 20, 1, 1);
+    `);
+
+    applyMigrationEight(database);
+
+    expect(database.prepare('SELECT id FROM catalogue_cards').all()).toEqual([{ id: 'card-1' }]);
+    expect(database.prepare('SELECT card_id, quantity, notes FROM collection_cards').get()).toEqual(
+      { card_id: 'card-1', quantity: 3, notes: 'binder note\nsleeved' },
+    );
+    expect(database.prepare('SELECT * FROM collection_mutations').all()).toEqual([]);
+    expect(database.prepare('SELECT card_id FROM binder_slots').get()).toEqual({
+      card_id: 'card-1',
+    });
+    expect(database.prepare('SELECT card_id FROM species_representatives').get()).toEqual({
+      card_id: 'card-1',
+    });
+    expect(database.prepare('SELECT card_id FROM art_manifest').get()).toEqual({
+      card_id: 'card-1',
+    });
+    expect(database.prepare('SELECT card_id FROM card_sources ORDER BY source_id').all()).toEqual([
+      { card_id: 'card-1' },
+      { card_id: 'card-1' },
+    ]);
+    expect(() =>
+      database.exec(`
+        INSERT INTO catalogue_cards
+          (id, name, language, category, set_id, set_name, number, created_at, updated_at)
+        VALUES ('duplicate-again', 'Card', 'en', 'pokemon', 'another-id', 'Set', '1', 3, 3);
+      `),
+    ).toThrow(/UNIQUE constraint/u);
+  });
+});
+
+describe('migration 009 species discovery cache', () => {
+  it('stores one bounded refresh marker per National Pokédex species', () => {
+    const database = databaseAtMigrationFive();
+    applyMigrationSix(database);
+    applyMigrationSeven(database);
+    applyMigrationEight(database);
+    applyMigrationNine(database);
+
+    database.exec(`
+      INSERT INTO species_discovery_cache
+        (pokedex_number, species_name, printing_count, last_checked_at)
+      VALUES (7, 'Squirtle', 33, 100);
+      INSERT INTO species_discovery_cache
+        (pokedex_number, species_name, printing_count, last_checked_at)
+      VALUES (7, 'Squirtle', 34, 200)
+      ON CONFLICT(pokedex_number) DO UPDATE SET
+        printing_count = excluded.printing_count,
+        last_checked_at = excluded.last_checked_at;
+    `);
+
+    expect(database.prepare('SELECT * FROM species_discovery_cache').get()).toEqual({
+      pokedex_number: 7,
+      species_name: 'Squirtle',
+      printing_count: 34,
+      last_checked_at: 200,
+    });
+    expect(() =>
+      database.exec(`
+        INSERT INTO species_discovery_cache
+          (pokedex_number, species_name, printing_count, last_checked_at)
+        VALUES (0, 'Invalid', 0, 1);
+      `),
+    ).toThrow(/CHECK constraint/u);
   });
 });

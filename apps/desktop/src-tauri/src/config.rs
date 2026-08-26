@@ -95,6 +95,15 @@ pub fn load_or_create(paths: &AppPaths) -> Result<AppConfig> {
     Ok(config)
 }
 
+#[cfg(debug_assertions)]
+pub fn with_dev_cloud_override(mut config: AppConfig, value: Option<&str>) -> Result<AppConfig> {
+    if let Some(value) = value {
+        config.cloud_base_url = value.to_string();
+        config.validate()?;
+    }
+    Ok(config)
+}
+
 pub fn save(path: &Path, config: &AppConfig) -> Result<()> {
     config.validate()?;
     if let Some(parent) = path.parent() {
@@ -148,6 +157,21 @@ mod tests {
 
         assert_eq!(config.image_library_path, paths.data_dir.join("card-art"));
         config.validate().expect("valid defaults");
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn development_cloud_override_is_ephemeral_and_validated() {
+        let root = tempdir().expect("temp dir");
+        let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
+        let stored = AppConfig::defaults(&paths);
+
+        let local = with_dev_cloud_override(stored.clone(), Some("http://localhost:7741"))
+            .expect("local development origin");
+
+        assert_eq!(local.cloud_base_url, "http://localhost:7741");
+        assert_eq!(stored.cloud_base_url, "https://pokedex.gordonbeeming.com");
+        assert!(with_dev_cloud_override(stored, Some("http://example.com")).is_err());
     }
 
     #[test]

@@ -5,7 +5,6 @@ import type { DesktopStatus, PendingScan } from './domain';
 
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
-  openUrl: vi.fn(),
   writeText: vi.fn(),
 }));
 
@@ -13,7 +12,6 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: mocks.invoke,
   convertFileSrc: (path: string) => `asset://localhost/${path}`,
 }));
-vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: mocks.openUrl }));
 
 function deferred<T>(): {
   promise: Promise<T>;
@@ -30,10 +28,13 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
-function status(pendingScans: PendingScan[] = []): DesktopStatus {
+function status(
+  pendingScans: PendingScan[] = [],
+  cloudBaseUrl = 'https://pokedex.example',
+): DesktopStatus {
   return {
     config: {
-      cloudBaseUrl: 'https://pokedex.example',
+      cloudBaseUrl,
       imageLibraryPath: '/tmp/pokedex-art',
       mcpPort: 47_837,
       deviceLabel: 'Scanner',
@@ -65,7 +66,6 @@ describe('desktop main DOM', () => {
   beforeEach(() => {
     vi.resetModules();
     mocks.invoke.mockReset();
-    mocks.openUrl.mockReset();
     mocks.writeText.mockReset().mockResolvedValue(undefined);
     document.body.innerHTML = '<div id="app"></div>';
     Object.defineProperty(navigator, 'clipboard', {
@@ -113,6 +113,46 @@ describe('desktop main DOM', () => {
       },
     );
     HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+  });
+
+  it('opens the local pairing page through the validated native command', async () => {
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'desktop_status') {
+        return Promise.resolve(status([], 'http://127.0.0.1:7741'));
+      }
+      return Promise.resolve(undefined);
+    });
+
+    await import('./main');
+    await waitFor(() => document.querySelector('#open-pairing') !== null);
+    document.querySelector<HTMLButtonElement>('#open-pairing')?.click();
+    await waitFor(() =>
+      mocks.invoke.mock.calls.some(([command]) => command === 'open_pairing_page'),
+    );
+
+    expect(mocks.invoke).toHaveBeenCalledWith('open_pairing_page', {
+      url: 'http://127.0.0.1:7741/#devices',
+    });
+  });
+
+  it('turns native camera denial into actionable macOS recovery guidance', async () => {
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === 'desktop_status') return Promise.resolve(status([]));
+      return Promise.resolve(undefined);
+    });
+    const getUserMedia = vi.fn().mockRejectedValue(new DOMException('denied', 'NotAllowedError'));
+    Object.defineProperty(navigator, 'mediaDevices', {
+      configurable: true,
+      value: { getUserMedia },
+    });
+
+    await import('./main');
+    document.querySelector<HTMLButtonElement>('#camera-toggle')?.click();
+    await waitFor(() =>
+      Boolean(document.querySelector('#notice')?.textContent?.includes('System Settings')),
+    );
+
+    expect(document.querySelector('#notice')?.textContent).toContain('Privacy & Security › Camera');
   });
 
   it('executes capture controls and keeps the latest completed refresh visible', async () => {

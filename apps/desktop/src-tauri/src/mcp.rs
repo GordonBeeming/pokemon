@@ -579,7 +579,7 @@ fn tool_definitions() -> Value {
         ),
         write_tool(
             ToolName::BinderCreateDraft.as_str(),
-            "Create a draft binder with a standard or custom layout.",
+            "Create an editable binder with a standard or custom layout.",
             json!({
                 "type": "object",
                 "properties": {
@@ -603,7 +603,7 @@ fn tool_definitions() -> Value {
         ),
         write_tool(
             ToolName::BinderSlotSet.as_str(),
-            "Place or clear a card in one slot of a draft binder version.",
+            "Place or clear a card in one slot of the current binder version.",
             json!({
                 "type": "object",
                 "properties": {
@@ -622,7 +622,7 @@ fn tool_definitions() -> Value {
         ),
         write_tool(
             ToolName::BinderSlotSwap.as_str(),
-            "Atomically swap two slots in a draft binder version.",
+            "Atomically swap two slots in the current binder version.",
             json!({
                 "type": "object",
                 "properties": {

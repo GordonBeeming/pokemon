@@ -1242,6 +1242,15 @@ fn rust_required_scopes_match_the_shared_typescript_contract() {
     assert_eq!(rust_scopes, shared_scopes);
 }
 
+#[test]
+fn pairing_page_urls_allow_local_development_without_opening_arbitrary_schemes() {
+    assert!(validate_pairing_page_url("http://localhost:7741/#devices").is_ok());
+    assert!(validate_pairing_page_url("http://127.0.0.1:7741/#devices").is_ok());
+    assert!(validate_pairing_page_url("https://pokedex.gordonbeeming.com/#devices").is_ok());
+    assert!(validate_pairing_page_url("http://example.com/#devices").is_err());
+    assert!(validate_pairing_page_url("file:///tmp/private").is_err());
+}
+
 #[tokio::test]
 async fn revoked_cloud_token_is_removed_from_the_store() {
     let root = tempdir().expect("temp dir");

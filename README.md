@@ -18,9 +18,20 @@ TCGdex supplies catalogue metadata and source art. Prices retain their source cu
 Requirements: Node.js 22 or newer, pnpm 10, the stable Rust toolchain, and the platform prerequisites listed by Tauri.
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm dev
+./run.sh
 ```
+
+The launcher installs dependencies when needed, creates local-only development secrets, applies pending D1 migrations, and starts both the Cloudflare web app and a separately identified `Pokédex Scanner Dev.app`. The web app runs at `http://localhost:7741`, its Worker inspector uses `9241`, and the scanner MCP bridge uses `47837`; none uses a framework default port. The debug scanner is bundled and ad-hoc signed so macOS can associate camera permission with its development bundle ID, then pointed at the local web origin without overwriting its saved production configuration.
+
+Once the Worker is live, the launcher warms a small set of missing TCGdex images through the same authenticated upload API used by the desktop app; other card art is cached on demand while browsing. Set `POKEDEX_SKIP_ART_SEED=1` to skip it, `POKEDEX_LOCAL_ART_LIMIT` to change the default 12-card startup cap, or `POKEDEX_SKIP_DESKTOP=1` for a web-only run.
+
+The repository includes a project-scoped Codex MCP connection in `.codex/config.toml`. Its bearer token is stored in the `ai-secrets` 1Password vault rather than source control. Start a Codex CLI session with the injected token using:
+
+```sh
+./codex.sh
+```
+
+The scanner must be running because its authenticated MCP endpoint is bound to `127.0.0.1:47837`.
 
 Run the complete repository gate with:
 
@@ -41,4 +52,4 @@ pnpm wrangler:types:check
 pnpm wrangler:dry-run
 ```
 
-Local Worker state uses placeholder resource identifiers from `apps/web/wrangler.jsonc`. Put development secrets in `apps/web/.dev.vars`; production secrets belong in Wrangler. Do not commit either value.
+Local Worker state is isolated by Wrangler despite sharing the production binding names in `apps/web/wrangler.jsonc`. Put development secrets and the local `PUBLIC_ORIGIN` override in `apps/web/.dev.vars`; production secrets belong in Wrangler. Do not commit either secret value.

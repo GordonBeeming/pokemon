@@ -272,6 +272,7 @@ export const binderSlotSwapRequestSchema = z
 export type BinderSlotSwapRequest = z.infer<typeof binderSlotSwapRequestSchema>;
 
 export const catalogueCardViewSchema = catalogueBriefSchema.extend({
+  imageHighUrl: artUrlSchema,
   collection: collectionStateSchema.nullable(),
   price: priceBaselineSchema,
 });

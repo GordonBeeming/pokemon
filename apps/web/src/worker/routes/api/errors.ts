@@ -10,6 +10,7 @@ type PublicStatus = 400 | 401 | 403 | 404 | 409 | 413 | 416 | 429 | 500 | 503;
 const binderStatuses = {
   binder_version_not_found: 404,
   binder_version_not_draft: 409,
+  binder_version_archived: 409,
   binder_revision_conflict: 409,
   binder_page_not_found: 404,
   binder_last_page: 409,

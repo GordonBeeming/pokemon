@@ -16,7 +16,8 @@ import {
 } from '@pokedex/shared';
 import { newId, nowSeconds } from './db';
 
-const MAX_BINDER_PAGES = 200;
+const MAX_BINDER_PAGES = 300;
+const MAX_BINDER_CARDS = 2000;
 const MAX_PAGE_WINDOW = 4;
 const MAX_SHORTAGE_PAGE = 100;
 const CARD_QUERY_CHUNK = 80;
@@ -69,6 +70,7 @@ export type ArrangementMode = 'set-number' | 'release-date' | 'pokedex-number' |
 export type BinderErrorCode =
   | 'binder_version_not_found'
   | 'binder_version_not_draft'
+  | 'binder_version_archived'
   | 'binder_revision_conflict'
   | 'binder_page_not_found'
   | 'binder_last_page'
@@ -148,8 +150,8 @@ function expectedRevision(row: VersionRow, expected?: number): number {
   return row.revision;
 }
 
-function requireDraft(row: VersionRow): void {
-  if (row.status !== 'draft') domainError('binder_version_not_draft');
+function requireEditable(row: VersionRow): void {
+  if (row.status === 'archived') domainError('binder_version_archived');
 }
 
 function requirePageWindow(page: number, limit: number): void {
@@ -315,16 +317,18 @@ export async function createBinder(
   await db.batch([
     db
       .prepare(
-        'INSERT INTO binders (id, owner_id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)',
+        `INSERT INTO binders (id, owner_id, name, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?4)`,
       )
       .bind(binderId, ownerId, name, now),
     db
       .prepare(
         `INSERT INTO binder_versions
           (id, binder_id, version_number, status, layout_kind, rows, columns, revision, created_at)
-         VALUES (?1, ?2, 1, 'draft', ?3, ?4, ?5, 1, ?6)`,
+         VALUES (?1, ?2, 1, 'active', ?3, ?4, ?5, 1, ?6)`,
       )
       .bind(versionId, binderId, layout.kind, layout.rows, layout.columns, now),
+    db.prepare('UPDATE binders SET active_version_id = ?1 WHERE id = ?2').bind(versionId, binderId),
     db
       .prepare('INSERT INTO binder_pages (id, binder_version_id, position) VALUES (?1, ?2, 0)')
       .bind(pageId, versionId),
@@ -429,12 +433,12 @@ async function addBinderPageOnce(
   requestedRevision?: number,
 ): Promise<BinderMutationResult> {
   const version = await readVersion(db, ownerId, versionId);
-  requireDraft(version);
+  requireEditable(version);
   expectedRevision(version, requestedRevision);
   if (version.page_count >= MAX_BINDER_PAGES) domainError('binder_page_limit_reached');
   const pageId = newId('page');
   const now = nowSeconds();
-  await runVersionBatch(db, ownerId, versionId, version.revision, true, [
+  await runVersionBatch(db, ownerId, versionId, version.revision, false, [
     db
       .prepare(
         `INSERT INTO binder_pages (id, binder_version_id, position)
@@ -475,7 +479,7 @@ export async function deleteBinderPage(
   requestedRevision?: number,
 ): Promise<BinderMutationResult> {
   const version = await readVersion(db, ownerId, versionId);
-  requireDraft(version);
+  requireEditable(version);
   expectedRevision(version, requestedRevision);
   const pages = await listPageRows(db, versionId);
   const page = pages.find((item) => item.id === pageId);
@@ -484,7 +488,7 @@ export async function deleteBinderPage(
   const remaining = pages.filter((item) => item.id !== pageId);
   const offset = pages.length + 1;
   const now = nowSeconds();
-  await runVersionBatch(db, ownerId, versionId, version.revision, true, [
+  await runVersionBatch(db, ownerId, versionId, version.revision, false, [
     db.prepare('DELETE FROM binder_pages WHERE id = ?1').bind(pageId),
     db
       .prepare('UPDATE binder_pages SET position = position + ?1 WHERE binder_version_id = ?2')
@@ -505,7 +509,7 @@ export async function reorderBinderPages(
   requestedRevision?: number,
 ): Promise<BinderMutationResult> {
   const version = await readVersion(db, ownerId, versionId);
-  requireDraft(version);
+  requireEditable(version);
   expectedRevision(version, requestedRevision);
   const pages = await listPageRows(db, versionId);
   if (
@@ -516,7 +520,7 @@ export async function reorderBinderPages(
     domainError('binder_page_order_invalid');
   const offset = pages.length + 1;
   const now = nowSeconds();
-  await runVersionBatch(db, ownerId, versionId, version.revision, true, [
+  await runVersionBatch(db, ownerId, versionId, version.revision, false, [
     db
       .prepare('UPDATE binder_pages SET position = position + ?1 WHERE binder_version_id = ?2')
       .bind(offset, versionId),
@@ -580,7 +584,7 @@ export async function arrangeBinderVersion(
   requestedRevision?: number,
 ): Promise<BinderMutationResult> {
   const version = await readVersion(db, ownerId, versionId);
-  requireDraft(version);
+  requireEditable(version);
   expectedRevision(version, requestedRevision);
   if (version.page_count > MAX_BINDER_PAGES) domainError('binder_page_limit_reached');
   const maxSlots = version.page_count * version.rows * version.columns;
@@ -617,7 +621,7 @@ export async function arrangeBinderVersion(
     byPage.set(slot.binder_page_id, page);
   }
   const now = nowSeconds();
-  await runVersionBatch(db, ownerId, versionId, version.revision, true, [
+  await runVersionBatch(db, ownerId, versionId, version.revision, false, [
     ...[...byPage].map(([pageId, pageSlots]) =>
       db
         .prepare(
@@ -696,13 +700,13 @@ export async function setBinderSlot(
   requestedRevision?: number,
 ): Promise<BinderMutationResult> {
   const version = await readVersion(db, ownerId, versionId);
-  requireDraft(version);
+  requireEditable(version);
   expectedRevision(version, requestedRevision);
   validateLocation(version, { page: pagePosition, row, column });
   const page = await pageAt(db, versionId, pagePosition);
   await requireCard(db, cardId);
   const now = nowSeconds();
-  await runVersionBatch(db, ownerId, versionId, version.revision, true, [
+  await runVersionBatch(db, ownerId, versionId, version.revision, false, [
     db
       .prepare(
         `UPDATE binder_slots SET card_id = ?1
@@ -714,6 +718,69 @@ export async function setBinderSlot(
   return mutationResult(db, ownerId, versionId, [pagePosition]);
 }
 
+export async function setBinderSlots(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  assignments: Array<BinderSlotLocation & { cardId: string }>,
+  requestedRevision?: number,
+): Promise<BinderMutationResult> {
+  if (assignments.length === 0 || assignments.length > MAX_BINDER_CARDS)
+    domainError('binder_slot_out_of_bounds');
+  const version = await readVersion(db, ownerId, versionId);
+  requireEditable(version);
+  expectedRevision(version, requestedRevision);
+  const pages = await listPageRows(db, versionId);
+  const pageByPosition = new Map(pages.map((page) => [page.position, page.id]));
+  const keys = new Set<string>();
+  for (const assignment of assignments) {
+    validateLocation(version, assignment);
+    if (!pageByPosition.has(assignment.page)) domainError('binder_page_not_found');
+    const key = `${assignment.page}\u0000${assignment.row}\u0000${assignment.column}`;
+    if (keys.has(key)) domainError('binder_slot_out_of_bounds');
+    keys.add(key);
+  }
+  const cards = await orderingRows(db, [...new Set(assignments.map((item) => item.cardId))]);
+  if (cards.size !== new Set(assignments.map((item) => item.cardId)).size)
+    domainError('binder_arrangement_card_missing');
+  const encoded = JSON.stringify(
+    assignments.map((assignment) => ({
+      pageId: pageByPosition.get(assignment.page),
+      row: assignment.row,
+      column: assignment.column,
+      cardId: assignment.cardId,
+    })),
+  );
+  await runVersionBatch(db, ownerId, versionId, version.revision, false, [
+    db
+      .prepare(
+        `WITH assignments AS (
+          SELECT json_extract(value, '$.pageId') AS page_id,
+            CAST(json_extract(value, '$.row') AS INTEGER) AS row_index,
+            CAST(json_extract(value, '$.column') AS INTEGER) AS column_index,
+            json_extract(value, '$.cardId') AS card_id
+          FROM json_each(?1)
+         )
+         UPDATE binder_slots
+         SET card_id = (
+           SELECT card_id FROM assignments
+           WHERE page_id = binder_slots.binder_page_id
+             AND row_index = binder_slots.row_index
+             AND column_index = binder_slots.column_index
+         )
+         WHERE EXISTS (
+           SELECT 1 FROM assignments
+           WHERE page_id = binder_slots.binder_page_id
+             AND row_index = binder_slots.row_index
+             AND column_index = binder_slots.column_index
+         )`,
+      )
+      .bind(encoded),
+    ...revisionStatements(db, version, nowSeconds()),
+  ]);
+  return mutationResult(db, ownerId, versionId, [assignments[0]?.page ?? 0]);
+}
+
 export async function swapBinderSlots(
   db: D1Database,
   ownerId: string,
@@ -723,7 +790,7 @@ export async function swapBinderSlots(
   requestedRevision?: number,
 ): Promise<BinderMutationResult> {
   const version = await readVersion(db, ownerId, versionId);
-  requireDraft(version);
+  requireEditable(version);
   expectedRevision(version, requestedRevision);
   validateLocation(version, source);
   validateLocation(version, target);
@@ -755,7 +822,7 @@ export async function swapBinderSlots(
   );
   if (!sourceSlot || !targetSlot) domainError('binder_slot_not_found');
   const now = nowSeconds();
-  await runVersionBatch(db, ownerId, versionId, version.revision, true, [
+  await runVersionBatch(db, ownerId, versionId, version.revision, false, [
     db
       .prepare(
         `UPDATE binder_slots
@@ -779,6 +846,119 @@ export async function swapBinderSlots(
     ...revisionStatements(db, version, now),
   ]);
   return mutationResult(db, ownerId, versionId, [source.page, target.page]);
+}
+
+export async function addCardsToBinderVersion(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  cardIds: string[],
+  requestedRevision?: number,
+): Promise<{ binder: BinderMutationResult; added: number }> {
+  if (cardIds.length === 0 || cardIds.length > MAX_BINDER_CARDS)
+    domainError('binder_slot_out_of_bounds');
+  const version = await readVersion(db, ownerId, versionId);
+  requireEditable(version);
+  expectedRevision(version, requestedRevision);
+  const uniqueIds = [...new Set(cardIds)];
+  const cards = await orderingRows(db, uniqueIds);
+  if (cards.size !== uniqueIds.length) domainError('binder_arrangement_card_missing');
+
+  const existing = await db
+    .prepare(
+      `SELECT slots.binder_page_id, slots.row_index, slots.column_index, pages.position
+       FROM binder_slots slots JOIN binder_pages pages ON pages.id = slots.binder_page_id
+       WHERE pages.binder_version_id = ?1 AND slots.card_id IS NULL
+       ORDER BY pages.position, slots.row_index, slots.column_index LIMIT ?2`,
+    )
+    .bind(versionId, cardIds.length)
+    .all<SlotRow & { position: number }>();
+  const perPage = version.rows * version.columns;
+  const missingSlots = Math.max(0, cardIds.length - existing.results.length);
+  const pagesNeeded = Math.ceil(missingSlots / perPage);
+  if (version.page_count + pagesNeeded > MAX_BINDER_PAGES) domainError('binder_page_limit_reached');
+
+  const newPages = Array.from({ length: pagesNeeded }, (_value, index) => ({
+    id: newId('page'),
+    position: version.page_count + index,
+  }));
+  const locations = existing.results.map((slot) => ({
+    pageId: slot.binder_page_id,
+    row: slot.row_index,
+    column: slot.column_index,
+    position: slot.position,
+  }));
+  for (const page of newPages) {
+    for (let row = 0; row < version.rows; row += 1) {
+      for (let column = 0; column < version.columns; column += 1) {
+        locations.push({ pageId: page.id, row, column, position: page.position });
+      }
+    }
+  }
+  const assignments = cardIds.map((cardId, index) => ({ ...locations[index], cardId }));
+  if (assignments.some((assignment) => !assignment.pageId))
+    domainError('binder_slot_out_of_bounds');
+
+  const statements: D1PreparedStatement[] = [];
+  if (newPages.length) {
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO binder_pages (id, binder_version_id, position)
+           SELECT json_extract(value, '$.id'), ?1,
+             CAST(json_extract(value, '$.position') AS INTEGER)
+           FROM json_each(?2)`,
+        )
+        .bind(versionId, JSON.stringify(newPages)),
+      db
+        .prepare(
+          `WITH RECURSIVE
+            rows(value) AS (
+              SELECT 0 UNION ALL SELECT value + 1 FROM rows WHERE value + 1 < ?2
+            ),
+            columns(value) AS (
+              SELECT 0 UNION ALL SELECT value + 1 FROM columns WHERE value + 1 < ?3
+            )
+           INSERT INTO binder_slots (binder_page_id, row_index, column_index, card_id)
+           SELECT json_extract(page.value, '$.id'), rows.value, columns.value, NULL
+           FROM json_each(?1) page CROSS JOIN rows CROSS JOIN columns`,
+        )
+        .bind(JSON.stringify(newPages), version.rows, version.columns),
+    );
+  }
+  statements.push(
+    db
+      .prepare(
+        `WITH assignments AS (
+          SELECT json_extract(value, '$.pageId') AS page_id,
+            CAST(json_extract(value, '$.row') AS INTEGER) AS row_index,
+            CAST(json_extract(value, '$.column') AS INTEGER) AS column_index,
+            json_extract(value, '$.cardId') AS card_id
+          FROM json_each(?1)
+         )
+         UPDATE binder_slots
+         SET card_id = (
+           SELECT card_id FROM assignments
+           WHERE page_id = binder_slots.binder_page_id
+             AND row_index = binder_slots.row_index
+             AND column_index = binder_slots.column_index
+         )
+         WHERE EXISTS (
+           SELECT 1 FROM assignments
+           WHERE page_id = binder_slots.binder_page_id
+             AND row_index = binder_slots.row_index
+             AND column_index = binder_slots.column_index
+         )`,
+      )
+      .bind(JSON.stringify(assignments)),
+    ...revisionStatements(db, version, nowSeconds()),
+  );
+  await runVersionBatch(db, ownerId, versionId, version.revision, false, statements);
+  const firstPage = assignments[0]?.position ?? 0;
+  return {
+    binder: await mutationResult(db, ownerId, versionId, [firstPage]),
+    added: cardIds.length,
+  };
 }
 
 export async function cloneBinderVersion(

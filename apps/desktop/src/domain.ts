@@ -120,6 +120,10 @@ export function pairingPageUrl(cloudBaseUrl: string): string {
   return url.toString();
 }
 
+export function redactedMcpConfigSnippet(value: string): string {
+  return value.replace(/(Authorization\s*=\s*"Bearer\s+)[^"]+("\s*\})/u, '$1••••••••$2');
+}
+
 function validateCapture(type: string, bytes: number): void {
   if (!allowedCaptureTypes.has(type)) {
     throw new Error('Choose a JPEG, PNG, WebP, or HEIC image.');

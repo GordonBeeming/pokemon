@@ -25,7 +25,7 @@ const port = await new Promise((resolve, reject) => {
 const base = `http://127.0.0.1:${port}`;
 const run = (args) => exec(wrangler, args, { cwd: app });
 const d1 = (command) =>
-  run(['d1', 'execute', 'pokedex-local', '--local', '--persist-to', persist, '--command', command]);
+  run(['d1', 'execute', 'DB', '--local', '--persist-to', persist, '--command', command]);
 let worker;
 let workerOutput = '';
 
@@ -74,7 +74,7 @@ async function completedWorkflow(workflowId, cookie, allowReauthentication = fal
 }
 
 try {
-  await run(['d1', 'migrations', 'apply', 'pokedex-local', '--local', '--persist-to', persist]);
+  await run(['d1', 'migrations', 'apply', 'DB', '--local', '--persist-to', persist]);
   await d1(
     `INSERT INTO users (id,label,created_at) VALUES ('owner','Owner',1);
      INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,is_custom,is_active,created_at,updated_at)
