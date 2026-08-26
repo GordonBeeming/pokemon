@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,6 +11,8 @@ import { fileURLToPath } from 'node:url';
 const exec = promisify(execFile);
 const app = fileURLToPath(new URL('..', import.meta.url));
 const persist = await mkdtemp(join(tmpdir(), 'pokedex-backup-roundtrip-'));
+const assets = join(persist, 'assets');
+await mkdir(assets);
 const wrangler = join(app, 'node_modules/.bin/wrangler');
 const port = await new Promise((resolve, reject) => {
   const server = createServer();
@@ -30,7 +32,9 @@ let worker;
 let workerOutput = '';
 
 async function waitForWorker() {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    if (worker.exitCode !== null)
+      throw new Error(`local worker exited before becoming live:\n${workerOutput}`);
     try {
       const response = await fetch(`${base}/api/live`);
       if (response.ok) return;
@@ -108,6 +112,8 @@ try {
       '--local',
       '--persist-to',
       persist,
+      '--assets',
+      assets,
       '--port',
       String(port),
       '--var',
