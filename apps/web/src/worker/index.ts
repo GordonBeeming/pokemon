@@ -10,7 +10,7 @@ import { applySecurityHeaders } from './lib/security-headers';
 import { latestFullEnglishCatalogueSync } from './lib/catalogue';
 import type { AuthVars } from './lib/types';
 export { BackupWorkflow } from './workflows/backup';
-export { CatalogueSyncWorkflow } from './workflows/catalogue';
+export { CatalogueFetcher, CatalogueSyncWorkflow } from './workflows/catalogue';
 export { FxSyncWorkflow } from './workflows/fx';
 export { PriceSyncWorkflow } from './workflows/pricing';
 

@@ -22,10 +22,14 @@
     },
   ],
   "durable_objects": {
-    "bindings": [{ "name": "AUTH_COORDINATOR", "class_name": "AuthCoordinator" }],
+    "bindings": [
+      { "name": "AUTH_COORDINATOR", "class_name": "AuthCoordinator" },
+      { "name": "CATALOGUE_FETCHER", "class_name": "CatalogueFetcher" },
+    ],
   },
   "exports": {
     "AuthCoordinator": { "type": "durable-object", "storage": "sqlite" },
+    "CatalogueFetcher": { "type": "durable-object", "storage": "sqlite" },
   },
   "r2_buckets": [{ "binding": "ART", "bucket_name": "pokedex-art" }],
   "workflows": [

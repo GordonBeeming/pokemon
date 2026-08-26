@@ -1,4 +1,9 @@
-import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
+import {
+  DurableObject,
+  WorkflowEntrypoint,
+  type WorkflowEvent,
+  type WorkflowStep,
+} from 'cloudflare:workers';
 import { languageSchema, type LanguageCode } from '@pokedex/shared';
 import { z } from 'zod';
 import {
@@ -13,7 +18,7 @@ import {
 import { nowSeconds } from '../lib/db';
 import { describeError, logInfo } from '../lib/log';
 import { recordWorkflowFailure } from '../lib/workflow-failure';
-import { catalogueRequestChunks } from './catalogue-batching';
+import { CATALOGUE_FETCH_CHUNK_SIZE, catalogueRequestChunks } from './catalogue-batching';
 
 const LIST_MAX_BYTES = 25 * 1024 * 1024;
 const DETAIL_MAX_BYTES = 2 * 1024 * 1024;
@@ -30,6 +35,10 @@ const cardBriefsSchema = z
 const setSchema = z
   .object({ id: z.string().trim().min(1), releaseDate: z.string().date().nullable().optional() })
   .passthrough();
+const batchIdsSchema = z
+  .array(z.string().trim().min(1).max(256))
+  .min(1)
+  .max(CATALOGUE_FETCH_CHUNK_SIZE);
 const importedCardsSchema = z.array(
   z
     .object({
@@ -119,9 +128,50 @@ function scheduledLanguage(event: Readonly<WorkflowEvent<CatalogueWorkflowPayloa
   return catalogueSyncLanguage(event.payload.language);
 }
 
+interface SetReleaseDate {
+  id: string;
+  releaseDate: string | null;
+}
+
+interface CatalogueFetcherRpc {
+  fetchCards(language: string, ids: string[]): Promise<ImportedCard[]>;
+  fetchSets(language: string, ids: string[]): Promise<SetReleaseDate[]>;
+}
+
+export class CatalogueFetcher extends DurableObject<CloudflareEnv> {
+  async fetchCards(languageInput: string, idsInput: string[]): Promise<ImportedCard[]> {
+    const language = languageSchema.parse(languageInput);
+    const ids = batchIdsSchema.parse(idsInput);
+    const values = await mapConcurrent(ids, OUTBOUND_CONCURRENCY, (id) =>
+      fetchTcgdex(
+        `${encodeURIComponent(language)}/cards/${encodeURIComponent(id)}`,
+        DETAIL_MAX_BYTES,
+      ),
+    );
+    const results = await Promise.all(values.map((value) => transformTcgdexCard(value, language)));
+    return results.filter((card): card is ImportedCard => card !== null);
+  }
+
+  async fetchSets(languageInput: string, idsInput: string[]): Promise<SetReleaseDate[]> {
+    const language = languageSchema.parse(languageInput);
+    const ids = batchIdsSchema.parse(idsInput);
+    return mapConcurrent(ids, OUTBOUND_CONCURRENCY, async (id) => {
+      const parsed = setSchema.safeParse(
+        await fetchTcgdex(
+          `${encodeURIComponent(language)}/sets/${encodeURIComponent(id)}`,
+          DETAIL_MAX_BYTES,
+        ),
+      );
+      if (!parsed.success) throw new Error('tcgdex_set_invalid');
+      return { id: parsed.data.id, releaseDate: parsed.data.releaseDate ?? null };
+    });
+  }
+}
+
 async function fetchLanguageCards(
   language: LanguageCode,
   step: WorkflowStep,
+  fetcher: CatalogueFetcherRpc,
 ): Promise<ImportedCard[]> {
   const briefs = await step.do(`list-${language}-cards`, FETCH_STEP_CONFIG, async () => {
     const parsed = cardBriefsSchema.safeParse(
@@ -132,42 +182,19 @@ async function fetchLanguageCards(
   });
   const cards: ImportedCard[] = [];
   for (const [page, ids] of catalogueRequestChunks(briefs).entries()) {
-    const transformed = await step.do(`detail-${language}-${page}`, FETCH_STEP_CONFIG, async () => {
-      const values = await mapConcurrent(ids, OUTBOUND_CONCURRENCY, (id) =>
-        fetchTcgdex(
-          `${encodeURIComponent(language)}/cards/${encodeURIComponent(id)}`,
-          DETAIL_MAX_BYTES,
-        ),
-      );
-      const results = await Promise.all(
-        values.map((value) => transformTcgdexCard(value, language)),
-      );
-      return results.filter((card): card is ImportedCard => card !== null);
-    });
+    const transformed = await step.do(`detail-${language}-${page}`, FETCH_STEP_CONFIG, () =>
+      fetcher.fetchCards(language, ids),
+    );
     cards.push(...transformed);
-    // Free-plan external subrequests are capped per Worker invocation, not per
-    // step. Sleeping yields the Workflow so the next fetch batch resumes with
-    // a fresh invocation budget.
-    await step.sleep(`yield-after-detail-${language}-${page}`, 1);
   }
 
   const setIds = [...new Set(cards.map((card) => card.setId))].sort();
   const releaseDates = new Map<string, string | null>();
   for (const [page, ids] of catalogueRequestChunks(setIds).entries()) {
-    const setDates = await step.do(`sets-${language}-${page}`, FETCH_STEP_CONFIG, async () =>
-      mapConcurrent(ids, OUTBOUND_CONCURRENCY, async (id) => {
-        const parsed = setSchema.safeParse(
-          await fetchTcgdex(
-            `${encodeURIComponent(language)}/sets/${encodeURIComponent(id)}`,
-            DETAIL_MAX_BYTES,
-          ),
-        );
-        if (!parsed.success) throw new Error('tcgdex_set_invalid');
-        return { id: parsed.data.id, releaseDate: parsed.data.releaseDate ?? null };
-      }),
+    const setDates = await step.do(`sets-${language}-${page}`, FETCH_STEP_CONFIG, () =>
+      fetcher.fetchSets(language, ids),
     );
     for (const set of setDates) releaseDates.set(set.id, set.releaseDate);
-    await step.sleep(`yield-after-sets-${language}-${page}`, 1);
   }
   return Promise.all(
     cards.map((card) => setImportedCardReleaseDate(card, releaseDates.get(card.setId) ?? null)),
@@ -195,6 +222,7 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
     const startedAt = Date.now();
     let currentStep = 'begin-catalogue-run';
     try {
+      const fetcher = this.env.CATALOGUE_FETCHER.getByName(`tcgdex-${language}`);
       await step.do('begin-catalogue-run', async () =>
         beginStagedCatalogueRun(this.env.DB, language, {
           runId,
@@ -213,7 +241,7 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
               throw new Error('catalogue_stage_invalid');
             return parsed.data;
           })
-        : await fetchLanguageCards(language, step);
+        : await fetchLanguageCards(language, step, fetcher);
 
       for (let offset = 0; offset < cards.length; offset += CATALOGUE_STAGE_CHUNK_SIZE) {
         const page = Math.floor(offset / CATALOGUE_STAGE_CHUNK_SIZE);
