@@ -73,7 +73,7 @@ function DetailPanel({
   pending: boolean;
   pokedexNumber: number | null;
   representativePending: boolean;
-  save: (quantity: number, notes: string | null) => void;
+  save: (quantity: number, notes: string | null) => Promise<boolean>;
   addOne: () => void;
   useAsRepresentative: () => void;
   previous: () => void;
@@ -89,12 +89,70 @@ function DetailPanel({
 }): ReactElement {
   const [quantity, setQuantity] = useState(card.collection?.quantity ?? 0);
   const [notes, setNotes] = useState(card.collection?.notes ?? '');
+  const [saveError, setSaveError] = useState<string | null>(null);
   const dialog = useRef<HTMLElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
+  const saveRef = useRef(save);
+  const activeSave = useRef<Promise<boolean> | null>(null);
+  const failedDraft = useRef<string | null>(null);
+  const savedQuantity = card.collection?.quantity ?? 0;
+  const savedNotes = card.collection?.notes ?? '';
+  const normalizedNotes = notes.trim();
+  const draftKey = `${quantity}\u0000${normalizedNotes}`;
+  const savedKey = `${savedQuantity}\u0000${savedNotes}`;
+  const dirty = draftKey !== savedKey;
+  saveRef.current = save;
   useEffect(() => {
-    setQuantity(card.collection?.quantity ?? 0);
-    setNotes(card.collection?.notes ?? '');
+    setQuantity(savedQuantity);
+    setNotes(savedNotes);
+    setSaveError(null);
+    failedDraft.current = null;
   }, [card]);
+  const startSave = useCallback(
+    (force = false): Promise<boolean> => {
+      if (!dirty) return Promise.resolve(true);
+      if (activeSave.current) return activeSave.current;
+      if (pending || (!force && failedDraft.current === draftKey)) return Promise.resolve(false);
+      setSaveError(null);
+      const attempt = saveRef
+        .current(quantity, normalizedNotes || null)
+        .then((saved) => {
+          if (saved) {
+            failedDraft.current = null;
+            setSaveError(null);
+          } else {
+            failedDraft.current = draftKey;
+            setSaveError('Changes could not be saved.');
+          }
+          return saved;
+        })
+        .finally(() => {
+          activeSave.current = null;
+        });
+      activeSave.current = attempt;
+      return attempt;
+    },
+    [dirty, draftKey, normalizedNotes, pending, quantity],
+  );
+  const leave = useCallback(
+    (action: () => void): void => {
+      void (async () => {
+        let saved = true;
+        if (activeSave.current) saved = await activeSave.current;
+        else if (dirty) saved = await startSave(true);
+        else if (pending) return;
+        if (saved) action();
+      })();
+    },
+    [dirty, pending, startSave],
+  );
+  useEffect(() => {
+    if (!dirty || pending || failedDraft.current === draftKey) return;
+    const timer = window.setTimeout(() => {
+      void startSave();
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [dirty, draftKey, pending, startSave]);
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -102,7 +160,7 @@ function DetailPanel({
     const keydown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
         event.preventDefault();
-        close();
+        leave(close);
         return;
       }
       const target = event.target;
@@ -114,12 +172,12 @@ function DetailPanel({
       if (editing && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) return;
       if (event.key === 'ArrowLeft') {
         event.preventDefault();
-        previous();
+        leave(previous);
         return;
       }
       if (event.key === 'ArrowRight') {
         event.preventDefault();
-        next();
+        leave(next);
         return;
       }
       if (event.key !== 'Tab' || !dialog.current) return;
@@ -144,7 +202,7 @@ function DetailPanel({
       document.body.style.overflow = previousOverflow;
       removeEventListener('keydown', keydown);
     };
-  }, [close, next, previous]);
+  }, [close, leave, next, previous]);
   return (
     <aside
       className="card-lightbox"
@@ -153,14 +211,14 @@ function DetailPanel({
       aria-labelledby="card-detail-heading"
       ref={dialog}
       onMouseDown={(event) => {
-        if (event.target === event.currentTarget) close();
+        if (event.target === event.currentTarget) leave(close);
       }}
     >
       <button
         className="lightbox-nav previous"
         type="button"
         aria-label="Previous card"
-        onClick={previous}
+        onClick={() => leave(previous)}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="m14.5 5-7 7 7 7" />
@@ -183,7 +241,7 @@ function DetailPanel({
               type="button"
               aria-label="Close card detail"
               ref={closeButton}
-              onClick={close}
+              onClick={() => leave(close)}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="m7 7 10 10M17 7 7 17" />
@@ -216,6 +274,7 @@ function DetailPanel({
               onChange={(event) =>
                 setQuantity(Math.min(9999, Math.max(0, Number(event.target.value))))
               }
+              onBlur={() => void startSave(true)}
             />
           </label>
           <label className="notes-field">
@@ -225,22 +284,39 @@ function DetailPanel({
               maxLength={2000}
               disabled={pending}
               onChange={(event) => setNotes(event.target.value)}
+              onBlur={() => void startSave(true)}
             />
             <small>{notes.length.toLocaleString('en-AU')} of 2,000 characters</small>
           </label>
+          <div
+            className={
+              saveError && failedDraft.current === draftKey
+                ? 'autosave-status error'
+                : 'autosave-status'
+            }
+            role="status"
+            aria-live="polite"
+          >
+            {saveError && failedDraft.current === draftKey ? (
+              <>
+                <span>{saveError}</span>
+                <button className="text-button" type="button" onClick={() => void startSave(true)}>
+                  Try again
+                </button>
+              </>
+            ) : pending ? (
+              'Saving changes…'
+            ) : dirty ? (
+              'Changes save automatically.'
+            ) : (
+              'Saved.'
+            )}
+          </div>
           <div className="detail-actions">
-            <button
-              className="quiet-button tone-accent"
-              type="button"
-              disabled={pending}
-              onClick={() => save(quantity, notes.trim() || null)}
-            >
-              {pending ? 'Saving…' : 'Save collection state'}
-            </button>
             <button
               className="quiet-button"
               type="button"
-              disabled={pending || (card.collection?.quantity ?? 0) >= 9999}
+              disabled={pending || dirty || (card.collection?.quantity ?? 0) >= 9999}
               onClick={addOne}
             >
               Add one copy
@@ -288,7 +364,12 @@ function DetailPanel({
           </section>
         </div>
       </div>
-      <button className="lightbox-nav next" type="button" aria-label="Next card" onClick={next}>
+      <button
+        className="lightbox-nav next"
+        type="button"
+        aria-label="Next card"
+        onClick={() => leave(next)}
+      >
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="m9.5 5 7 7-7 7" />
         </svg>
@@ -306,6 +387,7 @@ export function CatalogueView({
   retryIndexing,
   onBackToNational,
   onBackToSets,
+  onShowAll,
   onNotice,
 }: {
   initialParams: URLSearchParams;
@@ -316,6 +398,7 @@ export function CatalogueView({
   retryIndexing: () => void;
   onBackToNational: () => void;
   onBackToSets: () => void;
+  onShowAll: () => void;
   onNotice: (notice: Notice) => void;
 }): ReactElement {
   const [query, setQuery] = useState(initialParams.get('q') ?? '');
@@ -346,6 +429,7 @@ export function CatalogueView({
   const speciesName = initialParams.get('species')?.trim() || null;
   const setId = initialParams.get('setId')?.trim() || null;
   const setName = initialParams.get('setName')?.trim() || cards[0]?.setName || null;
+  const contextualCatalogue = Boolean(speciesName || setId || initialParams.get('language'));
   const pokedexNumber =
     Number.isInteger(requestedPokedexNumber) &&
     requestedPokedexNumber >= 1 &&
@@ -532,8 +616,8 @@ export function CatalogueView({
     );
   }
 
-  async function save(quantity: number, notes: string | null): Promise<void> {
-    if (!detail) return;
+  async function save(quantity: number, notes: string | null): Promise<boolean> {
+    if (!detail) return false;
     setSaving(true);
     onNotice(null);
     try {
@@ -553,12 +637,13 @@ export function CatalogueView({
               notes,
             });
       applyState(state);
-      onNotice({ kind: 'success', message: 'Collection state saved.' });
+      return true;
     } catch (error) {
       const message = userMessage(error);
       if (message) onNotice({ kind: 'error', message });
       if (error instanceof ApiError && error.code === 'collection_revision_conflict')
         await openCard(detail.id);
+      return false;
     } finally {
       setSaving(false);
     }
@@ -658,6 +743,11 @@ export function CatalogueView({
           ) : setId ? (
             <button className="text-button back-link" type="button" onClick={onBackToSets}>
               Back to Set checklists
+            </button>
+          ) : null}
+          {contextualCatalogue ? (
+            <button className="text-button back-link" type="button" onClick={onShowAll}>
+              Show full catalogue
             </button>
           ) : null}
           <h1>
@@ -837,7 +927,7 @@ export function CatalogueView({
           pending={saving}
           pokedexNumber={pokedexNumber}
           representativePending={representativePending}
-          save={(quantity, notes) => void save(quantity, notes)}
+          save={save}
           addOne={() => void addOne()}
           useAsRepresentative={() => void useAsRepresentative()}
           previous={previousCard}

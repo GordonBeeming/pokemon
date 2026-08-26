@@ -328,6 +328,7 @@ export function App(): ReactElement {
         }}
         onBackToNational={() => navigate('species')}
         onBackToSets={() => navigate('sets')}
+        onShowAll={() => navigate('catalogue')}
         onNotice={setNotice}
       />
     );

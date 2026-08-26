@@ -76,6 +76,7 @@ describe('accessible frontend structure', () => {
         retryIndexing={() => undefined}
         onBackToNational={() => undefined}
         onBackToSets={() => undefined}
+        onShowAll={() => undefined}
         onNotice={() => undefined}
       />,
     );
@@ -98,6 +99,7 @@ describe('accessible frontend structure', () => {
         retryIndexing={() => undefined}
         onBackToNational={() => undefined}
         onBackToSets={() => undefined}
+        onShowAll={() => undefined}
         onNotice={() => undefined}
       />,
     );
@@ -117,10 +119,12 @@ describe('accessible frontend structure', () => {
         retryIndexing={() => undefined}
         onBackToNational={() => undefined}
         onBackToSets={() => undefined}
+        onShowAll={() => undefined}
         onNotice={() => undefined}
       />,
     );
     expect(html).toContain('Back to Set checklists');
+    expect(html).toContain('Show full catalogue');
     expect(html).toContain('151 card gallery');
     expect(html).toContain('Browsing 151 (sv03.5)');
     expect(html).not.toContain('pagination-actions');

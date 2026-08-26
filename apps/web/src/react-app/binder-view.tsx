@@ -15,7 +15,6 @@ import {
 import { userMessage, type Notice } from './ui';
 import { CardArt } from './card-art';
 import { CardTile } from './card-tile';
-import { Pagination } from './pagination';
 import { NATIONAL_POKEDEX } from './national-pokedex';
 
 const binderLayoutOptions: Array<{ value: BinderLayout['kind']; label: string }> = [
@@ -189,17 +188,43 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
   const [cards, setCards] = useState<CatalogueCardView[]>([]);
   const [cardTotal, setCardTotal] = useState(0);
   const [knownCards, setKnownCards] = useState<Map<string, CatalogueCardView>>(new Map());
-  const [cardId, setCardId] = useState('');
+  const [selectedSlot, setSelectedSlot] = useState<BinderSlotLocation | null>(null);
+  const [pageMenuOpen, setPageMenuOpen] = useState(false);
+  const [pageDraft, setPageDraft] = useState('1');
   const [pending, setPending] = useState(false);
   const [plannerStatus, setPlannerStatus] = useState('');
   const [moveSource, setMoveSource] = useState<BinderSlotLocation | null>(null);
   const generation = useRef(0);
   const controller = useRef<AbortController | null>(null);
   const fullPokedexController = useRef<AbortController | null>(null);
+  const pageMenu = useRef<HTMLDivElement | null>(null);
+  const pageMenuButton = useRef<HTMLButtonElement | null>(null);
 
   const version = binder?.version ?? null;
   const currentPage = binder?.pages[0] ?? null;
   const editable = version?.status !== 'archived';
+
+  useEffect(() => setPageDraft(String(page + 1)), [page]);
+
+  useEffect(() => {
+    if (!pageMenuOpen) return;
+    const dismiss = (event: PointerEvent): void => {
+      if (pageMenu.current?.contains(event.target as Node)) return;
+      setPageMenuOpen(false);
+    };
+    const keydown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setPageMenuOpen(false);
+        pageMenuButton.current?.focus();
+      }
+    };
+    addEventListener('pointerdown', dismiss);
+    addEventListener('keydown', keydown);
+    return () => {
+      removeEventListener('pointerdown', dismiss);
+      removeEventListener('keydown', keydown);
+    };
+  }, [pageMenuOpen]);
 
   async function loadVersion(versionId: string, nextPage: number): Promise<void> {
     const currentGeneration = ++generation.current;
@@ -228,6 +253,8 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
         return updated;
       });
       setPage(nextPage);
+      setSelectedSlot(null);
+      setPageMenuOpen(false);
       setMoveSource(null);
       setPlannerStatus(`Page ${nextPage + 1} loaded.`);
     } catch (error) {
@@ -287,8 +314,8 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
   async function mutate(
     action: () => Promise<BinderMutationResult>,
     success: string,
-  ): Promise<void> {
-    if (!version) return;
+  ): Promise<boolean> {
+    if (!version) return false;
     setPending(true);
     onNotice(null);
     try {
@@ -296,11 +323,13 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
       await mergeMutation(result);
       setPlannerStatus(success);
       onNotice({ kind: 'success', message: success });
+      return true;
     } catch (error) {
       const message = userMessage(error);
       if (message) onNotice({ kind: 'error', message });
       if (error instanceof ApiError && error.code === 'binder_revision_conflict')
         await loadVersion(version.id, page);
+      return false;
     } finally {
       setPending(false);
     }
@@ -334,6 +363,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
   }
 
   async function searchCards(): Promise<void> {
+    if (!selectedSlot) return;
     const params = new URLSearchParams({ q: cardQuery, limit: '50', offset: '0' });
     try {
       const result = await api.search(params);
@@ -344,7 +374,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
         for (const card of result.cards) updated.set(card.id, card);
         return updated;
       });
-      setPlannerStatus(`${result.cards.length} card options loaded.`);
+      setPlannerStatus(`${result.cards.length} card options found for this pocket.`);
     } catch (error) {
       const message = userMessage(error);
       if (message) onNotice({ kind: 'error', message });
@@ -465,11 +495,29 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
 
   async function swap(source: BinderSlotLocation, target: BinderSlotLocation): Promise<void> {
     if (!version) return;
-    await mutate(
+    const placed = await mutate(
       () => api.swapSlots(version.id, { expectedRevision: version.revision, source, target }),
       'Cards moved.',
     );
+    if (!placed) return;
     setMoveSource(null);
+  }
+
+  async function placeCard(card: CatalogueCardView): Promise<void> {
+    if (!version || !selectedSlot) return;
+    const placed = await mutate(
+      () =>
+        api.setSlot(version.id, {
+          expectedRevision: version.revision,
+          ...selectedSlot,
+          cardId: card.id,
+        }),
+      `${card.name} placed in pocket ${selectedSlot.row + 1}:${selectedSlot.column + 1}.`,
+    );
+    if (!placed) return;
+    setSelectedSlot(null);
+    setCards([]);
+    setCardQuery('');
   }
 
   function slotAction(location: BinderSlotLocation, occupied: boolean): void {
@@ -478,23 +526,22 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
       void swap(moveSource, location);
       return;
     }
-    if (occupied) {
-      setMoveSource(location);
-      setPlannerStatus(
-        `Picked up the card from row ${location.row + 1}, column ${location.column + 1}. Choose a destination or press Escape to cancel.`,
-      );
-      return;
-    }
-    if (cardId)
-      void mutate(
-        () =>
-          api.setSlot(version.id, {
-            expectedRevision: version.revision,
-            ...location,
-            cardId,
-          }),
-        'Card placed.',
-      );
+    setSelectedSlot(location);
+    setCards([]);
+    setCardQuery('');
+    setPlannerStatus(
+      `${occupied ? 'Pocket' : 'Empty pocket'} ${location.row + 1}:${location.column + 1} selected. Search for its card.`,
+    );
+  }
+
+  function goToDraftPage(): void {
+    if (!version) return;
+    const requested = Number.parseInt(pageDraft, 10);
+    const nextPage = Number.isFinite(requested)
+      ? Math.min(version.pageCount, Math.max(1, requested)) - 1
+      : page;
+    setPageDraft(String(nextPage + 1));
+    if (nextPage !== page) void loadVersion(version.id, nextPage);
   }
 
   if (!binder)
@@ -556,6 +603,15 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
       </>
     );
 
+  const selectedPocket = selectedSlot
+    ? (currentPage?.slots.find(
+        (slot) => slot.row === selectedSlot.row && slot.column === selectedSlot.column,
+      ) ?? null)
+    : null;
+  const selectedPocketCard = selectedPocket?.cardId
+    ? (knownCards.get(selectedPocket.cardId) ?? null)
+    : null;
+
   return (
     <>
       <header className="page-heading">
@@ -566,17 +622,17 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
             onClick={() => {
               setBinder(null);
               setCards([]);
-              setCardId('');
+              setSelectedSlot(null);
             }}
           >
             Back to all binders
           </button>
           <h1>{binders.find((item) => item.id === version?.binderId)?.name ?? 'Binder plan'}</h1>
-          <p>Move cards with drag and drop or the same pick-and-place flow from the keyboard.</p>
+          <p>Choose a pocket, find its card, then arrange the page to match your real binder.</p>
         </div>
         <div className="header-actions">
           <button
-            className="quiet-button tone-accent"
+            className="quiet-button binder-bulk-add"
             type="button"
             disabled={!version || pending}
             onClick={() => void addFullPokedex()}
@@ -597,169 +653,295 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
           </button>
         </div>
       </header>
-      <div className="planner-toolbar">
-        <form
-          className="card-picker"
-          role="search"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void searchCards();
-          }}
-        >
-          <label>
-            Find card to place
-            <input
-              value={cardQuery}
-              maxLength={200}
-              disabled={!editable || pending}
-              onChange={(event) => setCardQuery(event.target.value)}
-            />
-          </label>
-          <button className="quiet-button" type="submit" disabled={!editable || pending}>
-            Find cards
-          </button>
-        </form>
-      </div>
-      <section
-        className="binder-card-tray"
-        aria-label="Cards available to place"
-        hidden={!editable}
-      >
-        <div>
-          <strong>{cards.length ? 'Choose a card, then choose a pocket' : 'Card tray'}</strong>
-          <span>
-            {cards.length
-              ? `${cards.length} search results`
-              : 'Search above to load visual card choices.'}
-          </span>
-        </div>
-        {cards.length ? (
-          <>
-            <div className="binder-card-options">
-              {cards.map((card) => (
-                <CardTile
-                  className={cardId === card.id ? 'binder-tray-card selected' : 'binder-tray-card'}
-                  key={card.id}
-                  aria-pressed={cardId === card.id}
-                  onClick={() => setCardId(card.id)}
-                  art={<BinderCardArt card={card} />}
-                  title={card.name}
-                  subtitle={`${card.setName} · ${card.number}`}
-                  quantity={card.collection?.quantity ?? 0}
-                />
-              ))}
+      {selectedSlot ? (
+        <section className="slot-picker-panel" aria-labelledby="slot-picker-heading">
+          <div className="slot-picker-heading">
+            <div>
+              <h2 id="slot-picker-heading">
+                Choose a card for pocket {selectedSlot.row + 1}:{selectedSlot.column + 1}
+              </h2>
+              <p>
+                Search Pokémon, set, number, rarity, or artist. Choosing a result places it
+                immediately.
+              </p>
             </div>
             <button
-              className="quiet-button tone-accent"
+              className="icon-button"
               type="button"
-              disabled={pending || cardTotal === 0 || cardTotal > 2000}
-              onClick={() => void addAllSearchResults()}
+              aria-label="Close pocket editor"
+              onClick={() => {
+                setSelectedSlot(null);
+                setCards([]);
+                setCardQuery('');
+              }}
             >
-              {cardTotal > 2000
-                ? `${cardTotal.toLocaleString('en-AU')} results exceed binder capacity`
-                : `Add all ${cardTotal.toLocaleString('en-AU')} in this order`}
-            </button>
-          </>
-        ) : null}
-      </section>
-      <p className="result-announcement" role="status" aria-live="polite" aria-atomic="true">
-        {plannerStatus}
-      </p>
-      <Pagination
-        page={page}
-        totalPages={version?.pageCount ?? 1}
-        pending={pending}
-        label="Binder pages"
-        onPage={(nextPage) => version && void loadVersion(version.id, nextPage)}
-      />
-      <div className="header-actions page-actions">
-        <button
-          className="quiet-button"
-          type="button"
-          disabled={!editable || pending}
-          onClick={() =>
-            version &&
-            void mutate(() => api.addPage(version.id, version.revision), 'Binder page added.')
-          }
-        >
-          Add page
-        </button>
-        <details className="page-tools">
-          <summary>More page actions</summary>
-          <div>
-            <button
-              className="quiet-button"
-              type="button"
-              disabled={!editable || pending || !currentPage || (version?.pageCount ?? 0) <= 1}
-              onClick={() =>
-                version &&
-                currentPage &&
-                void mutate(
-                  () => api.deletePage(version.id, currentPage.id, version.revision),
-                  'Binder page deleted.',
-                )
-              }
-            >
-              Delete page
-            </button>
-            <button
-              className="quiet-button"
-              type="button"
-              disabled={!editable || pending || page === 0}
-              onClick={() =>
-                version &&
-                void allPageIds().then((ids) => {
-                  const before = ids[page - 1];
-                  const current = ids[page];
-                  if (!before || !current) return;
-                  ids[page - 1] = current;
-                  ids[page] = before;
-                  return mutate(
-                    () => api.reorderPages(version.id, ids, version.revision),
-                    'Page moved earlier.',
-                  );
-                })
-              }
-            >
-              Move page earlier
-            </button>
-            <button
-              className="quiet-button"
-              type="button"
-              disabled={!editable || pending || !version || page + 1 >= version.pageCount}
-              onClick={() =>
-                version &&
-                void allPageIds().then((ids) => {
-                  const current = ids[page];
-                  const after = ids[page + 1];
-                  if (!current || !after) return;
-                  ids[page] = after;
-                  ids[page + 1] = current;
-                  return mutate(
-                    () => api.reorderPages(version.id, ids, version.revision),
-                    'Page moved later.',
-                  );
-                })
-              }
-            >
-              Move page later
-            </button>
-            <button
-              className="quiet-button"
-              type="button"
-              disabled={!editable || pending || !version}
-              onClick={() =>
-                version &&
-                void mutate(
-                  () => api.arrangeBinder(version.id, 'set-number', version.revision),
-                  'Cards arranged by set number.',
-                )
-              }
-            >
-              Arrange by set number
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="m7 7 10 10M17 7 7 17" />
+              </svg>
             </button>
           </div>
-        </details>
+          {selectedPocketCard ? (
+            <div className="selected-pocket-summary">
+              <BinderCardArt card={selectedPocketCard} />
+              <span>
+                <strong>{selectedPocketCard.name}</strong>
+                <small>
+                  {selectedPocketCard.setName} · {selectedPocketCard.number}
+                </small>
+              </span>
+              <button
+                className="quiet-button"
+                type="button"
+                disabled={pending}
+                onClick={() => {
+                  setMoveSource(selectedSlot);
+                  setSelectedSlot(null);
+                  setPlannerStatus('Card picked up. Choose its destination pocket.');
+                }}
+              >
+                Move card
+              </button>
+              <button
+                className="quiet-button"
+                type="button"
+                disabled={pending || !version}
+                onClick={() =>
+                  version &&
+                  void mutate(
+                    () =>
+                      api.setSlot(version.id, {
+                        expectedRevision: version.revision,
+                        ...selectedSlot,
+                        cardId: null,
+                      }),
+                    'Pocket cleared.',
+                  ).then((cleared) => {
+                    if (cleared) setSelectedSlot(null);
+                  })
+                }
+              >
+                Clear pocket
+              </button>
+            </div>
+          ) : null}
+          <div className="planner-toolbar">
+            <form
+              className="card-picker"
+              role="search"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void searchCards();
+              }}
+            >
+              <label>
+                Search cards
+                <input
+                  value={cardQuery}
+                  maxLength={200}
+                  autoFocus
+                  placeholder="e.g. Ponyta, Base Set, 60/102, illustrator"
+                  disabled={!editable || pending}
+                  onChange={(event) => setCardQuery(event.target.value)}
+                />
+              </label>
+              <button className="quiet-button" type="submit" disabled={!editable || pending}>
+                Find cards
+              </button>
+            </form>
+          </div>
+          <p className="slot-picker-status" role="status" aria-live="polite">
+            {plannerStatus}
+          </p>
+          <section
+            className="binder-card-tray"
+            aria-label="Cards available to place"
+            hidden={!editable}
+          >
+            <div>
+              <strong>{cards.length ? 'Choose a card' : 'Search results'}</strong>
+              <span>
+                {cards.length
+                  ? `${cards.length} search results`
+                  : 'Search above to load visual card choices for this pocket.'}
+              </span>
+            </div>
+            {cards.length ? (
+              <>
+                <div className="binder-card-options">
+                  {cards.map((card) => (
+                    <CardTile
+                      className="binder-tray-card"
+                      key={card.id}
+                      onClick={() => void placeCard(card)}
+                      art={<BinderCardArt card={card} />}
+                      title={card.name}
+                      subtitle={`${card.setName} · ${card.number}`}
+                      quantity={card.collection?.quantity ?? 0}
+                    />
+                  ))}
+                </div>
+                <button
+                  className="quiet-button tone-accent"
+                  type="button"
+                  disabled={pending || cardTotal === 0 || cardTotal > 2000}
+                  onClick={() => void addAllSearchResults()}
+                >
+                  {cardTotal > 2000
+                    ? `${cardTotal.toLocaleString('en-AU')} results exceed binder capacity`
+                    : `Append all ${cardTotal.toLocaleString('en-AU')} results`}
+                </button>
+              </>
+            ) : null}
+          </section>
+        </section>
+      ) : null}
+      <div className="binder-page-toolbar">
+        <nav className="binder-page-stepper" aria-label="Binder pages">
+          <button
+            className="quiet-button"
+            type="button"
+            disabled={pending || page === 0}
+            onClick={() => version && void loadVersion(version.id, page - 1)}
+          >
+            Previous
+          </button>
+          <label>
+            <span>Page</span>
+            <input
+              type="number"
+              min="1"
+              max={version?.pageCount ?? 1}
+              value={pageDraft}
+              disabled={pending}
+              aria-label="Page number"
+              onChange={(event) => setPageDraft(event.target.value)}
+              onBlur={goToDraftPage}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  goToDraftPage();
+                }
+              }}
+            />
+            <span>of {version?.pageCount ?? 1}</span>
+          </label>
+          <button
+            className="quiet-button"
+            type="button"
+            disabled={pending || !version || page + 1 >= version.pageCount}
+            onClick={() => version && void loadVersion(version.id, page + 1)}
+          >
+            Next
+          </button>
+        </nav>
+        <p className="pocket-prompt" role="status" aria-live="polite">
+          {moveSource
+            ? 'Choose a destination pocket for the card you picked up.'
+            : 'Choose a pocket to add or replace its card.'}
+        </p>
+        <div className="page-management">
+          <button
+            className="quiet-button"
+            type="button"
+            disabled={!editable || pending}
+            onClick={() =>
+              version &&
+              void mutate(() => api.addPage(version.id, version.revision), 'Binder page added.')
+            }
+          >
+            Add page
+          </button>
+          <div className="page-menu" ref={pageMenu}>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="Page actions"
+              aria-expanded={pageMenuOpen}
+              aria-controls="binder-page-actions"
+              ref={pageMenuButton}
+              onClick={() => setPageMenuOpen((open) => !open)}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 12h.01M12 12h.01M19 12h.01" />
+              </svg>
+            </button>
+            {pageMenuOpen ? (
+              <div className="page-menu-popover" id="binder-page-actions" aria-label="Page actions">
+                <button
+                  type="button"
+                  disabled={!editable || pending || page === 0}
+                  onClick={() => {
+                    setPageMenuOpen(false);
+                    if (!version) return;
+                    void allPageIds().then((ids) => {
+                      const before = ids[page - 1];
+                      const current = ids[page];
+                      if (!before || !current) return;
+                      ids[page - 1] = current;
+                      ids[page] = before;
+                      return mutate(
+                        () => api.reorderPages(version.id, ids, version.revision),
+                        'Page moved earlier.',
+                      );
+                    });
+                  }}
+                >
+                  Move page earlier
+                </button>
+                <button
+                  type="button"
+                  disabled={!editable || pending || !version || page + 1 >= version.pageCount}
+                  onClick={() => {
+                    setPageMenuOpen(false);
+                    if (!version) return;
+                    void allPageIds().then((ids) => {
+                      const current = ids[page];
+                      const after = ids[page + 1];
+                      if (!current || !after) return;
+                      ids[page] = after;
+                      ids[page + 1] = current;
+                      return mutate(
+                        () => api.reorderPages(version.id, ids, version.revision),
+                        'Page moved later.',
+                      );
+                    });
+                  }}
+                >
+                  Move page later
+                </button>
+                <button
+                  type="button"
+                  disabled={!editable || pending || !version}
+                  onClick={() => {
+                    setPageMenuOpen(false);
+                    if (version)
+                      void mutate(
+                        () => api.arrangeBinder(version.id, 'set-number', version.revision),
+                        'Cards arranged by set number.',
+                      );
+                  }}
+                >
+                  Arrange by set number
+                </button>
+                <button
+                  className="danger-menu-item"
+                  type="button"
+                  disabled={!editable || pending || !currentPage || (version?.pageCount ?? 0) <= 1}
+                  onClick={() => {
+                    setPageMenuOpen(false);
+                    if (version && currentPage)
+                      void mutate(
+                        () => api.deletePage(version.id, currentPage.id, version.revision),
+                        'Binder page deleted.',
+                      );
+                  }}
+                >
+                  Delete this page
+                </button>
+              </div>
+            ) : null}
+          </div>
+        </div>
       </div>
       <div className="planner-layout">
         <section className="binder-page" aria-label={`Binder page ${page + 1}`}>
@@ -777,14 +959,25 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
                 moveSource?.page === page &&
                 moveSource.row === slot.row &&
                 moveSource.column === slot.column;
+              const selected =
+                selectedSlot?.page === page &&
+                selectedSlot.row === slot.row &&
+                selectedSlot.column === slot.column;
               return (
                 <button
-                  className={moving ? 'binder-slot move-source' : 'binder-slot'}
+                  className={[
+                    'binder-slot',
+                    slot.cardId ? 'occupied' : '',
+                    moving ? 'move-source' : '',
+                    selected ? 'selected-slot' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
                   key={`${slot.row}-${slot.column}`}
                   type="button"
                   disabled={!editable || pending}
                   draggable={slot.cardId !== null && editable}
-                  aria-pressed={moving}
+                  aria-pressed={moving || selected}
                   aria-label={`Page ${page + 1}, row ${slot.row + 1}, column ${slot.column + 1}, ${name ?? 'empty'}`}
                   onDragStart={(event) =>
                     event.dataTransfer.setData('application/json', JSON.stringify(location))
@@ -809,7 +1002,13 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
                   onKeyDown={(event) => {
                     if (event.key === 'Escape') {
                       setMoveSource(null);
+                      setSelectedSlot(null);
                       setPlannerStatus('Card move cancelled.');
+                    }
+                    if (event.key.toLocaleLowerCase('en-AU') === 'm' && slot.cardId) {
+                      event.preventDefault();
+                      setMoveSource(location);
+                      setSelectedSlot(null);
                     }
                     if (event.key === 'Delete' || event.key === 'Backspace') {
                       event.preventDefault();
@@ -838,7 +1037,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
                       </span>
                     </>
                   ) : (
-                    <span>{name ?? `Slot ${slot.row + 1}:${slot.column + 1}`}</span>
+                    <span>{name ?? `Pocket ${slot.row + 1}:${slot.column + 1}`}</span>
                   )}
                 </button>
               );

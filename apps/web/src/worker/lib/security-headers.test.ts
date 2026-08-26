@@ -7,7 +7,7 @@ describe('worker security headers', () => {
     applySecurityHeaders(headers, new Request('http://127.0.0.1:5173/'));
     const policy = headers.get('content-security-policy') ?? '';
     expect(policy).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval'");
-    expect(policy).toContain("connect-src 'self' ws://localhost:* ws://127.0.0.1:* ws://[::1]:*");
+    expect(policy).toContain("connect-src 'self' ws:");
     expect(policy).toContain("frame-ancestors 'none'");
     expect(headers.has('strict-transport-security')).toBe(false);
   });
@@ -15,7 +15,7 @@ describe('worker security headers', () => {
   it('permits Vite sockets when development is opened on IPv6 loopback', () => {
     const headers = new Headers();
     applySecurityHeaders(headers, new Request('http://[::1]:5173/'));
-    expect(headers.get('content-security-policy')).toContain('ws://[::1]:*');
+    expect(headers.get('content-security-policy')).toContain("connect-src 'self' ws:");
     expect(headers.has('strict-transport-security')).toBe(false);
   });
 

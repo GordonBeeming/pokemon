@@ -25,6 +25,9 @@ const apiMocks = vi.hoisted(() => ({
   resolveCards: vi.fn(),
   nationalPokedex: vi.fn(),
   addCardsToBinder: vi.fn(),
+  setSlot: vi.fn(),
+  setCollection: vi.fn(),
+  patchCollectionNotes: vi.fn(),
   startCatalogueSync: vi.fn(),
   nationalPokedexPreviews: vi.fn(),
   catalogueSyncStatus: vi.fn(),
@@ -183,6 +186,7 @@ describe('async frontend announcements', () => {
         retryIndexing={() => undefined}
         onBackToNational={() => undefined}
         onBackToSets={() => undefined}
+        onShowAll={() => undefined}
         onNotice={() => undefined}
       />
     );
@@ -254,6 +258,7 @@ describe('async frontend announcements', () => {
           retryIndexing={() => undefined}
           onBackToNational={() => undefined}
           onBackToSets={() => undefined}
+          onShowAll={() => undefined}
           onNotice={() => undefined}
         />,
       ),
@@ -329,6 +334,13 @@ describe('async frontend announcements', () => {
       notes: null,
     });
     apiMocks.binders.mockResolvedValue([]);
+    apiMocks.setCollection.mockResolvedValue({
+      cardId: 'card-1',
+      quantity: 1,
+      notes: null,
+      revision: 1,
+      updatedAt: '2026-08-26T00:00:00Z',
+    });
     act(() =>
       root.render(
         <CatalogueView
@@ -340,6 +352,7 @@ describe('async frontend announcements', () => {
           retryIndexing={() => undefined}
           onBackToNational={() => undefined}
           onBackToSets={() => undefined}
+          onShowAll={() => undefined}
           onNotice={() => undefined}
         />,
       ),
@@ -348,6 +361,20 @@ describe('async frontend announcements', () => {
     const source = container.querySelector<HTMLButtonElement>('.card-row');
     act(() => source?.click());
     await waitFor(() => container.querySelector('[role="dialog"]') !== null);
+    expect(container.textContent).not.toContain('Save collection state');
+    const quantity = container.querySelector<HTMLInputElement>('input[type="number"]');
+    act(() => {
+      if (!quantity) return;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        quantity,
+        '1',
+      );
+      quantity.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    });
+    expect(apiMocks.setCollection).toHaveBeenCalledOnce();
     const notes = container.querySelector<HTMLTextAreaElement>('textarea');
     act(() => {
       notes?.focus();
@@ -360,6 +387,113 @@ describe('async frontend announcements', () => {
     await settle();
     expect(container.querySelector('[role="dialog"]')).toBeNull();
     expect(document.activeElement).toBe(source);
+  });
+
+  it('keeps failed autosave drafts open and offers an inline retry', async () => {
+    const card = {
+      id: 'card-autosave',
+      name: 'Ponyta',
+      language: 'en',
+      category: 'pokemon',
+      setId: 'base',
+      setName: 'Base Set',
+      number: '60',
+      imageLowUrl: null,
+      imageHighUrl: null,
+      collection: null,
+      price: {
+        amountAud: null,
+        nativeAmount: null,
+        nativeCurrency: null,
+        source: null,
+        sourceCapturedAt: null,
+        fxDate: null,
+      },
+    } as const;
+    apiMocks.search.mockResolvedValue({ ok: true, total: 1, cards: [card], cursor: null });
+    apiMocks.card.mockResolvedValue({
+      ...card,
+      supertype: 'Pokemon',
+      subtype: 'Fire',
+      species: 'Ponyta',
+      rarity: 'Common',
+      artist: 'Artist',
+      source: { provider: 'tcgdex', sourceId: 'base-60', updatedAt: '2026-08-25T00:00:00Z' },
+      notes: null,
+    });
+    apiMocks.binders.mockResolvedValue([]);
+    apiMocks.setCollection
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(new Error('still offline'))
+      .mockResolvedValueOnce({
+        cardId: 'card-autosave',
+        quantity: 1,
+        notes: null,
+        revision: 1,
+        updatedAt: '2026-08-26T00:00:00Z',
+      });
+    act(() =>
+      root.render(
+        <CatalogueView
+          initialParams={new URLSearchParams()}
+          refreshKey={0}
+          indexing={false}
+          indexingError={null}
+          indexingResult={null}
+          retryIndexing={() => undefined}
+          onBackToNational={() => undefined}
+          onBackToSets={() => undefined}
+          onShowAll={() => undefined}
+          onNotice={() => undefined}
+        />,
+      ),
+    );
+    await waitFor(() => container.querySelector('.card-row') !== null);
+    act(() => container.querySelector<HTMLButtonElement>('.card-row')?.click());
+    await waitFor(() => container.querySelector('[role="dialog"]') !== null);
+
+    vi.useFakeTimers();
+    try {
+      const quantity = container.querySelector<HTMLInputElement>('input[type="number"]');
+      if (!quantity) throw new Error('Quantity input did not render.');
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+          quantity,
+          '1',
+        );
+        quantity.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(700);
+      });
+      expect(container.textContent).toContain('Changes could not be saved.');
+
+      await act(async () => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(apiMocks.setCollection).toHaveBeenCalledTimes(2);
+      expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+
+      const retry = Array.from(container.querySelectorAll('button')).find(
+        (button) => button.textContent === 'Try again',
+      );
+      await act(async () => {
+        retry?.click();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(apiMocks.setCollection).toHaveBeenCalledTimes(3);
+      expect(container.textContent).toContain('Saved.');
+      act(() => {
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      });
+      await act(async () => Promise.resolve());
+      expect(container.querySelector('[role="dialog"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('adds an already-indexed full Pokédex without starting another catalogue workflow', async () => {
@@ -431,5 +565,123 @@ describe('async frontend announcements', () => {
     expect(apiMocks.addCardsToBinder.mock.calls[0]?.[1]).toEqual(
       Array.from({ length: 1025 }, (_value, index) => `card-${index + 1}`),
     );
+  });
+
+  it('opens a slot-first card picker and dismisses page actions outside the menu', async () => {
+    const version = {
+      id: 'version-1',
+      binderId: 'binder-1',
+      versionNumber: 1,
+      status: 'draft' as const,
+      layout: { kind: '3x3' as const, rows: 3 as const, columns: 3 as const },
+      revision: 1,
+      pageCount: 1,
+    };
+    const emptyPage = {
+      id: 'page-1',
+      position: 0,
+      slots: [{ pageId: 'page-1', row: 0, column: 0, cardId: null }],
+    };
+    const card = {
+      id: 'card-1',
+      name: 'Ponyta',
+      language: 'en',
+      category: 'pokemon' as const,
+      setId: 'set-1',
+      setName: 'Base Set',
+      number: '60',
+      imageLowUrl: null,
+      imageHighUrl: null,
+      collection: null,
+      price: {
+        amountAud: null,
+        nativeAmount: null,
+        nativeCurrency: null,
+        source: null,
+        sourceCapturedAt: null,
+        fxDate: null,
+      },
+    };
+    apiMocks.binders.mockResolvedValue([
+      {
+        id: 'binder-1',
+        name: 'Test',
+        activeVersionId: 'version-1',
+        latestVersionId: 'version-1',
+        updatedAt: '2026-08-26T00:00:00Z',
+      },
+    ]);
+    apiMocks.binder.mockResolvedValue({ version, pages: [emptyPage], nextPage: null });
+    apiMocks.binderShortages.mockResolvedValue({ ok: true, shortages: [], nextOffset: null });
+    apiMocks.resolveCards.mockResolvedValue([]);
+    apiMocks.search.mockResolvedValue({ ok: true, total: 1, cards: [card], cursor: null });
+    apiMocks.setSlot.mockRejectedValueOnce(new Error('offline')).mockResolvedValueOnce({
+      version: { ...version, revision: 2 },
+      pages: [
+        {
+          ...emptyPage,
+          slots: [{ pageId: 'page-1', row: 0, column: 0, cardId: 'card-1' }],
+        },
+      ],
+    });
+
+    act(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    act(() => container.querySelector<HTMLButtonElement>('.binder-library-card')?.click());
+    await waitFor(() => container.querySelector('.binder-slot') !== null);
+
+    const pageActions = container.querySelector<HTMLButtonElement>('[aria-label="Page actions"]');
+    act(() => pageActions?.click());
+    expect(container.querySelector('.page-menu-popover')).not.toBeNull();
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(container.querySelector('.page-menu-popover')).toBeNull();
+    expect(document.activeElement).toBe(pageActions);
+    act(() => pageActions?.click());
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>('.binder-slot')
+        ?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    });
+    expect(container.querySelector('.page-menu-popover')).toBeNull();
+
+    act(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
+    expect(container.textContent).toContain('Choose a card for pocket 1:1');
+    const input = container.querySelector<HTMLInputElement>('.slot-picker-panel input');
+    if (!input) throw new Error('Slot search input did not render.');
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        input,
+        'Ponyta',
+      );
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await settle();
+    act(() => {
+      input.form?.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+    });
+    await waitFor(() => container.querySelector('.binder-tray-card') !== null);
+    await settle();
+    act(() => container.querySelector<HTMLButtonElement>('.binder-tray-card')?.click());
+    await waitFor(() => apiMocks.setSlot.mock.calls.length === 1);
+    await settle();
+    expect(container.querySelector('.slot-picker-panel')).not.toBeNull();
+    expect(container.querySelector<HTMLInputElement>('.slot-picker-panel input')?.value).toBe(
+      'Ponyta',
+    );
+    act(() => container.querySelector<HTMLButtonElement>('.binder-tray-card')?.click());
+    await waitFor(() => apiMocks.setSlot.mock.calls.length === 2);
+    await waitFor(() => container.querySelector('.slot-picker-panel') === null);
+    await settle();
+
+    const searched = apiMocks.search.mock.calls.at(-1)?.[0] as URLSearchParams;
+    expect(searched.get('q')).toBe('Ponyta');
+    expect(apiMocks.setSlot.mock.calls[0]?.[1]).toMatchObject({
+      page: 0,
+      row: 0,
+      column: 0,
+      cardId: 'card-1',
+    });
   });
 });

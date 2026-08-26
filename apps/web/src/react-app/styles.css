@@ -87,7 +87,7 @@ summary:focus-visible {
   font-size: 1.1rem;
   letter-spacing: -0.02em;
 }
-nav {
+.sidebar nav {
   display: grid;
   gap: 0.25rem;
   margin-top: 3rem;
@@ -1700,6 +1700,156 @@ dd {
     0 0 0 3px #fff,
     0 0 0 5px #176b63;
 }
+.binder-slot.selected-slot {
+  border-style: solid;
+  border-color: var(--accent);
+  background: #e8f5ef;
+  box-shadow:
+    0 0 0 3px #f7f8f2,
+    0 0 0 5px color-mix(in srgb, var(--accent) 70%, white);
+}
+.slot-picker-panel {
+  display: grid;
+  gap: 0.85rem;
+  margin: 0 0 1.25rem;
+  border-block: 1px solid var(--line);
+  background: #edf4ef;
+  padding: 1rem;
+}
+.slot-picker-panel .binder-card-tray {
+  margin: 0;
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.slot-picker-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.slot-picker-heading h2,
+.slot-picker-heading p,
+.slot-picker-status {
+  margin: 0;
+}
+.slot-picker-heading h2 {
+  color: var(--ink);
+  font-size: 1rem;
+}
+.slot-picker-heading p,
+.slot-picker-status {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.selected-pocket-summary {
+  display: grid;
+  grid-template-columns: 3.2rem minmax(8rem, 1fr) auto auto;
+  align-items: center;
+  gap: 0.7rem;
+}
+.selected-pocket-summary .card-art {
+  width: 3.2rem;
+}
+.selected-pocket-summary > span {
+  display: grid;
+  min-width: 0;
+}
+.selected-pocket-summary small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.binder-page-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(12rem, 1fr) auto;
+  align-items: center;
+  gap: 1rem;
+  margin: 0 0 0.85rem;
+  border-block: 1px solid var(--line);
+  padding: 0.75rem 0;
+}
+.binder-page-stepper,
+.page-management {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+.binder-page-stepper label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+.binder-page-stepper input {
+  width: 4.1rem;
+  min-height: 2.3rem;
+  padding: 0.35rem 0.5rem;
+  text-align: center;
+}
+.pocket-prompt {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-align: center;
+}
+.page-menu {
+  position: relative;
+}
+.page-menu-popover {
+  display: grid;
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 0.45rem);
+  right: 0;
+  width: 14rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  background: #fff;
+  padding: 0.35rem;
+  box-shadow: 0 18px 38px -22px rgb(15 43 40 / 70%);
+}
+.page-menu-popover button {
+  border: 0;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--ink);
+  padding: 0.65rem 0.7rem;
+  text-align: left;
+}
+.page-menu-popover button:hover:not(:disabled),
+.page-menu-popover button:focus-visible {
+  background: #edf4ef;
+}
+.page-menu-popover .danger-menu-item {
+  color: #9b3131;
+}
+.autosave-status {
+  margin: 0.15rem 0 0.35rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+.autosave-status.error {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: #9b3131;
+  font-weight: 700;
+}
+.autosave-status.error .text-button {
+  color: inherit;
+}
+.binder-bulk-add {
+  justify-self: start;
+}
+.catalogue-heading .back-link + .back-link {
+  margin-left: 1rem;
+}
 .binder-slot > span {
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -1775,6 +1925,14 @@ dd {
   }
   .planner-toolbar {
     grid-template-columns: 1fr;
+  }
+  .binder-page-toolbar {
+    grid-template-columns: 1fr auto;
+  }
+  .pocket-prompt {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    text-align: left;
   }
   .card-lightbox {
     padding: 0.75rem;
@@ -1864,6 +2022,17 @@ dd {
   .inline-fields {
     display: grid;
     grid-template-columns: 1fr;
+  }
+  .binder-page-toolbar,
+  .selected-pocket-summary {
+    grid-template-columns: 1fr;
+  }
+  .binder-library {
+    grid-template-columns: 1fr;
+  }
+  .binder-page-stepper,
+  .page-management {
+    justify-content: space-between;
   }
   .card-detail {
     grid-template-columns: 1fr;
