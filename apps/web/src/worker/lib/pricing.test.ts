@@ -4,6 +4,7 @@ import { applyAllMigrations, sqliteD1 } from './d1-test-helper';
 import {
   applyStagedPrices,
   beginPriceSyncRun,
+  cardRowsForPriceSources,
   cardSourcePage,
   priceForCard,
   stagePrices,
@@ -36,19 +37,37 @@ describe('price source availability', () => {
     database.exec(`
       INSERT INTO catalogue_cards
         (id, name, language, category, set_id, set_name, number, created_at, updated_at)
-      VALUES ('card-2', 'Wartortle', 'en', 'pokemon', 'set-1', 'Set', '8', 1, 1);
+      VALUES
+        ('card-2', 'Wartortle', 'en', 'pokemon', 'set-1', 'Set', '8', 1, 1),
+        ('card-fr', 'Carapuce', 'fr', 'pokemon', 'set-1', 'Set', '7', 1, 1);
       INSERT INTO card_sources
         (provider, source_id, card_id, language, source_updated_at, checksum, active, imported_at)
       VALUES
         ('tcgdex', 'source-a', 'card-1', 'en', 1, '${'a'.repeat(64)}', 1, 1),
         ('tcgdex', 'source-b', 'card-1', 'en', 1, '${'b'.repeat(64)}', 1, 1),
-        ('tcgdex', 'source-c', 'card-2', 'en', 1, '${'c'.repeat(64)}', 1, 1);
+        ('tcgdex', 'source-c', 'card-2', 'en', 1, '${'c'.repeat(64)}', 1, 1),
+        ('tcgdex', 'source-a', 'card-fr', 'fr', 1, '${'d'.repeat(64)}', 1, 1);
     `);
 
     await expect(cardSourcePage(db, 1)).resolves.toEqual({
       ids: ['source-a', 'source-b'],
       cursor: 'card-1',
     });
+    await expect(
+      cardRowsForPriceSources(db, [
+        {
+          sourceId: 'source-a',
+          candidates: [
+            {
+              source: 'tcgplayer',
+              nativeAmount: 10,
+              nativeCurrency: 'USD',
+              sourceCapturedAt: 1,
+            },
+          ],
+        },
+      ]),
+    ).resolves.toMatchObject({ cardIds: ['card-1'], rows: [{ cardId: 'card-1' }] });
   });
 
   it('stops displaying a source after a refreshed card no longer has that price', async () => {

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   applyStagedPrices,
   beginPriceSyncRun,
+  cardRowsForPriceSources,
   cardSourcePage,
   extractTcgdexPrices,
   prunePricingData,
@@ -10,7 +11,6 @@ import {
   stagePriceTargets,
   stagePrices,
   upsertFxRate,
-  type PriceCandidate,
   type StagedPriceRow,
 } from '../lib/pricing';
 import { describeError, logInfo } from '../lib/log';
@@ -91,33 +91,6 @@ async function mapConcurrent<T, U>(values: T[], mapper: (value: T) => Promise<U>
   return results;
 }
 
-async function cardRowsForSources(
-  db: D1Database,
-  prices: Array<{ sourceId: string; candidates: PriceCandidate[] }>,
-): Promise<{ cardIds: string[]; rows: StagedPriceRow[] }> {
-  const bySource = new Map(prices.map((price) => [price.sourceId, price.candidates]));
-  const sourceIds = [...bySource.keys()];
-  if (sourceIds.length === 0) return { cardIds: [], rows: [] };
-  const rows = await db
-    .prepare(
-      `SELECT source.card_id, source.source_id
-       FROM card_sources source JOIN json_each(?1) requested
-         ON requested.value = source.source_id
-       WHERE source.provider = 'tcgdex' AND source.active = 1`,
-    )
-    .bind(JSON.stringify(sourceIds))
-    .all<{ card_id: string; source_id: string }>();
-  return {
-    cardIds: [...new Set(rows.results.map((row) => row.card_id))],
-    rows: rows.results.flatMap((row) =>
-      (bySource.get(row.source_id) ?? []).map((candidate) => ({
-        ...candidate,
-        cardId: row.card_id,
-      })),
-    ),
-  };
-}
-
 async function ensureFxRates(db: D1Database, currencies: string[]): Promise<string> {
   const targets = [...new Set(currencies.filter((currency) => currency !== 'AUD'))].sort();
   if (targets.length === 0) return new Date().toISOString().slice(0, 10);
@@ -181,7 +154,7 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
         );
         currentStep = 'map-price-sources';
         const mapped = await step.do('map-price-sources', () =>
-          cardRowsForSources(this.env.DB, prices),
+          cardRowsForPriceSources(this.env.DB, prices),
         );
         rows = mapped.rows;
         targetCardIds = mapped.cardIds;

@@ -388,20 +388,18 @@ async function backupArtRows(
 ): Promise<BackupBundle['artManifest']> {
   const rows: BackupBundle['artManifest'] = [];
   for (const raw of rawRows) {
-    const { backup_cursor: _cursor, backup_is_custom: isCustom, ...value } = raw;
+    const { backup_cursor: _cursor, backup_is_custom: _isCustom, ...value } = raw;
     void _cursor;
+    void _isCustom;
     const row = artRow.parse(value);
-    let backupObjectKey: string | null = null;
-    if (isCustom === 1) {
-      const object = await art.get(row.object_key);
-      if (!object) throw new ApplicationError('backup_custom_art_missing', 500);
-      backupObjectKey = `backups/${ownerId}/${backupId}/art/${encodeURIComponent(row.card_id)}/${row.variant}.webp`;
-      await art.put(backupObjectKey, object.body, {
-        httpMetadata: object.httpMetadata,
-        customMetadata: object.customMetadata,
-        sha256: row.sha256,
-      });
-    }
+    const object = await art.get(row.object_key);
+    if (!object) throw new ApplicationError('backup_art_missing', 500);
+    const backupObjectKey = `backups/${ownerId}/${backupId}/art/${encodeURIComponent(row.card_id)}/${row.variant}.webp`;
+    await art.put(backupObjectKey, object.body, {
+      httpMetadata: object.httpMetadata,
+      customMetadata: object.customMetadata,
+      sha256: row.sha256,
+    });
     rows.push({ ...row, backup_object_key: backupObjectKey });
   }
   return rows;
@@ -632,7 +630,7 @@ async function stageRestore(db: D1Database, runId: string, ownerId: string, bund
     await db.batch(statements.slice(offset, offset + 50));
 }
 
-async function restoreCustomArt(
+async function restoreBackupArt(
   art: R2Bucket,
   ownerId: string,
   backupId: string,
@@ -643,7 +641,7 @@ async function restoreCustomArt(
     if (!row.backup_object_key.startsWith(`backups/${ownerId}/${backupId}/art/`))
       throw new ApplicationError('backup_invalid', 400);
     const backedUp = await art.get(row.backup_object_key);
-    if (!backedUp) throw new ApplicationError('backup_custom_art_missing', 400);
+    if (!backedUp) throw new ApplicationError('backup_art_missing', 400);
     await art.put(row.object_key, backedUp.body, {
       httpMetadata: backedUp.httpMetadata,
       customMetadata: backedUp.customMetadata,
@@ -696,7 +694,7 @@ async function stageManifestRestore(
       )
         throw new ApplicationError('backup_owner_mismatch', 403);
       if (chunk.kind === 'art_manifest')
-        await restoreCustomArt(art, ownerId, backupId, z.array(artRow).parse(rows.data));
+        await restoreBackupArt(art, ownerId, backupId, z.array(artRow).parse(rows.data));
       await db
         .prepare(
           `INSERT INTO backup_restore_chunks
@@ -754,7 +752,7 @@ export async function restoreBackup(
         legacy.data.binders.some((binder) => binder.owner_id !== ownerId)
       )
         throw new ApplicationError('backup_owner_mismatch', 403);
-      await restoreCustomArt(art, ownerId, backupId, legacy.data.artManifest);
+      await restoreBackupArt(art, ownerId, backupId, legacy.data.artManifest);
       await stageRestore(db, restoreRunId, ownerId, legacy.data);
     }
     await runStep('restore-finalize', async () => {

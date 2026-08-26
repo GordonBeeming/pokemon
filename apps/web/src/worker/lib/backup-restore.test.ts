@@ -146,12 +146,19 @@ async function readObjectText(art: R2Bucket, key: string): Promise<string> {
   return text + decoder.decode();
 }
 
+async function seedReferencedArt(art: R2Bucket): Promise<void> {
+  await art.put('cards/custom-a/high/hash.webp', Uint8Array.from([1, 2, 3]), {
+    customMetadata: { ownerId: 'owner' },
+  } as R2PutOptions);
+  await art.put('cards/card-binder/low/hash.webp', Uint8Array.from([4, 5, 6]), {
+    customMetadata: { source: 'tcgdex' },
+  } as R2PutOptions);
+}
+
 describe('backup restore', () => {
   it('includes art metadata for cards that appear only in binder slots', async () => {
     const { db, art } = setup();
-    await art.put('cards/custom-a/high/hash.webp', Uint8Array.from([1, 2, 3]), {
-      customMetadata: { ownerId: 'owner' },
-    } as R2PutOptions);
+    await seedReferencedArt(art);
 
     const backupId = 'backup_binder_art';
     await createBackup(db, art, 'owner', { backupId });
@@ -161,16 +168,20 @@ describe('backup restore', () => {
     ) as { chunks: Array<{ kind: string; objectKey: string }> };
     const artChunkKey = manifest.chunks.find((chunk) => chunk.kind === 'art_manifest')?.objectKey;
     expect(artChunkKey).toBeTruthy();
-    const rows = JSON.parse(await readObjectText(art, artChunkKey!)) as Array<{ card_id: string }>;
+    const rows = JSON.parse(await readObjectText(art, artChunkKey!)) as Array<{
+      card_id: string;
+      backup_object_key: string;
+    }>;
 
     expect(rows.map((row) => row.card_id)).toContain('card-binder');
+    const binderArt = rows.find((row) => row.card_id === 'card-binder');
+    expect(binderArt?.backup_object_key).toContain('/art/card-binder/low.webp');
+    await expect(art.get(binderArt?.backup_object_key ?? '')).resolves.not.toBeNull();
   });
 
   it('removes newer custom catalogue graph rows when restoring an older backup', async () => {
     const { database, db, art } = setup();
-    await art.put('cards/custom-a/high/hash.webp', Uint8Array.from([1, 2, 3]), {
-      customMetadata: { ownerId: 'owner' },
-    } as R2PutOptions);
+    await seedReferencedArt(art);
 
     const backupId = 'backup_restore_custom';
     await createBackup(db, art, 'owner', { backupId });

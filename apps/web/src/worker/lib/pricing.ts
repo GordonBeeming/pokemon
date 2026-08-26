@@ -463,6 +463,33 @@ export async function cardSourcePage(
   };
 }
 
+export async function cardRowsForPriceSources(
+  db: D1Database,
+  prices: Array<{ sourceId: string; candidates: PriceCandidate[] }>,
+): Promise<{ cardIds: string[]; rows: StagedPriceRow[] }> {
+  const bySource = new Map(prices.map((price) => [price.sourceId, price.candidates]));
+  const sourceIds = [...bySource.keys()];
+  if (sourceIds.length === 0) return { cardIds: [], rows: [] };
+  const sources = await db
+    .prepare(
+      `SELECT source.card_id, source.source_id
+       FROM card_sources source JOIN json_each(?1) requested
+         ON requested.value = source.source_id
+       WHERE source.provider = 'tcgdex' AND source.language = 'en' AND source.active = 1`,
+    )
+    .bind(JSON.stringify(sourceIds))
+    .all<{ card_id: string; source_id: string }>();
+  return {
+    cardIds: [...new Set(sources.results.map((row) => row.card_id))],
+    rows: sources.results.flatMap((row) =>
+      (bySource.get(row.source_id) ?? []).map((candidate) => ({
+        ...candidate,
+        cardId: row.card_id,
+      })),
+    ),
+  };
+}
+
 export async function prunePricingData(db: D1Database, now = nowSeconds()): Promise<void> {
   const snapshotCutoff = now - 400 * 24 * 60 * 60;
   const runCutoff = now - 30 * 24 * 60 * 60;
