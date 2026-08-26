@@ -1,0 +1,696 @@
+import { createHash, type Hash } from 'node:crypto';
+import { nowSeconds } from './db';
+import { ApplicationError, describeError, logWarn } from './log';
+
+const MAX_ART_BYTES = 15 * 1024 * 1024;
+const ORPHAN_GRACE_SECONDS = 60 * 60;
+
+export type ArtVariant = 'high' | 'low';
+
+interface UploadTokenRow {
+  owner_id: string;
+  card_id: string;
+  variant: ArtVariant;
+  expected_sha256: string;
+  expected_version: number;
+  max_bytes: number;
+  expires_at: number;
+  consumed_at: number | null;
+  committed_object_key: string | null;
+}
+
+export interface ArtUploadRequest {
+  cardId: string;
+  variant: ArtVariant;
+  sha256: string;
+  maxBytes: number;
+}
+
+export interface ArtUploadTicket extends ArtUploadRequest {
+  token: string;
+  ticketId: string;
+}
+
+function hex(bytes: Uint8Array): string {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export async function sha256(value: BufferSource): Promise<string> {
+  return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', value)));
+}
+
+function ascii(value: Uint8Array, start: number, length: number): string {
+  return String.fromCharCode(...value.slice(start, start + length));
+}
+
+export function isWebp(value: Uint8Array): boolean {
+  if (value.byteLength < 20 || ascii(value, 0, 4) !== 'RIFF' || ascii(value, 8, 4) !== 'WEBP')
+    return false;
+  const view = new DataView(value.buffer, value.byteOffset, value.byteLength);
+  if (view.getUint32(4, true) !== value.byteLength - 8) return false;
+  let offset = 12;
+  let imageChunk = false;
+  while (offset + 8 <= value.byteLength) {
+    const kind = ascii(value, offset, 4);
+    const length = view.getUint32(offset + 4, true);
+    const next = offset + 8 + length + (length % 2);
+    if (next > value.byteLength) return false;
+    if (kind === 'VP8 ' || kind === 'VP8L' || kind === 'VP8X' || kind === 'ANMF') imageChunk = true;
+    offset = next;
+  }
+  return imageChunk && offset === value.byteLength;
+}
+
+export function artObjectKey(cardId: string, variant: ArtVariant, checksum: string): string {
+  if (!/^[a-f0-9]{64}$/u.test(checksum)) throw new ApplicationError('invalid_art_checksum', 400);
+  return `cards/${encodeURIComponent(cardId)}/${variant}/${checksum}.webp`;
+}
+
+async function hashToken(token: string): Promise<string> {
+  return sha256(new TextEncoder().encode(token));
+}
+
+function ticketId(tokenHash: string): string {
+  return tokenHash.slice(0, 24);
+}
+
+class WebpStreamValidator {
+  private readonly header = new Uint8Array(12);
+  private readonly chunkHeader = new Uint8Array(8);
+  private headerBytes = 0;
+  private chunkHeaderBytes = 0;
+  private chunkRemaining = 0;
+  private position = 0;
+  private imageChunk = false;
+  private readonly hash: Hash = createHash('sha256');
+
+  constructor(
+    private readonly expectedBytes: number,
+    private readonly expectedSha256: string,
+  ) {}
+
+  write(value: Uint8Array): void {
+    this.hash.update(value);
+    let offset = 0;
+    while (offset < value.byteLength) {
+      if (this.headerBytes < this.header.byteLength) {
+        const length = Math.min(
+          this.header.byteLength - this.headerBytes,
+          value.byteLength - offset,
+        );
+        this.header.set(value.subarray(offset, offset + length), this.headerBytes);
+        this.headerBytes += length;
+        offset += length;
+        this.position += length;
+        if (this.headerBytes === this.header.byteLength) {
+          const view = new DataView(this.header.buffer);
+          if (
+            ascii(this.header, 0, 4) !== 'RIFF' ||
+            ascii(this.header, 8, 4) !== 'WEBP' ||
+            view.getUint32(4, true) !== this.expectedBytes - 8
+          )
+            throw new ApplicationError('art_upload_not_webp', 400);
+        }
+        continue;
+      }
+      if (this.chunkRemaining > 0) {
+        const length = Math.min(this.chunkRemaining, value.byteLength - offset);
+        this.chunkRemaining -= length;
+        offset += length;
+        this.position += length;
+        continue;
+      }
+      const length = Math.min(
+        this.chunkHeader.byteLength - this.chunkHeaderBytes,
+        value.byteLength - offset,
+      );
+      this.chunkHeader.set(value.subarray(offset, offset + length), this.chunkHeaderBytes);
+      this.chunkHeaderBytes += length;
+      offset += length;
+      this.position += length;
+      if (this.chunkHeaderBytes === this.chunkHeader.byteLength) {
+        const kind = ascii(this.chunkHeader, 0, 4);
+        const size = new DataView(this.chunkHeader.buffer).getUint32(4, true);
+        this.chunkRemaining = size + (size % 2);
+        if (this.position + this.chunkRemaining > this.expectedBytes)
+          throw new ApplicationError('art_upload_not_webp', 400);
+        if (kind === 'VP8 ' || kind === 'VP8L' || kind === 'VP8X' || kind === 'ANMF')
+          this.imageChunk = true;
+        this.chunkHeaderBytes = 0;
+      }
+    }
+  }
+
+  finish(): void {
+    if (
+      this.position !== this.expectedBytes ||
+      this.headerBytes !== this.header.byteLength ||
+      this.chunkHeaderBytes !== 0 ||
+      this.chunkRemaining !== 0 ||
+      !this.imageChunk
+    )
+      throw new ApplicationError('art_upload_not_webp', 400);
+    if (this.hash.digest('hex') !== this.expectedSha256)
+      throw new ApplicationError('art_upload_checksum_mismatch', 400);
+  }
+}
+
+export function validatingWebpStream(
+  body: ReadableStream<Uint8Array>,
+  expectedBytes: number,
+  expectedSha256: string,
+) {
+  const validator = new WebpStreamValidator(expectedBytes, expectedSha256);
+  return body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        validator.write(chunk);
+        controller.enqueue(chunk);
+      },
+      flush() {
+        validator.finish();
+      },
+    }),
+  );
+}
+
+export async function propagateUploadFailure(
+  putError: unknown,
+  writeBody: Promise<void>,
+): Promise<never> {
+  try {
+    await writeBody;
+  } catch (bodyError) {
+    if (bodyError instanceof ApplicationError) {
+      bodyError.cause = putError;
+      throw bodyError;
+    }
+    throw new AggregateError([putError, bodyError], 'R2 upload and request body both failed');
+  }
+  throw putError;
+}
+
+async function recordOrphan(db: D1Database, objectKey: string, reason: string): Promise<void> {
+  await db
+    .prepare(
+      'INSERT INTO art_orphans (object_key, reason, created_at) VALUES (?1, ?2, ?3) ON CONFLICT(object_key) DO UPDATE SET reason = excluded.reason, created_at = excluded.created_at',
+    )
+    .bind(objectKey, reason, nowSeconds())
+    .run();
+}
+
+export async function cleanupArtOrphans(
+  db: D1Database,
+  art: R2Bucket,
+  cutoff = nowSeconds() - ORPHAN_GRACE_SECONDS,
+  limit = 25,
+): Promise<number> {
+  const rows = await db
+    .prepare(
+      'SELECT object_key FROM art_orphans o WHERE o.created_at <= ?1 AND NOT EXISTS (SELECT 1 FROM art_manifest m WHERE m.object_key = o.object_key) ORDER BY o.created_at LIMIT ?2',
+    )
+    .bind(cutoff, limit)
+    .all<{ object_key: string }>();
+  let deleted = 0;
+  for (const row of rows.results) {
+    try {
+      await art.delete(row.object_key);
+      await db.prepare('DELETE FROM art_orphans WHERE object_key = ?1').bind(row.object_key).run();
+      deleted += 1;
+    } catch (error) {
+      logWarn({
+        evt: 'art.orphan_cleanup_failed',
+        objectKey: row.object_key,
+        err: describeError(error),
+      });
+    }
+  }
+  return deleted;
+}
+
+export async function createArtUploadToken(
+  db: D1Database,
+  ownerId: string,
+  cardId: string,
+  variant: ArtVariant,
+  expectedSha256: string,
+  maxBytes: number,
+): Promise<ArtUploadTicket> {
+  const tickets = await createArtUploadTokens(db, ownerId, [
+    { cardId, variant, sha256: expectedSha256, maxBytes },
+  ]);
+  const ticket = tickets.at(0);
+  if (!ticket) throw new ApplicationError('invalid_art_upload_request', 400);
+  return ticket;
+}
+
+export async function createArtUploadTokens(
+  db: D1Database,
+  ownerId: string,
+  requests: ArtUploadRequest[],
+): Promise<ArtUploadTicket[]> {
+  if (
+    requests.length < 1 ||
+    requests.length > 100 ||
+    requests.some(
+      (request) =>
+        !request.cardId ||
+        !/^[a-f0-9]{64}$/u.test(request.sha256) ||
+        request.maxBytes < 1 ||
+        request.maxBytes > MAX_ART_BYTES,
+    ) ||
+    new Set(requests.map((request) => `${request.cardId}\u0000${request.variant}`)).size !==
+      requests.length
+  )
+    throw new ApplicationError('invalid_art_upload_request', 400);
+  const requested = JSON.stringify(requests);
+  const versions = await db
+    .prepare(
+      `SELECT CAST(input.key AS INTEGER) AS request_index,
+        COALESCE(manifest.version, 0) + 1 AS expected_version
+       FROM json_each(?1) input
+       JOIN catalogue_cards card ON card.id = json_extract(input.value, '$.cardId')
+       LEFT JOIN art_manifest manifest
+         ON manifest.card_id = card.id
+         AND manifest.variant = json_extract(input.value, '$.variant')
+       ORDER BY CAST(input.key AS INTEGER)`,
+    )
+    .bind(requested)
+    .all<{ request_index: number; expected_version: number }>();
+  if (versions.results.length !== requests.length)
+    throw new ApplicationError('card_not_found', 404);
+  const now = nowSeconds();
+  const tickets = await Promise.all(
+    requests.map(
+      async (
+        request,
+        index,
+      ): Promise<ArtUploadTicket & { tokenHash: string; expectedVersion: number }> => {
+        const version = versions.results[index];
+        if (!version || version.request_index !== index)
+          throw new ApplicationError('invalid_art_upload_request', 400);
+        const token = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll('-', '');
+        const tokenHash = await hashToken(token);
+        return {
+          ...request,
+          token,
+          tokenHash,
+          ticketId: ticketId(tokenHash),
+          expectedVersion: version.expected_version,
+        };
+      },
+    ),
+  );
+  await db
+    .prepare(
+      `INSERT INTO art_upload_tokens
+        (token_hash, owner_id, card_id, variant, expected_sha256, expected_version,
+         max_bytes, expires_at, created_at)
+       SELECT json_extract(value, '$.tokenHash'), ?1, json_extract(value, '$.cardId'),
+         json_extract(value, '$.variant'), json_extract(value, '$.sha256'),
+         json_extract(value, '$.expectedVersion'), json_extract(value, '$.maxBytes'), ?2, ?3
+       FROM json_each(?4)`,
+    )
+    .bind(ownerId, now + 900, now, JSON.stringify(tickets))
+    .run();
+  return tickets.map(({ tokenHash: ignoredHash, expectedVersion: ignoredVersion, ...ticket }) => {
+    void ignoredHash;
+    void ignoredVersion;
+    return ticket;
+  });
+}
+
+interface ActiveUploadClaim {
+  tokenHash: string;
+  upload: UploadTokenRow;
+  claimedAt: number;
+  objectKey: string;
+}
+
+type UploadClaim =
+  | {
+      replayed: true;
+      result: { cardId: string; variant: ArtVariant; objectKey: string; replayed: true };
+    }
+  | { replayed: false; claim: ActiveUploadClaim };
+
+async function claimUpload(
+  db: D1Database,
+  token: string,
+  suppliedTicketId: string,
+): Promise<UploadClaim> {
+  const tokenHash = await hashToken(token);
+  if (ticketId(tokenHash) !== suppliedTicketId && token !== suppliedTicketId)
+    throw new ApplicationError('art_upload_token_invalid', 400);
+  const upload = await db
+    .prepare(
+      `SELECT token.owner_id, token.card_id, token.variant, token.expected_sha256,
+        token.expected_version, token.max_bytes, token.expires_at, token.consumed_at,
+        CASE WHEN manifest.sha256 = token.expected_sha256
+          AND manifest.version >= token.expected_version THEN manifest.object_key END
+          AS committed_object_key
+       FROM art_upload_tokens token
+       LEFT JOIN art_manifest manifest
+         ON manifest.card_id = token.card_id AND manifest.variant = token.variant
+       WHERE token.token_hash = ?1`,
+    )
+    .bind(tokenHash)
+    .first<UploadTokenRow>();
+  if (!upload) throw new ApplicationError('art_upload_token_invalid', 400);
+  if (upload.committed_object_key)
+    return {
+      replayed: true,
+      result: {
+        cardId: upload.card_id,
+        variant: upload.variant,
+        objectKey: upload.committed_object_key,
+        replayed: true,
+      },
+    };
+  const claimedAt = nowSeconds();
+  if (upload.expires_at <= claimedAt) throw new ApplicationError('art_upload_token_invalid', 400);
+  const claimed = await db
+    .prepare(
+      `UPDATE art_upload_tokens SET consumed_at = ?1
+       WHERE token_hash = ?2 AND expires_at > ?1
+         AND (consumed_at IS NULL OR consumed_at <= ?3)`,
+    )
+    .bind(claimedAt, tokenHash, claimedAt - 120)
+    .run();
+  if (claimed.meta.changes !== 1) throw new ApplicationError('art_upload_in_progress', 409);
+  return {
+    replayed: false,
+    claim: {
+      tokenHash,
+      upload,
+      claimedAt,
+      objectKey: artObjectKey(upload.card_id, upload.variant, upload.expected_sha256),
+    },
+  };
+}
+
+async function commitUploadManifest(
+  db: D1Database,
+  claim: ActiveUploadClaim,
+  object: R2Object,
+): Promise<string | null> {
+  const previous = await db
+    .prepare('SELECT object_key FROM art_manifest WHERE card_id = ?1 AND variant = ?2')
+    .bind(claim.upload.card_id, claim.upload.variant)
+    .first<{ object_key: string }>();
+  const manifest = await db
+    .prepare(
+      `INSERT INTO art_manifest (card_id, variant, object_key, sha256, bytes, version, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+       ON CONFLICT(card_id, variant) DO UPDATE SET object_key = excluded.object_key,
+         sha256 = excluded.sha256, bytes = excluded.bytes, version = excluded.version,
+         updated_at = excluded.updated_at WHERE art_manifest.version < excluded.version`,
+    )
+    .bind(
+      claim.upload.card_id,
+      claim.upload.variant,
+      claim.objectKey,
+      claim.upload.expected_sha256,
+      object.size,
+      claim.upload.expected_version,
+      nowSeconds(),
+    )
+    .run();
+  if (manifest.meta.changes < 1) {
+    await recordOrphan(db, claim.objectKey, 'manifest_version_conflict');
+    throw new ApplicationError('art_upload_version_conflict', 409);
+  }
+  return previous?.object_key ?? null;
+}
+
+async function releaseUploadClaim(db: D1Database, claim: ActiveUploadClaim): Promise<void> {
+  await Promise.all([
+    recordOrphan(db, claim.objectKey, 'upload_failed'),
+    db
+      .prepare(
+        'UPDATE art_upload_tokens SET consumed_at = NULL WHERE token_hash = ?1 AND consumed_at = ?2',
+      )
+      .bind(claim.tokenHash, claim.claimedAt)
+      .run(),
+  ]);
+}
+
+export async function uploadArt(
+  db: D1Database,
+  art: R2Bucket,
+  token: string,
+  suppliedTicketId: string,
+  request: Request,
+): Promise<{ cardId: string; variant: ArtVariant; objectKey: string; replayed: boolean }> {
+  const claimed = await claimUpload(db, token, suppliedTicketId);
+  if (claimed.replayed) return claimed.result;
+  const claim = claimed.claim;
+  let committed = false;
+  try {
+    const declaredLength = Number(request.headers.get('content-length'));
+    if (
+      !request.body ||
+      !Number.isInteger(declaredLength) ||
+      declaredLength < 1 ||
+      declaredLength > claim.upload.max_bytes
+    )
+      throw new ApplicationError('art_upload_size_invalid', 413);
+    const fixedLength = new FixedLengthStream(declaredLength);
+    const writeBody = validatingWebpStream(
+      request.body,
+      declaredLength,
+      claim.upload.expected_sha256,
+    ).pipeTo(fixedLength.writable);
+    let object: R2Object;
+    try {
+      object = await art.put(claim.objectKey, fixedLength.readable, {
+        httpMetadata: {
+          contentType: 'image/webp',
+          cacheControl: 'public, max-age=31536000, immutable',
+        },
+        customMetadata: {
+          cardId: claim.upload.card_id,
+          variant: claim.upload.variant,
+          sha256: claim.upload.expected_sha256,
+          version: String(claim.upload.expected_version),
+        },
+        sha256: claim.upload.expected_sha256,
+      });
+    } catch (putError) {
+      return propagateUploadFailure(putError, writeBody);
+    }
+    await writeBody;
+    if (object.size !== declaredLength) throw new ApplicationError('art_upload_size_invalid', 400);
+    const previousObjectKey = await commitUploadManifest(db, claim, object);
+    committed = true;
+    if (previousObjectKey && previousObjectKey !== claim.objectKey)
+      await recordOrphan(db, previousObjectKey, 'manifest_superseded');
+    await cleanupArtOrphans(db, art);
+    return {
+      cardId: claim.upload.card_id,
+      variant: claim.upload.variant,
+      objectKey: claim.objectKey,
+      replayed: false,
+    };
+  } catch (error) {
+    if (!committed) {
+      await releaseUploadClaim(db, claim);
+      await cleanupArtOrphans(db, art, nowSeconds());
+    }
+    throw error;
+  }
+}
+
+function validRangeHeader(value: string | null): boolean {
+  return value === null || /^bytes=(?:\d+-\d*|-\d+)$/u.test(value);
+}
+
+function normalizedRange(range: R2Range, size: number): { offset: number; length: number } {
+  if ('suffix' in range) {
+    const length = Math.min(range.suffix, size);
+    return { offset: size - length, length };
+  }
+  const offset = range.offset ?? 0;
+  return { offset, length: range.length ?? Math.max(0, size - offset) };
+}
+
+export async function getArtResponse(
+  db: D1Database,
+  art: R2Bucket,
+  cardId: string,
+  variant: ArtVariant,
+  request: Request,
+): Promise<Response | null> {
+  let manifest = await db
+    .prepare('SELECT object_key FROM art_manifest WHERE card_id = ?1 AND variant = ?2')
+    .bind(cardId, variant)
+    .first<{ object_key: string }>();
+  if (!manifest) {
+    const cached = await cacheTcgdexArt(db, art, cardId, variant);
+    if (cached) manifest = { object_key: cached };
+  }
+  if (!manifest) return null;
+  const rangeHeader = request.headers.get('range');
+  if (!validRangeHeader(rangeHeader))
+    return new Response(null, { status: 416, headers: { 'accept-ranges': 'bytes' } });
+  const object = await art.get(manifest.object_key, { range: request.headers });
+  if (!object || !('body' in object)) return null;
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set('etag', object.httpEtag);
+  headers.set('cache-control', 'private, max-age=31536000, immutable');
+  headers.set('accept-ranges', 'bytes');
+  if (object.range) {
+    const range = normalizedRange(object.range, object.size);
+    headers.set(
+      'content-range',
+      `bytes ${range.offset}-${range.offset + range.length - 1}/${object.size}`,
+    );
+    headers.set('content-length', String(range.length));
+  } else {
+    headers.set('content-length', String(object.size));
+  }
+  return new Response(object.body, { headers, status: object.range ? 206 : 200 });
+}
+
+async function cacheTcgdexArt(
+  db: D1Database,
+  art: R2Bucket,
+  cardId: string,
+  variant: ArtVariant,
+): Promise<string | null> {
+  const source = await db
+    .prepare(
+      `SELECT source_id, language FROM card_sources
+       WHERE card_id = ?1 AND provider = 'tcgdex' AND active = 1
+       ORDER BY imported_at DESC LIMIT 1`,
+    )
+    .bind(cardId)
+    .first<{ source_id: string; language: string }>();
+  if (!source || !/^[a-z]{2}(?:-[a-z]{2})?$/u.test(source.language)) return null;
+  try {
+    const detail = await fetch(
+      `https://api.tcgdex.net/v2/${encodeURIComponent(source.language)}/cards/${encodeURIComponent(source.source_id)}`,
+      { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(30_000) },
+    );
+    if (!detail.ok) return null;
+    const payload: unknown = await detail.json();
+    const image =
+      payload && typeof payload === 'object' && 'image' in payload
+        ? (payload as { image?: unknown }).image
+        : null;
+    if (typeof image !== 'string') return null;
+    const imageBase = new URL(image);
+    if (imageBase.protocol !== 'https:' || imageBase.hostname !== 'assets.tcgdex.net') return null;
+    const response = await fetch(`${imageBase.href.replace(/\/+$/u, '')}/${variant}.webp`, {
+      headers: { accept: 'image/webp' },
+      signal: AbortSignal.timeout(30_000),
+    });
+    const declared = Number(response.headers.get('content-length') ?? 0);
+    if (!response.ok || declared > MAX_ART_BYTES) return null;
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > MAX_ART_BYTES || !isWebp(bytes)) return null;
+    const checksum = await sha256(bytes);
+    const objectKey = artObjectKey(cardId, variant, checksum);
+    await art.put(objectKey, bytes, { httpMetadata: { contentType: 'image/webp' } });
+    await db
+      .prepare(
+        `INSERT INTO art_manifest (card_id, variant, object_key, sha256, bytes, version, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
+         ON CONFLICT(card_id, variant) DO UPDATE SET
+           object_key = excluded.object_key, sha256 = excluded.sha256, bytes = excluded.bytes,
+           version = art_manifest.version + 1, updated_at = excluded.updated_at
+         WHERE art_manifest.sha256 <> excluded.sha256`,
+      )
+      .bind(cardId, variant, objectKey, checksum, bytes.byteLength, nowSeconds())
+      .run();
+    return objectKey;
+  } catch (error) {
+    logWarn({
+      evt: 'art.tcgdex_cache_failed',
+      cardId,
+      variant,
+      err: describeError(error),
+    });
+    return null;
+  }
+}
+
+export async function getTcgdexPreviewArtResponse(
+  art: R2Bucket,
+  imageBaseValue: string,
+  variant: ArtVariant,
+): Promise<Response | null> {
+  let imageBase: URL;
+  try {
+    imageBase = new URL(imageBaseValue);
+  } catch {
+    return null;
+  }
+  if (
+    imageBase.protocol !== 'https:' ||
+    imageBase.hostname !== 'assets.tcgdex.net' ||
+    imageBase.pathname.includes('/tcgp/') ||
+    imageBase.search ||
+    imageBase.hash
+  )
+    return null;
+  const source = imageBase.href.replace(/\/+$/u, '');
+  const identity = await sha256(new TextEncoder().encode(`${source}\u0000${variant}`));
+  const objectKey = `previews/${identity}/${variant}.webp`;
+  let object = await art.get(objectKey);
+  if (!object || !('body' in object)) {
+    try {
+      const response = await fetch(`${source}/${variant}.webp`, {
+        headers: { accept: 'image/webp', 'user-agent': 'pokedex-national-preview/1' },
+        signal: AbortSignal.timeout(30_000),
+      });
+      const declared = Number(response.headers.get('content-length') ?? 0);
+      if (!response.ok || declared > MAX_ART_BYTES) return null;
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.byteLength > MAX_ART_BYTES || !isWebp(bytes)) return null;
+      await art.put(objectKey, bytes, { httpMetadata: { contentType: 'image/webp' } });
+      object = await art.get(objectKey);
+    } catch (error) {
+      logWarn({ evt: 'art.tcgdex_preview_failed', variant, err: describeError(error) });
+      return null;
+    }
+  }
+  if (!object || !('body' in object)) return null;
+  const headers = new Headers();
+  object.writeHttpMetadata(headers);
+  headers.set('etag', object.httpEtag);
+  headers.set('content-length', String(object.size));
+  headers.set('cache-control', 'private, max-age=31536000, immutable');
+  return new Response(object.body, { headers });
+}
+
+export async function listArtManifest(
+  db: D1Database,
+  cursor: string | null,
+  limit: number,
+): Promise<{
+  entries: Array<{ cardId: string; variant: ArtVariant; sha256: string; bytes: number }>;
+  cursor: string | null;
+}> {
+  const [cardId, variant] = cursor?.split('|', 2) ?? ['', ''];
+  const result = await db
+    .prepare(
+      'SELECT card_id, variant, sha256, bytes FROM art_manifest WHERE card_id > ?1 OR (card_id = ?1 AND variant > ?2) ORDER BY card_id, variant LIMIT ?3',
+    )
+    .bind(cardId, variant, limit + 1)
+    .all<{ card_id: string; variant: ArtVariant; sha256: string; bytes: number }>();
+  const rows = result.results.slice(0, limit);
+  return {
+    entries: rows.map((row) => ({
+      cardId: row.card_id,
+      variant: row.variant,
+      sha256: row.sha256,
+      bytes: row.bytes,
+    })),
+    cursor:
+      result.results.length > limit && rows.length > 0
+        ? `${rows.at(-1)?.card_id ?? ''}|${rows.at(-1)?.variant ?? ''}`
+        : null,
+  };
+}

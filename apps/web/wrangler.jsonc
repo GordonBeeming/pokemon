@@ -1,0 +1,63 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "pokedex-web",
+  "main": "src/worker/index.ts",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.1 },
+  },
+  "vars": {
+    "OWNER_LABEL": "Owner",
+    "PUBLIC_ORIGIN": "https://pokedex.gordonbeeming.com",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pokedex",
+      "database_id": "5e955d9c-188b-476a-80e9-8b1908f20f54",
+      "migrations_dir": "./migrations",
+    },
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "AUTH_COORDINATOR", "class_name": "AuthCoordinator" }],
+  },
+  "exports": {
+    "AuthCoordinator": { "type": "durable-object", "storage": "sqlite" },
+  },
+  "r2_buckets": [{ "binding": "ART", "bucket_name": "pokedex-art" }],
+  "workflows": [
+    {
+      "binding": "CATALOGUE_SYNC",
+      "name": "pokedex-catalogue-sync",
+      "class_name": "CatalogueSyncWorkflow",
+      "schedules": ["0 3 1 * *"],
+    },
+    {
+      "binding": "PRICE_SYNC",
+      "name": "pokedex-price-sync",
+      "class_name": "PriceSyncWorkflow",
+      "schedules": ["0 * * * *"],
+    },
+    {
+      "binding": "FX_SYNC",
+      "name": "pokedex-fx-sync",
+      "class_name": "FxSyncWorkflow",
+      "schedules": ["40 3 * * *"],
+    },
+    {
+      "binding": "BACKUP",
+      "name": "pokedex-backup",
+      "class_name": "BackupWorkflow",
+      "schedules": ["0 4 * * *"],
+    },
+  ],
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./dist/client",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true,
+  },
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Pokédex Scanner Dev",
+  "identifier": "com.gordonbeeming.pokedex.scanner.dev",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Pokédex Scanner Dev"
+      }
+    ]
+  }
+}

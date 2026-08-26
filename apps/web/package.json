@@ -1,0 +1,42 @@
+{
+  "name": "@pokedex/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src scripts public/sw.js vite.config.ts",
+    "test": "vitest run --config vitest.config.ts",
+    "test:integration": "node scripts/verify-desktop-bearer-routes.mjs && node scripts/verify-backup-scratch.mjs",
+    "wrangler:types": "wrangler types ./cloudflare-env.d.ts --config wrangler.jsonc --env-file /dev/null",
+    "wrangler:types:check": "wrangler types ./cloudflare-env.d.ts --check --config wrangler.jsonc --env-file /dev/null",
+    "wrangler:check": "wrangler check startup --config wrangler.jsonc",
+    "wrangler:dry-run": "wrangler deploy --dry-run --config wrangler.jsonc",
+    "migrate:local": "wrangler d1 migrations apply DB --local --config wrangler.jsonc",
+    "seed:local-art": "node scripts/seed-local-art.mjs",
+    "format:check": "prettier --check --ignore-path ../../.prettierignore ."
+  },
+  "dependencies": {
+    "@fontsource-variable/space-grotesk": "^5.3.0",
+    "@pokedex/shared": "workspace:*",
+    "@simplewebauthn/browser": "^13.3.0",
+    "@simplewebauthn/server": "^13.3.2",
+    "hono": "^4.13.4",
+    "jose": "^6.1.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.13.0",
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "@vitejs/plugin-react": "^5.0.2",
+    "happy-dom": "20.11.6",
+    "vite": "^6.4.1",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.125.0"
+  }
+}

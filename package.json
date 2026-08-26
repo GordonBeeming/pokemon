@@ -1,0 +1,35 @@
+{
+  "name": "pokedex",
+  "private": true,
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "typecheck": "turbo typecheck",
+    "lint": "turbo lint",
+    "format": "prettier --write --ignore-unknown .",
+    "format:check": "prettier --check --ignore-unknown .",
+    "test": "turbo test",
+    "test:integration": "pnpm --dir apps/web test:integration",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm test:integration && pnpm build && pnpm wrangler:types:check && pnpm wrangler:dry-run",
+    "wrangler:types": "pnpm --dir apps/web wrangler:types",
+    "wrangler:types:check": "pnpm --dir apps/web wrangler:types:check",
+    "wrangler:check": "pnpm --dir apps/web wrangler:check",
+    "wrangler:dry-run": "pnpm --dir apps/web wrangler:dry-run",
+    "migrate:local": "pnpm --dir apps/web migrate:local"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.15.0",
+    "eslint": "^9.33.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.6.2",
+    "turbo": "^2.5.6",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.0"
+  }
+}

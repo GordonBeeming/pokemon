@@ -1,0 +1,4 @@
+[mcp_servers.pokedex]
+url = "http://127.0.0.1:47837/mcp"
+bearer_token_env_var = "POKEDEX_MCP_TOKEN"
+required = false

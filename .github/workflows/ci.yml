@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm format:check
+      - run: pnpm --dir apps/web lint
+      - run: pnpm --dir apps/web typecheck
+      - run: pnpm --dir apps/web test
+      - name: Apply migrations to a fresh database
+        shell: bash
+        run: |
+          persist="$(mktemp -d)"
+          pnpm --dir apps/web exec wrangler d1 migrations apply DB --local --config wrangler.jsonc --persist-to "$persist"
+      - run: pnpm --dir apps/web test:integration
+      - run: pnpm --dir apps/web build
+      - run: pnpm --dir apps/web wrangler:types:check
+      - run: pnpm --dir apps/web wrangler:dry-run
+
+  desktop:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --version 0.22.1 --locked
+      - name: Initialize RustSec advisory database
+        run: pnpm --dir apps/desktop audit:macos:init
+      - run: pnpm --dir apps/desktop lint
+      - run: pnpm --dir apps/desktop typecheck
+      - run: pnpm --dir apps/desktop test
+      - name: Audit supported macOS dependency graphs offline
+        run: pnpm --dir apps/desktop audit:macos
+      - run: pnpm --dir apps/desktop build
+      - run: pnpm --dir apps/desktop tauri:debug

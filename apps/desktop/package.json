@@ -1,0 +1,32 @@
+{
+  "name": "@pokedex/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "cargo check --manifest-path src-tauri/Cargo.toml && tsc --noEmit && vite build",
+    "typecheck": "cargo check --manifest-path src-tauri/Cargo.toml && tsc --noEmit",
+    "lint": "eslint src scripts vite.config.ts && cargo fmt --manifest-path src-tauri/Cargo.toml --check && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
+    "test": "vitest run && cargo test --manifest-path src-tauri/Cargo.toml",
+    "format:check": "prettier --check .",
+    "tauri": "tauri",
+    "tauri:fmt": "cargo fmt --manifest-path src-tauri/Cargo.toml --check",
+    "tauri:clippy": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings",
+    "tauri:debug": "tauri build --debug --no-bundle",
+    "tauri:check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "tauri:test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "audit:macos:init": "node scripts/audit-macos.mjs --initialize-db",
+    "audit:macos": "node scripts/audit-macos.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.2",
+    "happy-dom": "20.11.6",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.3",
+    "vitest": "^4.1.0"
+  }
+}
