@@ -29,7 +29,7 @@ jobs:
         shell: bash
         run: |
           persist="$(mktemp -d)"
-          pnpm --dir apps/web exec wrangler d1 migrations apply pokedex-local --local --config wrangler.jsonc --persist-to "$persist"
+          pnpm --dir apps/web exec wrangler d1 migrations apply DB --local --config wrangler.jsonc --persist-to "$persist"
       - run: pnpm --dir apps/web test:integration
       - run: pnpm --dir apps/web build
       - run: pnpm --dir apps/web wrangler:types:check
