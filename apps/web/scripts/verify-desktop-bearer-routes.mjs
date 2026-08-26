@@ -50,16 +50,7 @@ try {
     "INSERT INTO binders (id,owner_id,name,created_at,updated_at) VALUES ('binder-a','owner-a','A binder',1,1);",
     `INSERT INTO desktop_tokens (token_hash,owner_id,label,scopes,created_at,revoked_at) VALUES ('${hash(ownerAToken)}','owner-a','A','["catalogue:read","collection:write","binders:write","art:write"]',1,NULL),('${hash(ownerBToken)}','owner-b','B','["catalogue:read","binders:write"]',1,NULL),('${hash(wrongScopeToken)}','owner-a','wrong','["art:read"]',1,NULL),('${hash(revokedToken)}','owner-a','revoked','["catalogue:read"]',1,1);`,
   ].join(' ');
-  await run([
-    'd1',
-    'execute',
-    'DB',
-    '--local',
-    '--persist-to',
-    persist,
-    '--command',
-    sql,
-  ]);
+  await run(['d1', 'execute', 'DB', '--local', '--persist-to', persist, '--command', sql]);
   worker = spawn(
     wrangler,
     [
