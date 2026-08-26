@@ -179,7 +179,7 @@ describe('backup restore', () => {
     await expect(art.get(binderArt?.backup_object_key ?? '')).resolves.not.toBeNull();
   });
 
-  it('removes newer custom catalogue graph rows when restoring an older backup', async () => {
+  it('preserves shared catalogue data when restoring an older backup', async () => {
     const { database, db, art } = setup();
     await seedReferencedArt(art);
 
@@ -211,19 +211,30 @@ describe('backup restore', () => {
       database
         .prepare('SELECT id, name FROM catalogue_cards WHERE is_custom = 1 ORDER BY id')
         .all(),
-    ).toEqual([{ id: 'custom-a', name: 'Custom A' }]);
+    ).toEqual([
+      { id: 'custom-a', name: 'Custom A updated' },
+      { id: 'custom-b', name: 'Custom B' },
+    ]);
     expect(
       database.prepare('SELECT source_id, card_id FROM card_sources ORDER BY source_id').all(),
-    ).toEqual([{ source_id: 'source-a', card_id: 'custom-a' }]);
+    ).toEqual([
+      { source_id: 'source-a', card_id: 'custom-a' },
+      { source_id: 'source-a-extra', card_id: 'custom-a' },
+      { source_id: 'source-b', card_id: 'custom-b' },
+    ]);
     expect(
       database
         .prepare('SELECT card_id, variant FROM art_manifest WHERE card_id LIKE ? ORDER BY variant')
         .all('custom-%'),
-    ).toEqual([{ card_id: 'custom-a', variant: 'high' }]);
+    ).toEqual([
+      { card_id: 'custom-a', variant: 'high' },
+      { card_id: 'custom-b', variant: 'high' },
+      { card_id: 'custom-a', variant: 'low' },
+    ]);
     expect(
       database
         .prepare('SELECT card_id FROM catalogue_search WHERE card_id LIKE ? ORDER BY card_id')
         .all('custom-%'),
-    ).toEqual([{ card_id: 'custom-a' }]);
+    ).toEqual([{ card_id: 'custom-a' }, { card_id: 'custom-b' }]);
   });
 });

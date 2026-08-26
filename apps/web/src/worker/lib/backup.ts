@@ -761,62 +761,28 @@ export async function restoreBackup(
         db.prepare('DELETE FROM collection_cards WHERE owner_id = ?1').bind(ownerId),
         db.prepare('DELETE FROM species_representatives WHERE owner_id = ?1').bind(ownerId),
         db.prepare('DELETE FROM binders WHERE owner_id = ?1').bind(ownerId),
-        db.prepare(
-          `DELETE FROM art_upload_tokens WHERE card_id IN (
-           SELECT id FROM catalogue_cards WHERE is_custom = 1
-         )`,
-        ),
-        db.prepare(
-          `DELETE FROM price_stage_rows WHERE card_id IN (
-           SELECT id FROM catalogue_cards WHERE is_custom = 1
-         )`,
-        ),
-        db.prepare(
-          `DELETE FROM price_snapshots WHERE card_id IN (
-           SELECT id FROM catalogue_cards WHERE is_custom = 1
-         )`,
-        ),
-        db.prepare(
-          `DELETE FROM card_sources WHERE card_id IN (
-           SELECT id FROM catalogue_cards WHERE is_custom = 1
-         )`,
-        ),
-        db.prepare(
-          `DELETE FROM art_manifest WHERE card_id IN (
-           SELECT id FROM catalogue_cards WHERE is_custom = 1
-         )`,
-        ),
-        db.prepare(
-          `DELETE FROM catalogue_search WHERE card_id IN (
-           SELECT id FROM catalogue_cards WHERE is_custom = 1
-         )`,
-        ),
-        db.prepare('DELETE FROM catalogue_cards WHERE is_custom = 1'),
         db
           .prepare(
             `INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,supertype,subtype,species,rarity,artist,release_date,pokedex_number,number_sort,is_custom,is_active,created_at,updated_at)
            SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.name'),json_extract(j.value,'$.language'),json_extract(j.value,'$.category'),json_extract(j.value,'$.set_id'),json_extract(j.value,'$.set_name'),json_extract(j.value,'$.number'),json_extract(j.value,'$.supertype'),json_extract(j.value,'$.subtype'),json_extract(j.value,'$.species'),json_extract(j.value,'$.rarity'),json_extract(j.value,'$.artist'),json_extract(j.value,'$.release_date'),json_extract(j.value,'$.pokedex_number'),json_extract(j.value,'$.number_sort'),json_extract(j.value,'$.is_custom'),json_extract(j.value,'$.is_active'),json_extract(j.value,'$.created_at'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='catalogue'
-           ON CONFLICT(id) DO UPDATE SET name=excluded.name,language=excluded.language,category=excluded.category,set_id=excluded.set_id,set_name=excluded.set_name,number=excluded.number,supertype=excluded.supertype,subtype=excluded.subtype,species=excluded.species,rarity=excluded.rarity,artist=excluded.artist,release_date=excluded.release_date,pokedex_number=excluded.pokedex_number,number_sort=excluded.number_sort,is_custom=excluded.is_custom,is_active=excluded.is_active,updated_at=excluded.updated_at`,
-          )
-          .bind(restoreRunId, ownerId),
-        db
-          .prepare(
-            `DELETE FROM catalogue_search WHERE card_id IN (
-             SELECT json_extract(j.value,'$.id') FROM ${jsonRows} AND c.kind='catalogue'
-           )`,
+           ON CONFLICT(id) DO NOTHING`,
           )
           .bind(restoreRunId, ownerId),
         db
           .prepare(
             `INSERT INTO catalogue_search (card_id,name,set_name,number,species,rarity,artist)
-           SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.name'),json_extract(j.value,'$.set_name'),json_extract(j.value,'$.number'),COALESCE(json_extract(j.value,'$.species'),''),COALESCE(json_extract(j.value,'$.rarity'),''),COALESCE(json_extract(j.value,'$.artist'),'') FROM ${jsonRows} AND c.kind='catalogue'`,
+           SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.name'),json_extract(j.value,'$.set_name'),json_extract(j.value,'$.number'),COALESCE(json_extract(j.value,'$.species'),''),COALESCE(json_extract(j.value,'$.rarity'),''),COALESCE(json_extract(j.value,'$.artist'),'') FROM ${jsonRows}
+           AND c.kind='catalogue' AND NOT EXISTS (
+             SELECT 1 FROM catalogue_search
+             WHERE card_id = json_extract(j.value,'$.id')
+           )`,
           )
           .bind(restoreRunId, ownerId),
         db
           .prepare(
             `INSERT INTO card_sources (provider,source_id,card_id,language,source_updated_at,checksum,active,imported_at)
            SELECT json_extract(j.value,'$.provider'),json_extract(j.value,'$.source_id'),json_extract(j.value,'$.card_id'),json_extract(j.value,'$.language'),json_extract(j.value,'$.source_updated_at'),json_extract(j.value,'$.checksum'),json_extract(j.value,'$.active'),json_extract(j.value,'$.imported_at') FROM ${jsonRows} AND c.kind='sources'
-           ON CONFLICT(provider,source_id,language) DO UPDATE SET card_id=excluded.card_id,source_updated_at=excluded.source_updated_at,checksum=excluded.checksum,active=excluded.active,imported_at=excluded.imported_at`,
+           ON CONFLICT(provider,source_id,language) DO NOTHING`,
           )
           .bind(restoreRunId, ownerId),
         db
@@ -869,7 +835,7 @@ export async function restoreBackup(
           .prepare(
             `INSERT INTO art_manifest (card_id,variant,object_key,sha256,bytes,version,updated_at)
            SELECT json_extract(j.value,'$.card_id'),json_extract(j.value,'$.variant'),json_extract(j.value,'$.object_key'),json_extract(j.value,'$.sha256'),json_extract(j.value,'$.bytes'),json_extract(j.value,'$.version'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='art_manifest'
-           ON CONFLICT(card_id,variant) DO UPDATE SET object_key=excluded.object_key,sha256=excluded.sha256,bytes=excluded.bytes,version=excluded.version,updated_at=excluded.updated_at`,
+           ON CONFLICT(card_id,variant) DO NOTHING`,
           )
           .bind(restoreRunId, ownerId),
         db

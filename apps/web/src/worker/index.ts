@@ -146,35 +146,36 @@ app.get('/api/live', (c) => c.json({ ok: true, ts: new Date().toISOString() }));
 
 const ready = async (c: Context<{ Bindings: CloudflareEnv; Variables: AuthVars }>) => {
   try {
-    const [
-      database,
-      latestBackup,
-      latestCatalogue,
-      latestPricing,
-      latestFx,
-      fxRequired,
-      r2,
-      coordinator,
-    ] = await Promise.all([
-      c.env.DB.prepare('SELECT 1 AS ok').first<{ ok: number }>(),
-      c.env.DB.prepare(
-        "SELECT MAX(created_at) AS created_at FROM backup_runs WHERE owner_id = ?1 AND checksum <> 'pending'",
-      )
-        .bind('owner')
-        .first<{ created_at: number | null }>(),
-      latestFullEnglishCatalogueSync(c.env.DB).then((completed_at) => ({ completed_at })),
-      c.env.DB.prepare(
-        "SELECT MAX(completed_at) AS completed_at FROM price_sync_runs WHERE status = 'complete'",
-      ).first<{ completed_at: number | null }>(),
-      c.env.DB.prepare('SELECT MAX(captured_at) AS captured_at FROM fx_rates').first<{
-        captured_at: number | null;
-      }>(),
-      c.env.DB.prepare(
-        "SELECT COUNT(*) AS count FROM card_current_prices WHERE native_currency <> 'AUD'",
-      ).first<{ count: number }>(),
-      c.env.ART.head('__pokedex_readiness__'),
-      c.env.AUTH_COORDINATOR.getByName('readiness').health(),
-    ]);
+    const [database, latestBackup, latestCatalogue, latestPricing, fxReadiness, r2, coordinator] =
+      await Promise.all([
+        c.env.DB.prepare('SELECT 1 AS ok').first<{ ok: number }>(),
+        c.env.DB.prepare(
+          "SELECT MAX(created_at) AS created_at FROM backup_runs WHERE owner_id = ?1 AND checksum <> 'pending'",
+        )
+          .bind('owner')
+          .first<{ created_at: number | null }>(),
+        latestFullEnglishCatalogueSync(c.env.DB).then((completed_at) => ({ completed_at })),
+        c.env.DB.prepare(
+          "SELECT MAX(completed_at) AS completed_at FROM price_sync_runs WHERE status = 'complete'",
+        ).first<{ completed_at: number | null }>(),
+        c.env.DB.prepare(
+          `WITH required_currencies AS (
+           SELECT DISTINCT native_currency
+           FROM card_current_prices
+           WHERE native_currency <> 'AUD'
+         ), latest_rates AS (
+           SELECT base_currency, MAX(captured_at) AS captured_at
+           FROM fx_rates
+           WHERE quote_currency = 'AUD'
+           GROUP BY base_currency
+         )
+         SELECT COUNT(*) AS count, MIN(latest_rates.captured_at) AS captured_at
+         FROM required_currencies
+         LEFT JOIN latest_rates ON latest_rates.base_currency = required_currencies.native_currency`,
+        ).first<{ count: number; captured_at: number | null }>(),
+        c.env.ART.head('__pokedex_readiness__'),
+        c.env.AUTH_COORDINATOR.getByName('readiness').health(),
+      ]);
     void r2;
     if (database?.ok !== 1 || !coordinator) throw new Error('readiness_dependency_failed');
     const backupState = freshnessState(latestBackup?.created_at, READINESS_MAX_AGE_SECONDS.backup);
@@ -187,9 +188,9 @@ const ready = async (c: Context<{ Bindings: CloudflareEnv; Variables: AuthVars }
       READINESS_MAX_AGE_SECONDS.pricing,
     );
     const fxState: FreshnessState =
-      (fxRequired?.count ?? 0) === 0
+      (fxReadiness?.count ?? 0) === 0
         ? 'not_required'
-        : freshnessState(latestFx?.captured_at, READINESS_MAX_AGE_SECONDS.fx);
+        : freshnessState(fxReadiness?.captured_at, READINESS_MAX_AGE_SECONDS.fx);
     const scheduleReady = [backupState, catalogueState, pricingState, fxState].every(
       (state) => state === 'ok' || state === 'not_required',
     );
@@ -202,7 +203,7 @@ const ready = async (c: Context<{ Bindings: CloudflareEnv; Variables: AuthVars }
           backup: freshness(latestBackup?.created_at, backupState),
           catalogue: freshness(latestCatalogue?.completed_at, catalogueState),
           pricing: freshness(latestPricing?.completed_at, pricingState),
-          fx: freshness(latestFx?.captured_at, fxState),
+          fx: freshness(fxReadiness?.captured_at, fxState),
         },
         ts: new Date().toISOString(),
       },
