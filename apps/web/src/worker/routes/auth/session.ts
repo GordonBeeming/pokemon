@@ -4,6 +4,7 @@ import {
   createSession,
   getOrCreateOwner,
   getSession,
+  isLoopbackHost,
   logAudit,
   revokeSession,
   setSessionCookie,
@@ -28,8 +29,7 @@ sessionRoutes.post('/logout', async (c) => {
 });
 sessionRoutes.post('/dev-login', async (c) => {
   const host = new URL(c.req.raw.url).hostname;
-  if (host !== 'localhost' && host !== '127.0.0.1' && host !== '::1')
-    return c.json({ ok: false, error: 'not_found' }, 404);
+  if (!isLoopbackHost(host)) return c.json({ ok: false, error: 'not_found' }, 404);
   const owner = await getOrCreateOwner(c.env.DB, c.env.OWNER_LABEL);
   setSessionCookie(c, await createSession(c.env.DB, { sub: owner.id, label: owner.label }, c.env));
   await logAudit(c.env.DB, { actor: owner.id, action: 'login.dev' });
