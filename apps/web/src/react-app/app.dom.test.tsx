@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from './app';
 import { BinderView } from './binder-view';
 import { CatalogueView } from './catalogue-view';
-import { AUTH_LOST_EVENT } from './api';
+import { ApiError, AUTH_LOST_EVENT } from './api';
 import { DevicesView } from './ui';
 
 const apiMocks = vi.hoisted(() => ({
@@ -423,7 +423,9 @@ describe('async frontend announcements', () => {
     });
     apiMocks.binders.mockResolvedValue([]);
     apiMocks.setCollection
-      .mockRejectedValueOnce(new Error('offline'))
+      .mockRejectedValueOnce(
+        new ApiError('collection_revision_conflict', 'conflict', 409, null, null),
+      )
       .mockRejectedValueOnce(new Error('still offline'))
       .mockResolvedValueOnce({
         cardId: 'card-autosave',
@@ -467,6 +469,8 @@ describe('async frontend announcements', () => {
         await vi.advanceTimersByTimeAsync(700);
       });
       expect(container.textContent).toContain('Changes could not be saved.');
+      expect(apiMocks.card).toHaveBeenCalledTimes(2);
+      expect(container.querySelector<HTMLInputElement>('input[type="number"]')?.value).toBe('1');
 
       await act(async () => {
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));

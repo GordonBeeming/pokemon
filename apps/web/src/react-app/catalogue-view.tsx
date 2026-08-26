@@ -95,6 +95,7 @@ function DetailPanel({
   const saveRef = useRef(save);
   const activeSave = useRef<Promise<boolean> | null>(null);
   const failedDraft = useRef<string | null>(null);
+  const draftCardId = useRef(card.id);
   const savedQuantity = card.collection?.quantity ?? 0;
   const savedNotes = card.collection?.notes ?? '';
   const normalizedNotes = notes.trim();
@@ -103,11 +104,19 @@ function DetailPanel({
   const dirty = draftKey !== savedKey;
   saveRef.current = save;
   useEffect(() => {
-    setQuantity(savedQuantity);
-    setNotes(savedNotes);
-    setSaveError(null);
-    failedDraft.current = null;
-  }, [card]);
+    if (draftCardId.current !== card.id) {
+      draftCardId.current = card.id;
+      setQuantity(savedQuantity);
+      setNotes(savedNotes);
+      setSaveError(null);
+      failedDraft.current = null;
+      return;
+    }
+    if (!activeSave.current && failedDraft.current === null) {
+      setQuantity(savedQuantity);
+      setNotes(savedNotes);
+    }
+  }, [card.id, savedNotes, savedQuantity]);
   const startSave = useCallback(
     (force = false): Promise<boolean> => {
       if (!dirty) return Promise.resolve(true);
