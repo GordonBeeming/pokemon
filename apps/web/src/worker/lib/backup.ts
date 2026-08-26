@@ -289,7 +289,10 @@ const backupQueries: readonly BackupQuery[] = [
      WHERE m.rowid > ?2 AND (c.is_custom = 1
        OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
        OR EXISTS (SELECT 1 FROM species_representatives representative
-         WHERE representative.owner_id = ?1 AND representative.card_id = c.id))
+         WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
+       OR EXISTS (SELECT 1 FROM binder_slots s JOIN binder_pages p ON p.id = s.binder_page_id
+         JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
+         WHERE b.owner_id = ?1 AND s.card_id = c.id))
      ORDER BY m.rowid LIMIT ?3`,
   },
 ];
@@ -760,6 +763,37 @@ export async function restoreBackup(
         db.prepare('DELETE FROM collection_cards WHERE owner_id = ?1').bind(ownerId),
         db.prepare('DELETE FROM species_representatives WHERE owner_id = ?1').bind(ownerId),
         db.prepare('DELETE FROM binders WHERE owner_id = ?1').bind(ownerId),
+        db.prepare(
+          `DELETE FROM art_upload_tokens WHERE card_id IN (
+           SELECT id FROM catalogue_cards WHERE is_custom = 1
+         )`,
+        ),
+        db.prepare(
+          `DELETE FROM price_stage_rows WHERE card_id IN (
+           SELECT id FROM catalogue_cards WHERE is_custom = 1
+         )`,
+        ),
+        db.prepare(
+          `DELETE FROM price_snapshots WHERE card_id IN (
+           SELECT id FROM catalogue_cards WHERE is_custom = 1
+         )`,
+        ),
+        db.prepare(
+          `DELETE FROM card_sources WHERE card_id IN (
+           SELECT id FROM catalogue_cards WHERE is_custom = 1
+         )`,
+        ),
+        db.prepare(
+          `DELETE FROM art_manifest WHERE card_id IN (
+           SELECT id FROM catalogue_cards WHERE is_custom = 1
+         )`,
+        ),
+        db.prepare(
+          `DELETE FROM catalogue_search WHERE card_id IN (
+           SELECT id FROM catalogue_cards WHERE is_custom = 1
+         )`,
+        ),
+        db.prepare('DELETE FROM catalogue_cards WHERE is_custom = 1'),
         db
           .prepare(
             `INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,supertype,subtype,species,rarity,artist,release_date,pokedex_number,number_sort,is_custom,is_active,created_at,updated_at)

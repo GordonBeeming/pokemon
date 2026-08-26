@@ -103,9 +103,13 @@ export async function createSession(
   return signSession({ ...payload, sid, epoch: owner.mutation_epoch }, env);
 }
 
+export function isLoopbackHost(host: string): boolean {
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host === '[::1]';
+}
+
 export function cookieSecureFor(request: Request): boolean {
   const host = new URL(request.url).hostname;
-  return host !== 'localhost' && host !== '127.0.0.1' && host !== '::1';
+  return !isLoopbackHost(host);
 }
 
 export async function getSession<Path extends string, Input extends object>(

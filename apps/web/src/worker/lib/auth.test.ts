@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { cookieSecureFor, enrolSecretMatches, signSession, verifySession } from './auth';
+import {
+  cookieSecureFor,
+  enrolSecretMatches,
+  isLoopbackHost,
+  signSession,
+  verifySession,
+} from './auth';
 import { timingSafeStringEqual } from './crypto';
 
 const current = '01234567890123456789012345678901';
@@ -24,6 +30,12 @@ describe('auth foundation', () => {
 
   it('only marks secure cookies on non-local origins', () => {
     expect(cookieSecureFor(new Request('http://localhost:5173/login'))).toBe(false);
+    expect(cookieSecureFor(new Request('http://[::1]:5173/login'))).toBe(false);
     expect(cookieSecureFor(new Request('https://pokedex.example/login'))).toBe(true);
+  });
+
+  it('recognises bracketed IPv6 localhost as loopback', () => {
+    expect(isLoopbackHost('[::1]')).toBe(true);
+    expect(isLoopbackHost('pokedex.example')).toBe(false);
   });
 });
