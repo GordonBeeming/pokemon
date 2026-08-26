@@ -4,6 +4,7 @@ import { applyAllMigrations, sqliteD1 } from './d1-test-helper';
 import {
   applyStagedPrices,
   beginPriceSyncRun,
+  cardSourcePage,
   priceForCard,
   stagePrices,
   stagePriceTargets,
@@ -30,6 +31,26 @@ function priceDatabase(): { database: DatabaseSync; db: D1Database } {
 }
 
 describe('price source availability', () => {
+  it('keeps every active source for one card in the same pricing page', async () => {
+    const { database, db } = priceDatabase();
+    database.exec(`
+      INSERT INTO catalogue_cards
+        (id, name, language, category, set_id, set_name, number, created_at, updated_at)
+      VALUES ('card-2', 'Wartortle', 'en', 'pokemon', 'set-1', 'Set', '8', 1, 1);
+      INSERT INTO card_sources
+        (provider, source_id, card_id, language, source_updated_at, checksum, active, imported_at)
+      VALUES
+        ('tcgdex', 'source-a', 'card-1', 'en', 1, '${'a'.repeat(64)}', 1, 1),
+        ('tcgdex', 'source-b', 'card-1', 'en', 1, '${'b'.repeat(64)}', 1, 1),
+        ('tcgdex', 'source-c', 'card-2', 'en', 1, '${'c'.repeat(64)}', 1, 1);
+    `);
+
+    await expect(cardSourcePage(db, 1)).resolves.toEqual({
+      ids: ['source-a', 'source-b'],
+      cursor: 'card-1',
+    });
+  });
+
   it('stops displaying a source after a refreshed card no longer has that price', async () => {
     const { database, db } = priceDatabase();
     await upsertFxRate(db, '2026-08-26', 'USD', 1.5);

@@ -1,9 +1,10 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { PHYSICAL_LANGUAGES, languageSchema, type LanguageCode } from '@pokedex/shared';
+import { languageSchema, type LanguageCode } from '@pokedex/shared';
 import { z } from 'zod';
 import {
   applyStagedCatalogueRun,
   beginStagedCatalogueRun,
+  catalogueSyncLanguage,
   setImportedCardReleaseDate,
   stageCatalogueCards,
   transformTcgdexCard,
@@ -114,11 +115,7 @@ async function mapConcurrent<T, U>(
 }
 
 function scheduledLanguage(event: Readonly<WorkflowEvent<CatalogueWorkflowPayload>>): LanguageCode {
-  const requested = languageSchema.safeParse(event.payload.language);
-  if (requested.success) return requested.data;
-  if (!event.schedule) return 'en';
-  const day = Math.floor(event.schedule.scheduledTime / 86_400_000);
-  return PHYSICAL_LANGUAGES[day % PHYSICAL_LANGUAGES.length] ?? 'en';
+  return catalogueSyncLanguage(event.payload.language);
 }
 
 async function fetchLanguageCards(

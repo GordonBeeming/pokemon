@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { artObjectKey, isWebp } from './art';
 import { escapedFtsQuery } from './db';
 import { extractTcgdexPrices, selectConservativePrice } from './pricing';
-import { resolveStagedCardId, transformTcgdexCard } from './catalogue';
+import { catalogueSyncLanguage, resolveStagedCardId, transformTcgdexCard } from './catalogue';
 
 describe('catalogue cloud invariants', () => {
+  it('defaults scheduled catalogue refreshes to the English collection', () => {
+    expect(catalogueSyncLanguage(undefined)).toBe('en');
+    expect(catalogueSyncLanguage('ja')).toBe('ja');
+  });
+
   it('builds bounded FTS prefixes without exposing FTS operators', () => {
     expect(escapedFtsQuery('Pikachu V')).toBe('"Pikachu"* AND "V"*');
     expect(escapedFtsQuery('   ')).toBeNull();

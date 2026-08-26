@@ -3,8 +3,8 @@ import { z } from 'zod';
 import {
   applyStagedPrices,
   beginPriceSyncRun,
+  cardSourcePage,
   extractTcgdexPrices,
-  getPriceSyncCursor,
   prunePricingData,
   setPriceSyncCursor,
   stagePriceTargets,
@@ -91,24 +91,6 @@ async function mapConcurrent<T, U>(values: T[], mapper: (value: T) => Promise<U>
   return results;
 }
 
-async function sourcePage(db: D1Database): Promise<{ ids: string[]; cursor: string | null }> {
-  const existingCursor = await getPriceSyncCursor(db);
-  const read = async (cursor: string | null) =>
-    db
-      .prepare(
-        `SELECT DISTINCT source_id FROM card_sources
-         WHERE provider = 'tcgdex' AND language = 'en' AND active = 1
-           AND (?1 IS NULL OR source_id > ?1)
-         ORDER BY source_id LIMIT ?2`,
-      )
-      .bind(cursor, PRICE_SOURCE_PAGE)
-      .all<{ source_id: string }>();
-  let page = await read(existingCursor);
-  if (page.results.length === 0 && existingCursor !== null) page = await read(null);
-  const ids = page.results.map((row) => row.source_id);
-  return { ids, cursor: ids.at(-1) ?? null };
-}
-
 async function cardRowsForSources(
   db: D1Database,
   prices: Array<{ sourceId: string; candidates: PriceCandidate[] }>,
@@ -185,7 +167,9 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
         targetCardIds = [...new Set(rows.map((row) => row.cardId))];
       } else {
         currentStep = 'select-price-sources';
-        const page = await step.do('select-price-sources', () => sourcePage(this.env.DB));
+        const page = await step.do('select-price-sources', () =>
+          cardSourcePage(this.env.DB, PRICE_SOURCE_PAGE),
+        );
         cursor = page.cursor;
         currentStep = 'fetch-price-sources';
         const prices = await step.do('fetch-price-sources', () =>

@@ -429,6 +429,40 @@ export async function setPriceSyncCursor(db: D1Database, sourceId: string | null
     .run();
 }
 
+export async function cardSourcePage(
+  db: D1Database,
+  limit: number,
+): Promise<{ ids: string[]; cursor: string | null }> {
+  const existingCursor = await getPriceSyncCursor(db);
+  const read = async (cursor: string | null) =>
+    db
+      .prepare(
+        `SELECT DISTINCT card_id FROM card_sources
+         WHERE provider = 'tcgdex' AND language = 'en' AND active = 1
+           AND (?1 IS NULL OR card_id > ?1)
+         ORDER BY card_id LIMIT ?2`,
+      )
+      .bind(cursor, limit)
+      .all<{ card_id: string }>();
+  let page = await read(existingCursor);
+  if (page.results.length === 0 && existingCursor !== null) page = await read(null);
+  const cardIds = page.results.map((row) => row.card_id);
+  if (cardIds.length === 0) return { ids: [], cursor: null };
+  const sources = await db
+    .prepare(
+      `SELECT source.source_id FROM card_sources source JOIN json_each(?1) selected
+         ON selected.value = source.card_id
+       WHERE source.provider = 'tcgdex' AND source.language = 'en' AND source.active = 1
+       ORDER BY source.card_id, source.source_id`,
+    )
+    .bind(JSON.stringify(cardIds))
+    .all<{ source_id: string }>();
+  return {
+    ids: sources.results.map((row) => row.source_id),
+    cursor: cardIds.at(-1) ?? null,
+  };
+}
+
 export async function prunePricingData(db: D1Database, now = nowSeconds()): Promise<void> {
   const snapshotCutoff = now - 400 * 24 * 60 * 60;
   const runCutoff = now - 30 * 24 * 60 * 60;

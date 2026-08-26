@@ -45,6 +45,11 @@ interface CardRow {
   price_aud_micros: number | null;
 }
 
+export function catalogueSyncLanguage(value: unknown): LanguageCode {
+  const requested = languageSchema.safeParse(value);
+  return requested.success ? requested.data : 'en';
+}
+
 export interface CatalogueFilters {
   query?: string;
   language?: LanguageCode;
