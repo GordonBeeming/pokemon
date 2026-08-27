@@ -228,6 +228,14 @@ jobs:
             depends_on macos: :ventura
             app "Pokédex Scanner.app"
 
+            postflight do
+              if File.executable?("/usr/bin/gktool")
+                system_command "/usr/bin/gktool",
+                               args:         ["scan", "#{appdir}/Pokédex Scanner.app"],
+                               must_succeed: true
+              end
+            end
+
             zap trash: [
               "~/Library/Application Support/com.gordonbeeming.pokedex.scanner",
               "~/Library/Caches/com.gordonbeeming.pokedex.scanner",
