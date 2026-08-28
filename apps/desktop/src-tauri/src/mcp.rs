@@ -45,6 +45,7 @@ pub enum ToolName {
     BindersList,
     BinderGet,
     BinderSuggest,
+    BinderAssignmentCandidates,
     PendingScansList,
     PendingScanImage,
     ConfirmScan,
@@ -53,15 +54,24 @@ pub enum ToolName {
     BinderCreateDraft,
     BinderSlotSet,
     BinderSlotSwap,
+    BinderInsert,
+    BinderRemove,
+    BinderMove,
+    BinderAssign,
+    BinderPageBreak,
+    BinderReservePage,
+    BinderResize,
+    BinderFullPokedex,
 }
 
 impl ToolName {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 22] = [
         Self::CatalogueSearch,
         Self::CardGet,
         Self::BindersList,
         Self::BinderGet,
         Self::BinderSuggest,
+        Self::BinderAssignmentCandidates,
         Self::PendingScansList,
         Self::PendingScanImage,
         Self::ConfirmScan,
@@ -70,6 +80,14 @@ impl ToolName {
         Self::BinderCreateDraft,
         Self::BinderSlotSet,
         Self::BinderSlotSwap,
+        Self::BinderInsert,
+        Self::BinderRemove,
+        Self::BinderMove,
+        Self::BinderAssign,
+        Self::BinderPageBreak,
+        Self::BinderReservePage,
+        Self::BinderResize,
+        Self::BinderFullPokedex,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -79,6 +97,7 @@ impl ToolName {
             Self::BindersList => "pokedex_binders_list",
             Self::BinderGet => "pokedex_binder_get",
             Self::BinderSuggest => "pokedex_binder_suggest",
+            Self::BinderAssignmentCandidates => "pokedex_binder_assignment_candidates",
             Self::PendingScansList => "pokedex_pending_scans_list",
             Self::PendingScanImage => "pokedex_pending_scan_image",
             Self::ConfirmScan => "pokedex_confirm_scan",
@@ -87,6 +106,14 @@ impl ToolName {
             Self::BinderCreateDraft => "pokedex_binder_create_draft",
             Self::BinderSlotSet => "pokedex_binder_slot_set",
             Self::BinderSlotSwap => "pokedex_binder_slot_swap",
+            Self::BinderInsert => "pokedex_binder_insert",
+            Self::BinderRemove => "pokedex_binder_remove",
+            Self::BinderMove => "pokedex_binder_move",
+            Self::BinderAssign => "pokedex_binder_assign",
+            Self::BinderPageBreak => "pokedex_binder_page_break",
+            Self::BinderReservePage => "pokedex_binder_reserve_page",
+            Self::BinderResize => "pokedex_binder_resize",
+            Self::BinderFullPokedex => "pokedex_binder_full_pokedex",
         }
     }
 
@@ -517,6 +544,14 @@ fn tool_definitions() -> Value {
             true
         ),
         read_tool(
+            ToolName::BinderAssignmentCandidates.as_str(),
+            "List owned physical card copies available for a binder target.",
+            json!({"type":"object","properties":{
+                "versionId":{"type":"string","minLength":1,"maxLength":128},"page":{"type":"integer","minimum":0},"row":{"type":"integer","minimum":0},"column":{"type":"integer","minimum":0}
+            },"required":["versionId","page","row","column"],"additionalProperties":false}),
+            true
+        ),
+        read_tool(
             ToolName::PendingScansList.as_str(),
             "List local card captures waiting for confirmation.",
             empty_schema(),
@@ -593,7 +628,8 @@ fn tool_definitions() -> Value {
                         },
                         "required": ["kind", "rows", "columns"],
                         "additionalProperties": false
-                    }
+                    },
+                    "capacity": { "type": "integer", "minimum": 1 }
                 },
                 "required": ["name", "layout"],
                 "additionalProperties": false
@@ -636,8 +672,96 @@ fn tool_definitions() -> Value {
             }),
             true,
             true
+        ),
+        write_tool(
+            ToolName::BinderInsert.as_str(),
+            "Insert binder targets at a slot, shifting later entries.",
+            binder_insert_schema(),
+            false,
+            true
+        ),
+        write_tool(
+            ToolName::BinderRemove.as_str(),
+            "Remove one binder entry and compact later entries.",
+            binder_location_revision_schema(),
+            true,
+            true
+        ),
+        write_tool(
+            ToolName::BinderMove.as_str(),
+            "Move a binder entry by an explicit signed offset.",
+            json!({"type":"object","properties":{
+                "versionId":{"type":"string","minLength":1,"maxLength":128},
+                "expectedRevision":{"type":"integer","minimum":1},
+                "from":slot_location_schema(),"offset":{"type":"integer","minimum":-120000,"maximum":120000,"not":{"const":0}}
+            },"required":["versionId","expectedRevision","from","offset"],"additionalProperties":false}),
+            false,
+            true
+        ),
+        write_tool(
+            ToolName::BinderAssign.as_str(),
+            "Assign or clear a physical card copy for a binder target.",
+            json!({"type":"object","properties":{
+                "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema(),"cardId":{"type":["string","null"],"maxLength":128}
+            },"required":["versionId","expectedRevision","at","cardId"],"additionalProperties":false}),
+            true,
+            true
+        ),
+        write_tool(
+            ToolName::BinderPageBreak.as_str(),
+            "Toggle the page-break rule on a binder target.",
+            json!({"type":"object","properties":{
+                "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema(),"startsNewPage":{"type":"boolean"}
+            },"required":["versionId","expectedRevision","at","startsNewPage"],"additionalProperties":false}),
+            false,
+            true
+        ),
+        write_tool(
+            ToolName::BinderReservePage.as_str(),
+            "Reserve or release a whole binder page.",
+            json!({"type":"object","properties":{
+                "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"page":{"type":"integer","minimum":0},"reserved":{"type":"boolean"},"label":{"type":["string","null"],"maxLength":120}
+            },"required":["versionId","expectedRevision","page","reserved"],"additionalProperties":false}),
+            true,
+            true
+        ),
+        write_tool(
+            ToolName::BinderResize.as_str(),
+            "Explicitly resize binder pocket capacity.",
+            json!({"type":"object","properties":{
+                "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"capacity":{"type":"integer","minimum":1}
+            },"required":["versionId","expectedRevision","capacity"],"additionalProperties":false}),
+            true,
+            true
+        ),
+        write_tool(
+            ToolName::BinderFullPokedex.as_str(),
+            "Insert the full National Pokédex as unassigned targets.",
+            json!({"type":"object","properties":{
+                "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema(),"regionPageBreaks":{"type":"boolean","default":true}
+            },"required":["versionId","expectedRevision","at"],"additionalProperties":false}),
+            true,
+            true
         )
     ])
+}
+
+fn binder_location_revision_schema() -> Value {
+    json!({"type":"object","properties":{
+        "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema()
+    },"required":["versionId","expectedRevision","at"],"additionalProperties":false})
+}
+
+fn binder_insert_schema() -> Value {
+    json!({"type":"object","properties":{
+        "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema(),
+        "entries":{"type":"array","minItems":1,"maxItems":1025,"items":{"oneOf":[
+            {"type":"object","properties":{"kind":{"const":"empty"}},"required":["kind"],"additionalProperties":false},
+            {"type":"object","properties":{"kind":{"const":"reserved"},"label":{"type":["string","null"],"minLength":1,"maxLength":120}},"required":["kind"],"additionalProperties":false},
+            {"type":"object","properties":{"kind":{"const":"exact-card"},"cardId":{"type":"string","minLength":1,"maxLength":128},"startsNewPage":{"type":"boolean"}},"required":["kind","cardId"],"additionalProperties":false},
+            {"type":"object","properties":{"kind":{"const":"pokemon"},"pokemonNumber":{"type":"integer","minimum":1,"maximum":1025},"startsNewPage":{"type":"boolean"}},"required":["kind","pokemonNumber"],"additionalProperties":false}
+        ]}}
+    },"required":["versionId","expectedRevision","at","entries"],"additionalProperties":false})
 }
 
 fn read_tool(name: &str, description: &str, input_schema: Value, open_world: bool) -> Value {
@@ -790,6 +914,23 @@ mod tests {
         assert!(tools
             .iter()
             .any(|tool| tool["name"] == "pokedex_binder_suggest"));
+        let reserve = tools
+            .iter()
+            .find(|tool| tool["name"] == "pokedex_binder_reserve_page")
+            .expect("reserved page tool");
+        assert!(!reserve["inputSchema"]["required"]
+            .as_array()
+            .expect("required fields")
+            .iter()
+            .any(|field| field == "label"));
+        let insert = tools
+            .iter()
+            .find(|tool| tool["name"] == "pokedex_binder_insert")
+            .expect("insert tool");
+        assert_eq!(
+            insert["inputSchema"]["properties"]["entries"]["maxItems"],
+            1025
+        );
         assert_eq!(tools.len(), ToolName::ALL.len());
         for tool in ToolName::ALL {
             assert_eq!(

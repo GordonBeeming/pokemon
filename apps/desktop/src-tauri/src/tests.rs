@@ -185,6 +185,10 @@ async fn mock_suggestions() -> Json<Value> {
     Json(json!({ "ok": true, "shortages": [], "nextOffset": null, "emptySlots": [] }))
 }
 
+async fn mock_assignment_candidates() -> Json<Value> {
+    Json(json!({ "ok": true, "candidates": [] }))
+}
+
 async fn mock_cloud() -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -252,11 +256,47 @@ async fn mock_backend_cloud() -> String {
             get(mock_suggestions),
         )
         .route(
+            "/api/desktop/binders/versions/{version_id}/assignment-candidates",
+            get(mock_assignment_candidates),
+        )
+        .route(
             "/api/desktop/binders/versions/{version_id}/slot",
             put(mock_binder_mutation),
         )
         .route(
             "/api/desktop/binders/versions/{version_id}/swap",
+            post(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/entries/insert",
+            post(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/entries/remove",
+            post(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/entries/move",
+            post(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/assignment",
+            put(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/page-break",
+            put(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/reserved-page",
+            put(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/capacity",
+            put(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/full-pokedex",
             post(mock_binder_mutation),
         )
         .route(
@@ -1158,6 +1198,10 @@ async fn every_registered_tool_dispatches_through_the_real_desktop_backend() {
         (ToolName::BindersList, json!({})),
         (ToolName::BinderGet, json!({ "versionId": "version-1" })),
         (ToolName::BinderSuggest, json!({ "versionId": "version-1" })),
+        (
+            ToolName::BinderAssignmentCandidates,
+            json!({ "versionId": "version-1", "page": 0, "row": 0, "column": 0 }),
+        ),
         (ToolName::PendingScansList, json!({})),
         (
             ToolName::PendingScanImage,
@@ -1192,6 +1236,38 @@ async fn every_registered_tool_dispatches_through_the_real_desktop_backend() {
                 "target": { "page": 0, "row": 0, "column": 1 }
             }),
         ),
+        (
+            ToolName::BinderInsert,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "page": 0, "row": 0, "column": 0, "entries": [{ "kind": "empty" }] }),
+        ),
+        (
+            ToolName::BinderRemove,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "page": 0, "row": 0, "column": 0 }),
+        ),
+        (
+            ToolName::BinderMove,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "page": 0, "row": 0, "column": 0, "offset": 1 }),
+        ),
+        (
+            ToolName::BinderAssign,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "page": 0, "row": 0, "column": 0, "cardId": null }),
+        ),
+        (
+            ToolName::BinderPageBreak,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "page": 0, "row": 0, "column": 0, "startsNewPage": true }),
+        ),
+        (
+            ToolName::BinderReservePage,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "page": 0, "reserved": true }),
+        ),
+        (
+            ToolName::BinderResize,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "capacity": 18 }),
+        ),
+        (
+            ToolName::BinderFullPokedex,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "page": 0, "row": 0, "column": 0 }),
+        ),
     ];
 
     assert_eq!(cases.len(), ToolName::ALL.len());
@@ -1207,6 +1283,23 @@ async fn every_registered_tool_dispatches_through_the_real_desktop_backend() {
         .await
         .expect_err("missing query must fail");
     assert!(validation.to_string().contains("query must contain"));
+
+    let invalid_breaks = services
+        .call_tool(
+            ToolName::BinderFullPokedex,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "page": 0, "row": 0, "column": 0, "regionPageBreaks": "yes" }),
+        )
+        .await
+        .expect_err("non-boolean region page breaks must fail");
+    assert!(invalid_breaks.to_string().contains("regionPageBreaks"));
+    let invalid_entries = services
+        .call_tool(
+            ToolName::BinderInsert,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "page": 0, "row": 0, "column": 0, "entries": [{ "kind": "empty", "cardId": "unexpected" }] }),
+        )
+        .await
+        .expect_err("empty entries must reject extra fields");
+    assert!(invalid_entries.to_string().contains("unknown fields"));
 }
 
 #[test]

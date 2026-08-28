@@ -308,6 +308,25 @@ pub struct BinderSlot {
     pub row: u32,
     pub column: u32,
     pub card_id: Option<String>,
+    #[serde(default)]
+    pub entry_kind: Option<BinderEntryKind>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub pokemon_number: Option<u32>,
+    #[serde(default)]
+    pub assigned_card_id: Option<String>,
+    #[serde(default)]
+    pub starts_new_page: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BinderEntryKind {
+    Empty,
+    Reserved,
+    ExactCard,
+    Pokemon,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -369,6 +388,17 @@ pub struct BinderPage {
     pub id: String,
     pub position: u32,
     pub slots: Vec<BinderSlot>,
+    #[serde(default)]
+    pub kind: Option<BinderPageKind>,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BinderPageKind {
+    Slots,
+    Reserved,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -381,6 +411,8 @@ pub struct BinderVersionSummary {
     pub layout: BinderLayout,
     pub revision: u64,
     pub page_count: u32,
+    #[serde(default)]
+    pub capacity: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -421,6 +453,16 @@ pub struct BinderListResult {
 pub struct BinderMutationResult {
     pub version: BinderVersionSummary,
     pub pages: Vec<BinderPage>,
+    #[serde(default)]
+    pub anchor: Option<BinderAnchor>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BinderAnchor {
+    pub page: u32,
+    pub row: u32,
+    pub column: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -445,6 +487,27 @@ pub struct BinderSuggestionResult {
     pub shortages: Vec<BinderShortage>,
     pub next_offset: Option<u32>,
     pub empty_slots: Vec<BinderSuggestedSlot>,
+    #[serde(default)]
+    pub assignment_candidates: Vec<BinderAssignmentCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BinderAssignmentCandidate {
+    pub card_id: String,
+    pub name: String,
+    pub set_name: String,
+    pub number: String,
+    pub language: LanguageCode,
+    pub owned: u32,
+    pub assigned: u32,
+    pub available: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BinderAssignmentCandidatesResult {
+    pub ok: bool,
+    pub candidates: Vec<BinderAssignmentCandidate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -516,6 +579,8 @@ struct BinderSuggestionResponse {
     shortages: Vec<BinderShortage>,
     next_offset: Option<u32>,
     empty_slots: Vec<BinderSuggestedSlot>,
+    #[serde(default)]
+    assignment_candidates: Vec<BinderAssignmentCandidate>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -694,7 +759,216 @@ impl CloudClient {
             shortages: response.shortages,
             next_offset: response.next_offset,
             empty_slots: response.empty_slots,
+            assignment_candidates: response.assignment_candidates,
         })
+    }
+
+    pub async fn binder_assignment_candidates(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        location: Value,
+    ) -> Result<BinderAssignmentCandidatesResult> {
+        let page = location
+            .get("page")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                DesktopError::InvalidCloudResponse("assignment location requires page".to_string())
+            })?;
+        let row = location.get("row").and_then(Value::as_u64).ok_or_else(|| {
+            DesktopError::InvalidCloudResponse("assignment location requires row".to_string())
+        })?;
+        let column = location
+            .get("column")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                DesktopError::InvalidCloudResponse(
+                    "assignment location requires column".to_string(),
+                )
+            })?;
+        self.authorized_json(
+            Method::GET,
+            base_url,
+            &format!(
+                "/api/desktop/binders/versions/{}/assignment-candidates",
+                percent_encoding::utf8_percent_encode(
+                    version_id,
+                    percent_encoding::NON_ALPHANUMERIC
+                )
+            ),
+            token,
+            None,
+            &[
+                ("page", page.to_string()),
+                ("row", row.to_string()),
+                ("column", column.to_string()),
+            ],
+        )
+        .await
+    }
+
+    pub async fn insert_binder_entries(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::POST,
+            base_url,
+            token,
+            version_id,
+            "/entries/insert",
+            body,
+        )
+        .await
+    }
+
+    pub async fn remove_binder_entry(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::POST,
+            base_url,
+            token,
+            version_id,
+            "/entries/remove",
+            body,
+        )
+        .await
+    }
+
+    pub async fn move_binder_entry(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::POST,
+            base_url,
+            token,
+            version_id,
+            "/entries/move",
+            body,
+        )
+        .await
+    }
+
+    pub async fn assign_binder_entry(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::PUT,
+            base_url,
+            token,
+            version_id,
+            "/assignment",
+            body,
+        )
+        .await
+    }
+
+    pub async fn set_binder_page_break(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::PUT,
+            base_url,
+            token,
+            version_id,
+            "/page-break",
+            body,
+        )
+        .await
+    }
+
+    pub async fn reserve_binder_page(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::PUT,
+            base_url,
+            token,
+            version_id,
+            "/reserved-page",
+            body,
+        )
+        .await
+    }
+
+    pub async fn resize_binder_capacity(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(Method::PUT, base_url, token, version_id, "/capacity", body)
+            .await
+    }
+
+    pub async fn insert_full_pokedex(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::POST,
+            base_url,
+            token,
+            version_id,
+            "/full-pokedex",
+            body,
+        )
+        .await
+    }
+
+    async fn binder_mutation(
+        &self,
+        method: Method,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        suffix: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.authorized_json(
+            method,
+            base_url,
+            &format!(
+                "/api/desktop/binders/versions/{}{suffix}",
+                percent_encoding::utf8_percent_encode(
+                    version_id,
+                    percent_encoding::NON_ALPHANUMERIC
+                )
+            ),
+            token,
+            Some(body),
+            &[],
+        )
+        .await
     }
 
     pub async fn set_collection(
@@ -802,12 +1076,28 @@ impl CloudClient {
         name: &str,
         layout: Value,
     ) -> Result<BinderMutationEnvelope> {
+        self.create_binder_with_capacity(base_url, token, name, layout, None)
+            .await
+    }
+
+    pub async fn create_binder_with_capacity(
+        &self,
+        base_url: &str,
+        token: &str,
+        name: &str,
+        layout: Value,
+        capacity: Option<u32>,
+    ) -> Result<BinderMutationEnvelope> {
+        let mut body = json!({ "name": name, "layout": layout });
+        if let Some(capacity) = capacity {
+            body["capacity"] = json!(capacity);
+        }
         self.authorized_json(
             Method::POST,
             base_url,
             "/api/desktop/binders",
             token,
-            Some(json!({ "name": name, "layout": layout })),
+            Some(body),
             &[],
         )
         .await

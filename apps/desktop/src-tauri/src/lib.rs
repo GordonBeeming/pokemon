@@ -472,6 +472,16 @@ impl McpBackend for DesktopServices {
                     .await;
                 structured(self.handle_cloud(&base, &token, result)?)
             }
+            ToolName::BinderAssignmentCandidates => {
+                let version_id = required_string(&arguments, "versionId", 128)?;
+                let location = required_location(&arguments, "page", "row", "column")?;
+                let (base, token) = self.cloud_context().await?;
+                let result = self
+                    .cloud
+                    .binder_assignment_candidates(&base, &token, version_id, location)
+                    .await;
+                structured(self.handle_cloud(&base, &token, result)?)
+            }
             ToolName::PendingScansList => Ok(ToolPayload::Structured(json!({
                 "scans": self.inbox.list()?
             }))),
@@ -493,8 +503,27 @@ impl McpBackend for DesktopServices {
                     .get("layout")
                     .cloned()
                     .ok_or_else(|| DesktopError::Mcp("layout is required".to_string()))?;
+                let capacity = optional_u64(&arguments, "capacity")?
+                    .map(|value| {
+                        u32::try_from(value)
+                            .map_err(|_| DesktopError::Mcp("capacity is too large".to_string()))
+                    })
+                    .transpose()?;
                 let (base, token) = self.cloud_context().await?;
-                let result = self.cloud.create_binder(&base, &token, name, layout).await;
+                let result = match capacity {
+                    Some(capacity) => {
+                        self.cloud
+                            .create_binder_with_capacity(
+                                &base,
+                                &token,
+                                name,
+                                layout,
+                                Some(capacity),
+                            )
+                            .await
+                    }
+                    None => self.cloud.create_binder(&base, &token, name, layout).await,
+                };
                 structured(self.handle_cloud(&base, &token, result)?)
             }
             ToolName::BinderSlotSet => {
@@ -528,6 +557,119 @@ impl McpBackend for DesktopServices {
                 let result = self
                     .cloud
                     .swap_binder_slots(&base, &token, version_id, expected_revision, source, target)
+                    .await;
+                structured(self.handle_cloud(&base, &token, result)?)
+            }
+            ToolName::BinderInsert => {
+                let version_id = required_string(&arguments, "versionId", 128)?;
+                let expected_revision = required_u64(&arguments, "expectedRevision")?;
+                let at = required_location(&arguments, "page", "row", "column")?;
+                let entries = arguments
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .filter(|v| !v.is_empty() && v.len() <= 1025)
+                    .ok_or_else(|| {
+                        DesktopError::Mcp("entries must contain 1 to 1025 items".to_string())
+                    })?;
+                validate_binder_entries(entries)?;
+                let body =
+                    json!({"expectedRevision": expected_revision, "at": at, "entries": entries});
+                let (base, token) = self.cloud_context().await?;
+                let result = self
+                    .cloud
+                    .insert_binder_entries(&base, &token, version_id, body)
+                    .await;
+                structured(self.handle_cloud(&base, &token, result)?)
+            }
+            ToolName::BinderRemove => {
+                let version_id = required_string(&arguments, "versionId", 128)?;
+                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "at": required_location(&arguments, "page", "row", "column")?});
+                let (base, token) = self.cloud_context().await?;
+                let result = self
+                    .cloud
+                    .remove_binder_entry(&base, &token, version_id, body)
+                    .await;
+                structured(self.handle_cloud(&base, &token, result)?)
+            }
+            ToolName::BinderMove => {
+                let version_id = required_string(&arguments, "versionId", 128)?;
+                let offset = arguments
+                    .get("offset")
+                    .and_then(Value::as_i64)
+                    .filter(|v| *v != 0 && (-120_000..=120_000).contains(v))
+                    .ok_or_else(|| {
+                        DesktopError::Mcp(
+                            "offset must be a non-zero integer between -120000 and 120000"
+                                .to_string(),
+                        )
+                    })?;
+                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "from": required_location(&arguments, "page", "row", "column")?, "offset": offset});
+                let (base, token) = self.cloud_context().await?;
+                let result = self
+                    .cloud
+                    .move_binder_entry(&base, &token, version_id, body)
+                    .await;
+                structured(self.handle_cloud(&base, &token, result)?)
+            }
+            ToolName::BinderAssign => {
+                let version_id = required_string(&arguments, "versionId", 128)?;
+                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "at": required_location(&arguments, "page", "row", "column")?, "cardId": optional_nullable_string(&arguments, "cardId", 128)?});
+                let (base, token) = self.cloud_context().await?;
+                let result = self
+                    .cloud
+                    .assign_binder_entry(&base, &token, version_id, body)
+                    .await;
+                structured(self.handle_cloud(&base, &token, result)?)
+            }
+            ToolName::BinderPageBreak => {
+                let version_id = required_string(&arguments, "versionId", 128)?;
+                let starts = arguments
+                    .get("startsNewPage")
+                    .and_then(Value::as_bool)
+                    .ok_or_else(|| {
+                        DesktopError::Mcp("startsNewPage must be a boolean".to_string())
+                    })?;
+                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "at": required_location(&arguments, "page", "row", "column")?, "startsNewPage": starts});
+                let (base, token) = self.cloud_context().await?;
+                let result = self
+                    .cloud
+                    .set_binder_page_break(&base, &token, version_id, body)
+                    .await;
+                structured(self.handle_cloud(&base, &token, result)?)
+            }
+            ToolName::BinderReservePage => {
+                let version_id = required_string(&arguments, "versionId", 128)?;
+                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "page": required_u64(&arguments, "page")?, "reserved": arguments.get("reserved").and_then(Value::as_bool).ok_or_else(|| DesktopError::Mcp("reserved must be a boolean".to_string()))?, "label": optional_nullable_string_or_absent(&arguments, "label", 120)?});
+                let (base, token) = self.cloud_context().await?;
+                let result = self
+                    .cloud
+                    .reserve_binder_page(&base, &token, version_id, body)
+                    .await;
+                structured(self.handle_cloud(&base, &token, result)?)
+            }
+            ToolName::BinderResize => {
+                let version_id = required_string(&arguments, "versionId", 128)?;
+                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "capacity": required_u64(&arguments, "capacity")?});
+                let (base, token) = self.cloud_context().await?;
+                let result = self
+                    .cloud
+                    .resize_binder_capacity(&base, &token, version_id, body)
+                    .await;
+                structured(self.handle_cloud(&base, &token, result)?)
+            }
+            ToolName::BinderFullPokedex => {
+                let version_id = required_string(&arguments, "versionId", 128)?;
+                let breaks = match arguments.get("regionPageBreaks") {
+                    None => true,
+                    Some(value) => value.as_bool().ok_or_else(|| {
+                        DesktopError::Mcp("regionPageBreaks must be a boolean".to_string())
+                    })?,
+                };
+                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "at": required_location(&arguments, "page", "row", "column")?, "regionPageBreaks": breaks});
+                let (base, token) = self.cloud_context().await?;
+                let result = self
+                    .cloud
+                    .insert_full_pokedex(&base, &token, version_id, body)
                     .await;
                 structured(self.handle_cloud(&base, &token, result)?)
             }
@@ -868,6 +1010,112 @@ fn optional_nullable_string(
             "{name} must be null or contain at most {max} characters"
         ))),
     }
+}
+
+fn optional_nullable_string_or_absent(
+    arguments: &Map<String, Value>,
+    name: &str,
+    max: usize,
+) -> Result<Option<String>> {
+    if arguments.contains_key(name) {
+        optional_nullable_string(arguments, name, max)
+    } else {
+        Ok(None)
+    }
+}
+
+fn required_location(
+    arguments: &Map<String, Value>,
+    page: &str,
+    row: &str,
+    column: &str,
+) -> Result<Value> {
+    Ok(json!({
+        "page": required_u64(arguments, page)?,
+        "row": required_u64(arguments, row)?,
+        "column": required_u64(arguments, column)?,
+    }))
+}
+
+fn validate_binder_entries(entries: &[Value]) -> Result<()> {
+    for entry in entries {
+        let object = entry
+            .as_object()
+            .ok_or_else(|| DesktopError::Mcp("each binder entry must be an object".to_string()))?;
+        let kind = object
+            .get("kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| DesktopError::Mcp("binder entry kind is required".to_string()))?;
+        let allowed: &[&str] = match kind {
+            "empty" => &["kind"],
+            "reserved" => &["kind", "label"],
+            "exact-card" => &["kind", "cardId", "startsNewPage"],
+            "pokemon" => &["kind", "pokemonNumber", "startsNewPage"],
+            _ => {
+                return Err(DesktopError::Mcp(
+                    "binder entry kind is invalid".to_string(),
+                ))
+            }
+        };
+        if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+            return Err(DesktopError::Mcp(
+                "binder entry contains unknown fields".to_string(),
+            ));
+        }
+        match kind {
+            "empty" => {}
+            "reserved" => {
+                if let Some(label) = object.get("label") {
+                    match label {
+                        Value::Null => {}
+                        Value::String(value) if !value.trim().is_empty() && value.len() <= 120 => {}
+                        _ => {
+                            return Err(DesktopError::Mcp(
+                                "binder reserved label is invalid".to_string(),
+                            ))
+                        }
+                    }
+                }
+            }
+            "exact-card" => {
+                let card_id = object
+                    .get("cardId")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty() && v.len() <= 128)
+                    .ok_or_else(|| {
+                        DesktopError::Mcp("binder exact-card cardId is invalid".to_string())
+                    })?;
+                let _ = card_id;
+                if let Some(value) = object.get("startsNewPage") {
+                    if !value.is_boolean() {
+                        return Err(DesktopError::Mcp(
+                            "startsNewPage must be a boolean".to_string(),
+                        ));
+                    }
+                }
+            }
+            "pokemon" => {
+                let number = object
+                    .get("pokemonNumber")
+                    .and_then(Value::as_u64)
+                    .filter(|v| (1..=1025).contains(v))
+                    .ok_or_else(|| {
+                        DesktopError::Mcp("pokemonNumber must be between 1 and 1025".to_string())
+                    })?;
+                let _ = number;
+                if let Some(value) = object.get("startsNewPage") {
+                    if !value.is_boolean() {
+                        return Err(DesktopError::Mcp(
+                            "startsNewPage must be a boolean".to_string(),
+                        ));
+                    }
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+    Ok(())
 }
 
 pub fn run() {
