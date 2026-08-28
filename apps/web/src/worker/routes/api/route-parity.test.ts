@@ -27,6 +27,58 @@ const sharedRoutes = [
     body: { mutationId, delta: 1 },
   },
   {
+    method: 'POST',
+    browser: '/binders/versions/version-1/entries/insert',
+    desktop: '/desktop/binders/versions/version-1/entries/insert',
+    body: {
+      at: { page: 0, row: 0, column: 0 },
+      entries: [{ kind: 'pokemon', pokemonNumber: 1 }],
+      expectedRevision: 1,
+    },
+  },
+  {
+    method: 'POST',
+    browser: '/binders/versions/version-1/entries/remove',
+    desktop: '/desktop/binders/versions/version-1/entries/remove',
+    body: { at: { page: 0, row: 0, column: 0 }, expectedRevision: 1 },
+  },
+  {
+    method: 'POST',
+    browser: '/binders/versions/version-1/entries/move',
+    desktop: '/desktop/binders/versions/version-1/entries/move',
+    body: { from: { page: 0, row: 0, column: 0 }, offset: 1, expectedRevision: 1 },
+  },
+  {
+    method: 'PUT',
+    browser: '/binders/versions/version-1/assignment',
+    desktop: '/desktop/binders/versions/version-1/assignment',
+    body: { at: { page: 0, row: 0, column: 0 }, cardId: null, expectedRevision: 1 },
+  },
+  {
+    method: 'PUT',
+    browser: '/binders/versions/version-1/page-break',
+    desktop: '/desktop/binders/versions/version-1/page-break',
+    body: { at: { page: 0, row: 0, column: 0 }, startsNewPage: true, expectedRevision: 1 },
+  },
+  {
+    method: 'PUT',
+    browser: '/binders/versions/version-1/reserved-page',
+    desktop: '/desktop/binders/versions/version-1/reserved-page',
+    body: { page: 0, reserved: true, label: 'Trades', expectedRevision: 1 },
+  },
+  {
+    method: 'PUT',
+    browser: '/binders/versions/version-1/capacity',
+    desktop: '/desktop/binders/versions/version-1/capacity',
+    body: { capacity: 8, expectedRevision: 1 },
+  },
+  {
+    method: 'POST',
+    browser: '/binders/versions/version-1/full-pokedex',
+    desktop: '/desktop/binders/versions/version-1/full-pokedex',
+    body: { at: { page: 0, row: 0, column: 0 }, regionPageBreaks: true, expectedRevision: 1 },
+  },
+  {
     method: 'PATCH',
     browser: '/collection/card-1/notes',
     desktop: '/desktop/collection/card-1/notes',
@@ -48,6 +100,11 @@ const sharedRoutes = [
     method: 'GET',
     browser: '/binders/versions/version-1/shortages',
     desktop: '/desktop/binders/versions/version-1/shortages',
+  },
+  {
+    method: 'GET',
+    browser: '/binders/versions/version-1/assignment-candidates?page=0&row=0&column=0',
+    desktop: '/desktop/binders/versions/version-1/assignment-candidates?page=0&row=0&column=0',
   },
   {
     method: 'PUT',

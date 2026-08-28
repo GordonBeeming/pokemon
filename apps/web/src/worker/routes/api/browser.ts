@@ -33,6 +33,15 @@ import {
   binderRevisionRequestSchema,
   binderSlotSetRequestSchema,
   binderSlotSwapRequestSchema,
+  binderInsertRequestSchema,
+  binderCompactRemoveRequestSchema,
+  binderOffsetMoveRequestSchema,
+  binderAssignRequestSchema,
+  binderAssignmentCandidatesQuerySchema,
+  binderPageBreakRequestSchema,
+  binderReservePageRequestSchema,
+  binderCapacityRequestSchema,
+  binderFullPokedexRequestSchema,
   collectionIncrementBody,
   collectionNotesBody,
   compatibleCollectionSetBody,
@@ -500,6 +509,7 @@ browserApiRoutes.post('/binders', async (c) => {
         binder: await ownerOperations(c.env, sessionOwner(c)).createBinder(
           parsed.data.name,
           parsed.data.layout,
+          parsed.data.capacity,
         ),
       },
       201,
@@ -562,6 +572,25 @@ browserApiRoutes.get('/binders/versions/:id/shortages', async (c) => {
         c.req.param('id'),
         Math.max(0, Number.parseInt(c.req.query('offset') ?? '0', 10) || 0),
         asPositiveInt(c.req.query('limit'), 100, 100),
+      )),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.get('/binders/versions/:id/assignment-candidates', async (c) => {
+  try {
+    const parsed = binderAssignmentCandidatesQuerySchema.safeParse({
+      page: Number(c.req.query('page')),
+      row: Number(c.req.query('row')),
+      column: Number(c.req.query('column')),
+    });
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_query' }, 400);
+    return c.json({
+      ok: true,
+      ...(await ownerOperations(c.env, sessionOwner(c)).binderAssignmentCandidates(
+        c.req.param('id'),
+        parsed.data,
       )),
     });
   } catch (error) {
@@ -694,6 +723,142 @@ browserApiRoutes.put('/binders/versions/:id/pages/order', async (c) => {
       binder: await ownerOperations(c.env, sessionOwner(c)).reorderBinderPages(
         c.req.param('id'),
         parsed.data.pageIds,
+        parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.post('/binders/versions/:id/entries/insert', async (c) => {
+  try {
+    const parsed = binderInsertRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await ownerOperations(c.env, sessionOwner(c)).insertBinderEntries(
+        c.req.param('id'),
+        parsed.data.at,
+        parsed.data.entries,
+        parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.post('/binders/versions/:id/entries/remove', async (c) => {
+  try {
+    const parsed = binderCompactRemoveRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await ownerOperations(c.env, sessionOwner(c)).compactRemoveBinderEntry(
+        c.req.param('id'),
+        parsed.data.at,
+        parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.post('/binders/versions/:id/entries/move', async (c) => {
+  try {
+    const parsed = binderOffsetMoveRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await ownerOperations(c.env, sessionOwner(c)).moveBinderEntryByOffset(
+        c.req.param('id'),
+        parsed.data.from,
+        parsed.data.offset,
+        parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.put('/binders/versions/:id/assignment', async (c) => {
+  try {
+    const parsed = binderAssignRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await ownerOperations(c.env, sessionOwner(c)).setBinderEntryAssignment(
+        c.req.param('id'),
+        parsed.data.at,
+        parsed.data.cardId,
+        parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.put('/binders/versions/:id/page-break', async (c) => {
+  try {
+    const parsed = binderPageBreakRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await ownerOperations(c.env, sessionOwner(c)).setBinderEntryPageBreak(
+        c.req.param('id'),
+        parsed.data.at,
+        parsed.data.startsNewPage,
+        parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.put('/binders/versions/:id/reserved-page', async (c) => {
+  try {
+    const parsed = binderReservePageRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await ownerOperations(c.env, sessionOwner(c)).reserveBinderPage(
+        c.req.param('id'),
+        parsed.data.page,
+        parsed.data.reserved,
+        parsed.data.label,
+        parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.put('/binders/versions/:id/capacity', async (c) => {
+  try {
+    const parsed = binderCapacityRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await ownerOperations(c.env, sessionOwner(c)).resizeBinderCapacity(
+        c.req.param('id'),
+        parsed.data.capacity,
+        parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.post('/binders/versions/:id/full-pokedex', async (c) => {
+  try {
+    const parsed = binderFullPokedexRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await ownerOperations(c.env, sessionOwner(c)).insertFullPokedex(
+        c.req.param('id'),
+        parsed.data.at,
+        parsed.data.regionPageBreaks,
         parsed.data.expectedRevision,
       ),
     });

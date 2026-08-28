@@ -30,7 +30,13 @@ function setup(): { database: DatabaseSync; db: D1Database } {
 describe('bulk binder placement', () => {
   it('creates an active binder, preserves order and duplicates, and allocates pages atomically', async () => {
     const { database, db } = setup();
-    const created = await createBinder(db, 'owner', 'Binder', { kind: '2x2', rows: 2, columns: 2 });
+    const created = await createBinder(
+      db,
+      'owner',
+      'Binder',
+      { kind: '2x2', rows: 2, columns: 2 },
+      8,
+    );
     expect(created.version.status).toBe('active');
     expect(
       database

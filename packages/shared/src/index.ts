@@ -1,4 +1,7 @@
 import { z } from 'zod';
+import { NATIONAL_POKEDEX_SIZE } from './national-pokedex';
+
+export * from './national-pokedex';
 
 export const cardIdSchema = z.string().trim().min(1).max(128).brand<'CardId'>();
 export type CardId = z.infer<typeof cardIdSchema>;
@@ -106,6 +109,19 @@ export const customBinderLayoutSchema = z
 export const binderLayoutSchema = z.union([standardBinderLayoutSchema, customBinderLayoutSchema]);
 export type BinderLayout = z.infer<typeof binderLayoutSchema>;
 
+export const pokemonDiscoveryCategorySchema = z.enum([
+  'Kanto',
+  'Johto',
+  'Hoenn',
+  'Sinnoh',
+  'Unova',
+  'Kalos',
+  'Alola',
+  'Galar',
+  'Hisui',
+  'Paldea',
+]);
+
 export const priceBaselineSchema = z
   .object({
     amountAud: z.number().finite().nonnegative().nullable(),
@@ -173,6 +189,11 @@ export const binderSlotSchema = z
     row: z.number().int().nonnegative(),
     column: z.number().int().nonnegative(),
     cardId: cardIdSchema.nullable(),
+    entryKind: z.enum(['empty', 'reserved', 'exact-card', 'pokemon']).optional(),
+    label: z.string().trim().min(1).max(120).nullable().optional(),
+    pokemonNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE).nullable().optional(),
+    assignedCardId: cardIdSchema.nullable().optional(),
+    startsNewPage: z.boolean().optional(),
   })
   .strict();
 export type BinderSlot = z.infer<typeof binderSlotSchema>;
@@ -196,10 +217,49 @@ export const binderShortageSchema = z
     cardId: cardIdSchema,
     required: z.number().int().positive(),
     owned: z.number().int().nonnegative(),
+    assigned: z.number().int().nonnegative().optional(),
+    available: z.number().int().nonnegative().optional(),
     missing: z.number().int().positive(),
   })
   .strict();
 export type BinderShortage = z.infer<typeof binderShortageSchema>;
+
+export const binderPokemonShortageSchema = z
+  .object({
+    pokemonNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE),
+    required: z.number().int().positive(),
+    owned: z.number().int().nonnegative(),
+    assigned: z.number().int().nonnegative().optional(),
+    available: z.number().int().nonnegative().optional(),
+    missing: z.number().int().positive(),
+  })
+  .strict();
+export type BinderPokemonShortage = z.infer<typeof binderPokemonShortageSchema>;
+
+export const binderReadyToPlaceSchema = z
+  .object({
+    exactTargets: z.number().int().nonnegative(),
+    pokemonTargets: z.number().int().nonnegative(),
+  })
+  .strict();
+export type BinderReadyToPlace = z.infer<typeof binderReadyToPlaceSchema>;
+
+export const binderAssignmentCandidateSchema = z
+  .object({
+    cardId: cardIdSchema,
+    name: z.string().trim().min(1).max(200),
+    setName: z.string().trim().min(1).max(200),
+    number: z.string().trim().min(1).max(32),
+    language: languageSchema,
+    owned: z.number().int().nonnegative(),
+    assigned: z.number().int().nonnegative(),
+    available: z.number().int().nonnegative(),
+  })
+  .strict();
+export const binderAssignmentCandidatesSchema = z
+  .object({ candidates: z.array(binderAssignmentCandidateSchema).max(500) })
+  .strict();
+export type BinderAssignmentCandidate = z.infer<typeof binderAssignmentCandidateSchema>;
 
 export const binderVersionSummarySchema = z
   .object({
@@ -210,6 +270,7 @@ export const binderVersionSummarySchema = z
     layout: binderLayoutSchema,
     revision: z.number().int().positive(),
     pageCount: z.number().int().positive(),
+    capacity: z.number().int().positive().optional(),
   })
   .strict();
 export type BinderVersionSummary = z.infer<typeof binderVersionSummarySchema>;
@@ -218,6 +279,8 @@ export const binderPageSchema = z
   .object({
     id: z.string().trim().min(1).max(128),
     position: z.number().int().nonnegative(),
+    kind: z.enum(['slots', 'reserved']).optional(),
+    label: z.string().trim().min(1).max(120).nullable().optional(),
     slots: z.array(binderSlotSchema).max(400),
   })
   .strict();
@@ -236,6 +299,14 @@ export const binderMutationResultSchema = z
   .object({
     version: binderVersionSummarySchema,
     pages: z.array(binderPageSchema).max(2),
+    anchor: z
+      .object({
+        page: z.number().int().nonnegative(),
+        row: z.number().int().nonnegative(),
+        column: z.number().int().nonnegative(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type BinderMutationResult = z.infer<typeof binderMutationResultSchema>;
@@ -270,6 +341,89 @@ export const binderSlotSwapRequestSchema = z
   })
   .strict();
 export type BinderSlotSwapRequest = z.infer<typeof binderSlotSwapRequestSchema>;
+
+export const binderEntrySchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('empty') }).strict(),
+  z
+    .object({ kind: z.literal('reserved'), label: z.string().trim().min(1).max(120).nullable() })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('exact-card'),
+      cardId: cardIdSchema,
+      startsNewPage: z.boolean().default(false),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('pokemon'),
+      pokemonNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE),
+      startsNewPage: z.boolean().default(false),
+    })
+    .strict(),
+]);
+export type BinderEntry = z.infer<typeof binderEntrySchema>;
+
+export const binderInsertRequestSchema = binderRevisionRequestSchema
+  .extend({
+    at: binderSlotLocationSchema,
+    entries: z.array(binderEntrySchema).min(1).max(NATIONAL_POKEDEX_SIZE),
+  })
+  .strict();
+export const binderCompactRemoveRequestSchema = binderRevisionRequestSchema
+  .extend({ at: binderSlotLocationSchema })
+  .strict();
+export const binderOffsetMoveRequestSchema = binderRevisionRequestSchema
+  .extend({
+    from: binderSlotLocationSchema,
+    offset: z
+      .number()
+      .int()
+      .min(-120_000)
+      .max(120_000)
+      .refine((value) => value !== 0),
+  })
+  .strict();
+export const binderAssignRequestSchema = binderRevisionRequestSchema
+  .extend({
+    at: binderSlotLocationSchema,
+    cardId: cardIdSchema.nullable(),
+  })
+  .strict();
+export const binderPageBreakRequestSchema = binderRevisionRequestSchema
+  .extend({
+    at: binderSlotLocationSchema,
+    startsNewPage: z.boolean(),
+  })
+  .strict();
+export const binderReservePageRequestSchema = binderRevisionRequestSchema
+  .extend({
+    page: z.number().int().nonnegative(),
+    reserved: z.boolean(),
+    label: z.string().trim().min(1).max(120).nullable(),
+  })
+  .strict();
+export const binderCapacityRequestSchema = binderRevisionRequestSchema
+  .extend({
+    capacity: z.number().int().positive(),
+  })
+  .strict();
+export const binderFullPokedexRequestSchema = binderRevisionRequestSchema
+  .extend({
+    at: binderSlotLocationSchema,
+    regionPageBreaks: z.boolean().default(true),
+  })
+  .strict();
+
+export const binderCapacityErrorSchema = z
+  .object({
+    currentCapacity: z.number().int().positive(),
+    requiredCapacity: z.number().int().positive(),
+    additionalPockets: z.number().int().positive(),
+    pageIncrement: z.number().int().positive(),
+  })
+  .strict();
+export type BinderCapacityError = z.infer<typeof binderCapacityErrorSchema>;
 
 export const catalogueCardViewSchema = catalogueBriefSchema.extend({
   imageHighUrl: artUrlSchema,

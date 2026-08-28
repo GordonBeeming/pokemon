@@ -5,12 +5,15 @@ import {
   desktopScopeSchema,
   binderLayoutSchema,
   binderMutationResultSchema,
+  binderAssignmentCandidatesSchema,
   cardIdSchema,
   collectionIncrementRequestSchema,
   collectionNotesPatchRequestSchema,
   collectionSetRequestSchema,
   collectionStateSchema,
   languageSchema,
+  NATIONAL_POKEDEX,
+  pokemonDiscoveryCategory,
 } from './index';
 
 describe('shared wire schemas', () => {
@@ -130,5 +133,46 @@ describe('shared wire schemas', () => {
     expect(
       binderMutationResultSchema.safeParse({ ...result, pages: [page, page, page] }).success,
     ).toBe(false);
+  });
+
+  it('strictly validates assignment candidate availability', () => {
+    const candidate = {
+      cardId: 'sv1-001',
+      name: 'Bulbasaur',
+      setName: 'Base',
+      number: '1',
+      language: 'en',
+      owned: 2,
+      assigned: 1,
+      available: 1,
+    };
+    expect(binderAssignmentCandidatesSchema.parse({ candidates: [candidate] }).candidates).toEqual([
+      candidate,
+    ]);
+    expect(
+      binderAssignmentCandidatesSchema.safeParse({ candidates: [{ ...candidate, ignored: true }] })
+        .success,
+    ).toBe(false);
+  });
+});
+
+describe('National Pokedex registry', () => {
+  it('contains every named species exactly once in National order', () => {
+    expect(NATIONAL_POKEDEX).toHaveLength(1025);
+    expect(NATIONAL_POKEDEX.map((entry) => entry.number)).toEqual(
+      Array.from({ length: 1025 }, (_unused, index) => index + 1),
+    );
+    expect(new Set(NATIONAL_POKEDEX.map((entry) => entry.name)).size).toBe(1025);
+  });
+
+  it('uses discovery categories, including Hisui and the Alolan Meltan family', () => {
+    expect(pokemonDiscoveryCategory(151)).toBe('Kanto');
+    expect(pokemonDiscoveryCategory(899)).toBe('Hisui');
+    expect(pokemonDiscoveryCategory(905)).toBe('Hisui');
+    expect(pokemonDiscoveryCategory(906)).toBe('Paldea');
+    expect(NATIONAL_POKEDEX[807]?.name).toBe('Meltan');
+    expect(NATIONAL_POKEDEX[807]?.discoveryCategory).toBe('Alola');
+    expect(NATIONAL_POKEDEX[808]?.name).toBe('Melmetal');
+    expect(NATIONAL_POKEDEX[808]?.discoveryCategory).toBe('Alola');
   });
 });

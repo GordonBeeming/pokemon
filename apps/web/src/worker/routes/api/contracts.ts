@@ -3,6 +3,15 @@ import {
   binderRevisionRequestSchema,
   binderSlotSetRequestSchema,
   binderSlotSwapRequestSchema,
+  binderSlotLocationSchema,
+  binderInsertRequestSchema,
+  binderCompactRemoveRequestSchema,
+  binderOffsetMoveRequestSchema,
+  binderAssignRequestSchema,
+  binderPageBreakRequestSchema,
+  binderReservePageRequestSchema,
+  binderCapacityRequestSchema,
+  binderFullPokedexRequestSchema,
   cardCategorySchema,
   collectionIncrementRequestSchema,
   collectionNotesPatchRequestSchema,
@@ -18,6 +27,17 @@ import { ApplicationError } from '../../lib/log';
 import type { AuthVars } from '../../lib/types';
 
 export { binderRevisionRequestSchema, binderSlotSetRequestSchema, binderSlotSwapRequestSchema };
+export const binderAssignmentCandidatesQuerySchema = binderSlotLocationSchema;
+export {
+  binderInsertRequestSchema,
+  binderCompactRemoveRequestSchema,
+  binderOffsetMoveRequestSchema,
+  binderAssignRequestSchema,
+  binderPageBreakRequestSchema,
+  binderReservePageRequestSchema,
+  binderCapacityRequestSchema,
+  binderFullPokedexRequestSchema,
+};
 
 export const collectionBody = mutationRequestSchema
   .extend({
@@ -30,7 +50,11 @@ export const compatibleCollectionSetBody = z.union([collectionSetBody, collectio
 export const collectionIncrementBody = collectionIncrementRequestSchema;
 export const collectionNotesBody = collectionNotesPatchRequestSchema;
 export const createBinderBody = z
-  .object({ name: z.string().trim().min(1).max(120), layout: binderLayoutSchema })
+  .object({
+    name: z.string().trim().min(1).max(120),
+    layout: binderLayoutSchema,
+    capacity: z.number().int().positive().optional(),
+  })
   .strict();
 export const pageOrderBody = binderRevisionRequestSchema
   .extend({ pageIds: z.array(z.string().trim().min(1).max(128)).min(1) })

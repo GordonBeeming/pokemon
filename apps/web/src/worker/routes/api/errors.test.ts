@@ -17,6 +17,12 @@ const binderStatuses = {
   binder_slot_not_found: 404,
   binder_slot_out_of_bounds: 400,
   binder_arrangement_card_missing: 400,
+  binder_capacity_exceeded: 409,
+  binder_capacity_invalid: 400,
+  binder_shrink_occupied: 409,
+  binder_assignment_incompatible: 409,
+  binder_assignment_quantity_exceeded: 409,
+  binder_reserved_page_not_empty: 409,
   card_not_found: 404,
 } as const satisfies Record<BinderErrorCode, number>;
 
@@ -26,6 +32,7 @@ const collectionStatuses = {
   collection_revision_conflict: 409,
   collection_mutation_conflict: 409,
   collection_quantity_out_of_bounds: 409,
+  collection_quantity_below_active_assignments: 409,
   invalid_stored_mutation: 500,
 } as const satisfies Record<CollectionErrorCode, number>;
 
