@@ -851,4 +851,81 @@ describe('binder D1 domain', () => {
         .get(),
     ).toEqual({ count: 0 });
   });
+
+  it('starts Kanto on the next page and keeps an undersized region insert atomic', async () => {
+    const { database, db } = setup();
+    const layout = { kind: '3x3' as const, rows: 3 as const, columns: 3 as const };
+    const large = await createBinder(db, 'owner', 'Regional', layout, 1206);
+    const largeFillers = await insertBinderEntries(
+      db,
+      'owner',
+      large.version.id,
+      { page: 0, row: 0, column: 0 },
+      [
+        { kind: 'exact-card', cardId: cardIdSchema.parse('bulba'), startsNewPage: false },
+        { kind: 'exact-card', cardId: cardIdSchema.parse('ivy'), startsNewPage: false },
+      ],
+      large.version.revision,
+    );
+    await insertFullPokedex(
+      db,
+      'owner',
+      large.version.id,
+      { page: 0, row: 0, column: 2 },
+      true,
+      largeFillers.version.revision,
+    );
+    const firstTwoPages = await getBinderVersion(db, 'owner', large.version.id, 0, 2);
+    expect(firstTwoPages.pages[0]?.slots.slice(0, 2).map((slot) => slot.cardId)).toEqual([
+      'bulba',
+      'ivy',
+    ]);
+    expect(firstTwoPages.pages[0]?.slots.slice(2).every((slot) => slot.entryKind === 'empty')).toBe(
+      true,
+    );
+    expect(firstTwoPages.pages[1]?.slots[0]).toMatchObject({
+      entryKind: 'pokemon',
+      pokemonNumber: 1,
+      startsNewPage: true,
+    });
+
+    const small = await createBinder(db, 'owner', 'Regional small', layout, 1026);
+    const smallFillers = await insertBinderEntries(
+      db,
+      'owner',
+      small.version.id,
+      { page: 0, row: 0, column: 0 },
+      [
+        { kind: 'exact-card', cardId: cardIdSchema.parse('bulba'), startsNewPage: false },
+        { kind: 'exact-card', cardId: cardIdSchema.parse('ivy'), startsNewPage: false },
+      ],
+      small.version.revision,
+    );
+    await expect(
+      insertFullPokedex(
+        db,
+        'owner',
+        small.version.id,
+        { page: 0, row: 0, column: 2 },
+        true,
+        smallFillers.version.revision,
+      ),
+    ).rejects.toMatchObject({ code: 'binder_capacity_exceeded' });
+    expect(
+      database.prepare('SELECT revision FROM binder_versions WHERE id = ?1').get(small.version.id),
+    ).toEqual({ revision: smallFillers.version.revision });
+    expect(
+      database
+        .prepare(
+          `SELECT entry_kind, card_id FROM binder_slots slot
+           JOIN binder_pages page ON page.id = slot.binder_page_id
+           WHERE page.binder_version_id = ?1 AND slot.entry_kind <> 'empty'
+           ORDER BY page.position, slot.row_index, slot.column_index`,
+        )
+        .all(small.version.id),
+    ).toEqual([
+      { entry_kind: 'exact-card', card_id: 'bulba' },
+      { entry_kind: 'exact-card', card_id: 'ivy' },
+    ]);
+  }, 15_000);
 });

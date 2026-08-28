@@ -1625,8 +1625,7 @@ export function insertFullPokedex(
   const entries: BinderEntry[] = NATIONAL_POKEDEX.map((pokemon) => {
     const startsNewPage =
       regionPageBreaks &&
-      previousCategory !== undefined &&
-      previousCategory !== pokemon.discoveryCategory;
+      (previousCategory === undefined || previousCategory !== pokemon.discoveryCategory);
     previousCategory = pokemon.discoveryCategory;
     return { kind: 'pokemon', pokemonNumber: pokemon.number, startsNewPage };
   });
