@@ -1072,7 +1072,7 @@ export async function arrangeBinderVersion(
     { anchorReservations: true },
   );
   await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-    rewriteSlotsStatement(db, slots, flowed),
+    ...rewriteSlotsStatements(db, slots, flowed),
     ...revisionStatements(db, version, nowSeconds()),
   ]);
   return mutationResult(db, ownerId, versionId, [0]);
@@ -1260,7 +1260,7 @@ export async function swapBinderSlots(
       )
     : physical;
   await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-    rewriteSlotsStatement(db, slots, flowed),
+    ...rewriteSlotsStatements(db, slots, flowed),
     ...revisionStatements(db, version, nowSeconds()),
   ]);
   return mutationResult(db, ownerId, versionId, [source.page, target.page]);
@@ -1550,16 +1550,40 @@ function encodedSlot(item: ReflowEntry | null, slot: MaterializedSlot) {
   };
 }
 
-function rewriteSlotsStatement(
+const MAX_REWRITE_PAYLOAD_BYTES = 1_500_000;
+
+function rewriteSlotsStatements(
   db: D1Database,
   slots: MaterializedSlot[],
   entries: Array<ReflowEntry | null>,
-): D1PreparedStatement {
+): D1PreparedStatement[] {
   const available = slots.filter((slot) => slot.page_kind !== 'reserved');
   const rows = available.map((slot, index) => encodedSlot(entries[index] ?? null, slot));
-  return db
-    .prepare(
-      `WITH replacement AS MATERIALIZED (
+  const encoder = new TextEncoder();
+  const payloads: string[] = [];
+  let payload = '[';
+  let payloadBytes = 1;
+  for (const row of rows) {
+    const encoded = JSON.stringify(row);
+    const separator = payload.length === 1 ? '' : ',';
+    const encodedBytes = encoder.encode(encoded).byteLength;
+    if (
+      payload.length > 1 &&
+      payloadBytes + separator.length + encodedBytes + 1 > MAX_REWRITE_PAYLOAD_BYTES
+    ) {
+      payloads.push(`${payload}]`);
+      payload = `[${encoded}`;
+      payloadBytes = 1 + encodedBytes;
+    } else {
+      payload += `${separator}${encoded}`;
+      payloadBytes += separator.length + encodedBytes;
+    }
+  }
+  if (payload.length > 1) payloads.push(`${payload}]`);
+  return payloads.map((replacement) =>
+    db
+      .prepare(
+        `WITH replacement AS MATERIALIZED (
         SELECT json_extract(value, '$.pageId') AS page_id,
           CAST(json_extract(value, '$.row') AS INTEGER) AS row_index,
           CAST(json_extract(value, '$.column') AS INTEGER) AS column_index,
@@ -1580,8 +1604,9 @@ function rewriteSlotsStatement(
        WHERE replacement.page_id = target.binder_page_id
          AND replacement.row_index = target.row_index
          AND replacement.column_index = target.column_index`,
-    )
-    .bind(JSON.stringify(rows));
+      )
+      .bind(replacement),
+  );
 }
 
 async function mutateLogicalEntries(
@@ -1622,7 +1647,7 @@ async function mutateLogicalEntries(
     startIndex: availableIndex,
   }).slice(availableIndex);
   await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-    rewriteSlotsStatement(db, suffixSlots, flowed),
+    ...rewriteSlotsStatements(db, suffixSlots, flowed),
     ...revisionStatements(db, version, nowSeconds()),
   ]);
   return { ...(await mutationResult(db, ownerId, versionId, [anchor.page])), anchor };
@@ -1710,9 +1735,10 @@ export async function moveBinderEntryByOffset(
       });
     physical.splice(index, 1);
     physical.splice(pageStart, 0, item);
+    index -= 1;
   }
   await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-    rewriteSlotsStatement(db, slots, physical),
+    ...rewriteSlotsStatements(db, slots, physical),
     ...revisionStatements(db, version, nowSeconds()),
   ]);
   const finalIndex = physical.indexOf(moved);
@@ -1960,7 +1986,7 @@ export async function reserveBinderPage(
     db
       .prepare('UPDATE binder_pages SET kind = ?1, label = ?2 WHERE id = ?3')
       .bind(reserved ? 'reserved' : 'slots', reserved ? label : null, page.id),
-    rewriteSlotsStatement(db, futureSlots, flowed),
+    ...rewriteSlotsStatements(db, futureSlots, flowed),
     ...revisionStatements(db, version, nowSeconds()),
   ]);
   return mutationResult(db, ownerId, versionId, [pagePosition]);

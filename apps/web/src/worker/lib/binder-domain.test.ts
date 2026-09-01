@@ -208,7 +208,7 @@ describe('binder D1 domain', () => {
     );
     expect(maximum.version).toMatchObject({ capacity: 120000, pageCount: 300 });
     const maximumStarted = performance.now();
-    await insertBinderEntries(
+    const maximumInserted = await insertBinderEntries(
       db,
       'owner',
       maximum.version.id,
@@ -216,6 +216,16 @@ describe('binder D1 domain', () => {
       [{ kind: 'pokemon', pokemonNumber: 1, startsNewPage: false }],
       maximum.version.revision,
     );
+    const maximumReserved = await reserveBinderPage(
+      db,
+      'owner',
+      maximum.version.id,
+      0,
+      true,
+      'Reserved',
+      maximumInserted.version.revision,
+    );
+    expect(maximumReserved.version.revision).toBe(maximumInserted.version.revision + 1);
     const maximumMs = performance.now() - maximumStarted;
     expect(Number.isFinite(mediumMs)).toBe(true);
     expect(Number.isFinite(maximumMs)).toBe(true);

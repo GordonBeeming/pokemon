@@ -625,8 +625,18 @@ struct ApiFailure {
     error: String,
     #[serde(default)]
     request_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_cloud_error_details")]
     details: Option<CloudErrorDetails>,
+}
+
+fn deserialize_cloud_error_details<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<CloudErrorDetails>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Value>::deserialize(deserializer)?
+        .and_then(|value| serde_json::from_value(value).ok()))
 }
 
 impl CloudClient {
@@ -1726,6 +1736,14 @@ mod tests {
             failure.details,
             Some(CloudErrorDetails::BinderCapacity(details)) if details.required_capacity == 18
         ));
+        let unknown: ApiFailure = serde_json::from_value(json!({
+            "ok": false,
+            "error": "unknown_error",
+            "details": { "future": true }
+        }))
+        .expect("unknown details must not discard the API failure");
+        assert_eq!(unknown.error, "unknown_error");
+        assert!(unknown.details.is_none());
     }
 
     #[tokio::test]
