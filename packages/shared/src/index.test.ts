@@ -215,6 +215,20 @@ describe('shared wire schemas', () => {
       }).pageIds,
     ).toEqual(['page-1']);
     expect(
+      binderPlannerSummarySchema.safeParse({
+        pageIds: ['page-1'],
+        revision: 3,
+        targets: 4,
+        placed: 2,
+        reservedSleeves: 1,
+        reservedPages: 1,
+        generatedPadding: 0,
+        available: -1,
+        capacity: 18,
+        pageSize: 9,
+      }).success,
+    ).toBe(false);
+    expect(
       binderFullPokedexPreviewSchema.parse({
         currentCapacity: 18,
         requiredCapacity: 36,

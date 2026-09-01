@@ -438,7 +438,7 @@ export const binderPlannerSummarySchema = z
     reservedSleeves: z.number().int().nonnegative(),
     reservedPages: z.number().int().nonnegative(),
     generatedPadding: z.number().int().nonnegative(),
-    available: z.number().int(),
+    available: z.number().int().nonnegative(),
     capacity: z.number().int().positive(),
     pageSize: z.number().int().positive(),
   })
