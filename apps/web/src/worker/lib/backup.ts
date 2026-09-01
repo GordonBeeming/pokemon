@@ -840,7 +840,6 @@ export async function restoreBackup(
               SELECT COUNT(*) FROM binder_pages WHERE binder_version_id = binder_versions.id
              ) WHERE id IN (
               SELECT json_extract(j.value,'$.id') FROM ${jsonRows} AND c.kind='versions'
-                AND json_extract(j.value,'$.capacity') IS NULL
              )`,
           )
           .bind(restoreRunId, ownerId),
@@ -850,6 +849,24 @@ export async function restoreBackup(
            SELECT json_extract(j.value,'$.binder_page_id'),json_extract(j.value,'$.row_index'),json_extract(j.value,'$.column_index'),json_extract(j.value,'$.card_id'),COALESCE(json_extract(j.value,'$.entry_kind'),CASE WHEN json_extract(j.value,'$.card_id') IS NULL THEN 'empty' ELSE 'exact-card' END),json_extract(j.value,'$.label'),json_extract(j.value,'$.pokemon_number'),json_extract(j.value,'$.assigned_card_id'),COALESCE(json_extract(j.value,'$.starts_new_page'),0) FROM ${jsonRows} AND c.kind='slots'`,
           )
           .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `WITH RECURSIVE pocket_indexes(value) AS (
+               SELECT 0
+               UNION ALL
+               SELECT value + 1 FROM pocket_indexes WHERE value < 19
+             )
+             INSERT OR IGNORE INTO binder_slots
+               (binder_page_id,row_index,column_index,card_id)
+             SELECT page.id,row_index.value,column_index.value,NULL
+             FROM binder_pages page
+             JOIN binder_versions version ON version.id = page.binder_version_id
+             JOIN binders binder ON binder.id = version.binder_id
+             JOIN pocket_indexes row_index ON row_index.value < version.rows
+             JOIN pocket_indexes column_index ON column_index.value < version.columns
+             WHERE binder.owner_id = ?1`,
+          )
+          .bind(ownerId),
         db
           .prepare(
             `INSERT INTO art_manifest (card_id,variant,object_key,sha256,bytes,version,updated_at)

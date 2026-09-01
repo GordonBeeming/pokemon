@@ -6,7 +6,7 @@ mod mcp;
 mod secrets;
 mod sync;
 
-use crate::cloud::{ArtVariant, CloudClient, CollectionSetInput};
+use crate::cloud::{ArtVariant, BinderLayout, CloudClient, CollectionSetInput};
 use crate::config::{AppConfig, AppPaths};
 use crate::error::{DesktopError, Result};
 use crate::inbox::{CaptureSource, PendingInbox, PendingScan, PendingScanImage, ScanState};
@@ -474,7 +474,7 @@ impl McpBackend for DesktopServices {
             }
             ToolName::BinderAssignmentCandidates => {
                 let version_id = required_string(&arguments, "versionId", 128)?;
-                let location = required_location(&arguments, "page", "row", "column")?;
+                let location = required_location(&arguments, "at")?;
                 let (base, token) = self.cloud_context().await?;
                 let result = self
                     .cloud
@@ -499,10 +499,19 @@ impl McpBackend for DesktopServices {
             ToolName::CollectionNotes => self.set_notes_tool(&arguments).await,
             ToolName::BinderCreateDraft => {
                 let name = required_string(&arguments, "name", 120)?;
-                let layout = arguments
-                    .get("layout")
-                    .cloned()
-                    .ok_or_else(|| DesktopError::Mcp("layout is required".to_string()))?;
+                let layout = serde_json::from_value::<BinderLayout>(
+                    arguments
+                        .get("layout")
+                        .cloned()
+                        .ok_or_else(|| DesktopError::Mcp("layout is required".to_string()))?,
+                )
+                .map_err(|_| {
+                    DesktopError::Mcp(
+                        "layout kind and dimensions must describe a supported binder page"
+                            .to_string(),
+                    )
+                })?;
+                let layout = serde_json::to_value(layout)?;
                 let capacity = optional_u64(&arguments, "capacity")?
                     .map(|value| {
                         u32::try_from(value)
@@ -533,7 +542,7 @@ impl McpBackend for DesktopServices {
                     "page": required_u64(&arguments, "page")?,
                     "row": required_u64(&arguments, "row")?,
                     "column": required_u64(&arguments, "column")?,
-                    "cardId": optional_nullable_string(&arguments, "cardId", 128)?,
+                    "cardId": optional_nullable_nonempty_string(&arguments, "cardId", 128)?,
                 });
                 let (base, token) = self.cloud_context().await?;
                 let result = self
@@ -563,7 +572,7 @@ impl McpBackend for DesktopServices {
             ToolName::BinderInsert => {
                 let version_id = required_string(&arguments, "versionId", 128)?;
                 let expected_revision = required_u64(&arguments, "expectedRevision")?;
-                let at = required_location(&arguments, "page", "row", "column")?;
+                let at = required_location(&arguments, "at")?;
                 let entries = arguments
                     .get("entries")
                     .and_then(Value::as_array)
@@ -583,7 +592,7 @@ impl McpBackend for DesktopServices {
             }
             ToolName::BinderRemove => {
                 let version_id = required_string(&arguments, "versionId", 128)?;
-                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "at": required_location(&arguments, "page", "row", "column")?});
+                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "at": required_location(&arguments, "at")?});
                 let (base, token) = self.cloud_context().await?;
                 let result = self
                     .cloud
@@ -603,7 +612,7 @@ impl McpBackend for DesktopServices {
                                 .to_string(),
                         )
                     })?;
-                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "from": required_location(&arguments, "page", "row", "column")?, "offset": offset});
+                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "from": required_location(&arguments, "from")?, "offset": offset});
                 let (base, token) = self.cloud_context().await?;
                 let result = self
                     .cloud
@@ -613,7 +622,7 @@ impl McpBackend for DesktopServices {
             }
             ToolName::BinderAssign => {
                 let version_id = required_string(&arguments, "versionId", 128)?;
-                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "at": required_location(&arguments, "page", "row", "column")?, "cardId": optional_nullable_string(&arguments, "cardId", 128)?});
+                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "at": required_location(&arguments, "at")?, "cardId": optional_nullable_nonempty_string(&arguments, "cardId", 128)?});
                 let (base, token) = self.cloud_context().await?;
                 let result = self
                     .cloud
@@ -629,7 +638,7 @@ impl McpBackend for DesktopServices {
                     .ok_or_else(|| {
                         DesktopError::Mcp("startsNewPage must be a boolean".to_string())
                     })?;
-                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "at": required_location(&arguments, "page", "row", "column")?, "startsNewPage": starts});
+                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "at": required_location(&arguments, "at")?, "startsNewPage": starts});
                 let (base, token) = self.cloud_context().await?;
                 let result = self
                     .cloud
@@ -639,7 +648,7 @@ impl McpBackend for DesktopServices {
             }
             ToolName::BinderReservePage => {
                 let version_id = required_string(&arguments, "versionId", 128)?;
-                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "page": required_u64(&arguments, "page")?, "reserved": arguments.get("reserved").and_then(Value::as_bool).ok_or_else(|| DesktopError::Mcp("reserved must be a boolean".to_string()))?, "label": optional_nullable_string_or_absent(&arguments, "label", 120)?});
+                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "page": required_u64(&arguments, "page")?, "reserved": arguments.get("reserved").and_then(Value::as_bool).ok_or_else(|| DesktopError::Mcp("reserved must be a boolean".to_string()))?, "label": optional_nullable_nonempty_string_or_absent(&arguments, "label", 120)?});
                 let (base, token) = self.cloud_context().await?;
                 let result = self
                     .cloud
@@ -665,7 +674,7 @@ impl McpBackend for DesktopServices {
                         DesktopError::Mcp("regionPageBreaks must be a boolean".to_string())
                     })?,
                 };
-                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "at": required_location(&arguments, "page", "row", "column")?, "regionPageBreaks": breaks});
+                let body = json!({"expectedRevision": required_u64(&arguments, "expectedRevision")?, "at": required_location(&arguments, "at")?, "regionPageBreaks": breaks});
                 let (base, token) = self.cloud_context().await?;
                 let result = self
                     .cloud
@@ -1012,28 +1021,43 @@ fn optional_nullable_string(
     }
 }
 
-fn optional_nullable_string_or_absent(
+fn optional_nullable_nonempty_string(
+    arguments: &Map<String, Value>,
+    name: &str,
+    max: usize,
+) -> Result<Option<String>> {
+    match arguments.get(name) {
+        Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if !value.trim().is_empty() && value.len() <= max => {
+            Ok(Some(value.clone()))
+        }
+        _ => Err(DesktopError::Mcp(format!(
+            "{name} must be null or contain 1 to {max} characters"
+        ))),
+    }
+}
+
+fn optional_nullable_nonempty_string_or_absent(
     arguments: &Map<String, Value>,
     name: &str,
     max: usize,
 ) -> Result<Option<String>> {
     if arguments.contains_key(name) {
-        optional_nullable_string(arguments, name, max)
+        optional_nullable_nonempty_string(arguments, name, max)
     } else {
         Ok(None)
     }
 }
 
-fn required_location(
-    arguments: &Map<String, Value>,
-    page: &str,
-    row: &str,
-    column: &str,
-) -> Result<Value> {
+fn required_location(arguments: &Map<String, Value>, name: &str) -> Result<Value> {
+    let location = arguments
+        .get(name)
+        .and_then(Value::as_object)
+        .ok_or_else(|| DesktopError::Mcp(format!("{name} must be an object")))?;
     Ok(json!({
-        "page": required_u64(arguments, page)?,
-        "row": required_u64(arguments, row)?,
-        "column": required_u64(arguments, column)?,
+        "page": required_u64(location, "page")?,
+        "row": required_u64(location, "row")?,
+        "column": required_u64(location, "column")?,
     }))
 }
 

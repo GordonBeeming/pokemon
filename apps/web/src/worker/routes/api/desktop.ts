@@ -1,5 +1,10 @@
 import { Hono } from 'hono';
-import type { BinderShortage, BinderVersionPages } from '@pokedex/shared';
+import type {
+  BinderPokemonShortage,
+  BinderReadyToPlace,
+  BinderShortage,
+  BinderVersionPages,
+} from '@pokedex/shared';
 import { createArtUploadToken, createArtUploadTokens } from '../../lib/art';
 import { listCatalogueSources } from '../../lib/catalogue';
 import { asPositiveInt } from '../../lib/db';
@@ -46,18 +51,44 @@ export async function loadAllBinderShortages(
   load: (
     offset: number,
     limit: number,
-  ) => Promise<{ shortages: BinderShortage[]; nextOffset: number | null }>,
-): Promise<BinderShortage[]> {
+  ) => Promise<{
+    shortages: BinderShortage[];
+    pokemonShortages: BinderPokemonShortage[];
+    readyToPlace: BinderReadyToPlace;
+    nextOffset: number | null;
+  }>,
+): Promise<{
+  shortages: BinderShortage[];
+  pokemonShortages: BinderPokemonShortage[];
+  readyToPlace: BinderReadyToPlace;
+}> {
   const shortages: BinderShortage[] = [];
+  const pokemonShortages: BinderPokemonShortage[] = [];
+  let readyToPlace: BinderReadyToPlace = { exactTargets: 0, pokemonTargets: 0 };
   let offset: number | null = 0;
   while (offset !== null) {
     const page = await load(offset, 100);
     shortages.push(...page.shortages);
+    pokemonShortages.push(...page.pokemonShortages);
+    readyToPlace = page.readyToPlace;
     if (page.nextOffset !== null && page.nextOffset <= offset)
       throw new Error('binder shortage cursor did not advance');
     offset = page.nextOffset;
   }
-  return shortages;
+  return { shortages, pokemonShortages, readyToPlace };
+}
+
+export function binderSuggestionEmptySlots(
+  pages: BinderVersionPages['pages'],
+): Array<BinderVersionPages['pages'][number]['slots'][number] & { page: number }> {
+  return pages.flatMap((page) => {
+    if (page.kind === 'reserved') return [];
+    return page.slots
+      .filter(
+        (slot) => (slot.entryKind ?? (slot.cardId === null ? 'empty' : 'exact-card')) === 'empty',
+      )
+      .map((slot) => ({ ...slot, page: page.position }));
+  });
 }
 
 const requireDesktopBearer = async (
@@ -255,6 +286,14 @@ desktopApiRoutes.get('/desktop/binders/versions/:id/shortages', async (c) => {
     return apiFailure(c, error);
   }
 });
+desktopApiRoutes.get('/desktop/binders/versions/:id/planner-summary', async (c) => {
+  try {
+    const operations = ownerOperations(c.env, await desktopOwner(c, 'binders:write'));
+    return c.json({ ok: true, summary: await operations.binderPlannerSummary(c.req.param('id')) });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
 desktopApiRoutes.get('/desktop/binders/versions/:id/assignment-candidates', async (c) => {
   try {
     const parsed = binderAssignmentCandidatesQuerySchema.safeParse({
@@ -331,7 +370,7 @@ desktopApiRoutes.get('/desktop/binders/versions/:id/suggest', async (c) => {
   try {
     const operations = ownerOperations(c.env, await desktopOwner(c, 'binders:write'));
     const versionId = c.req.param('id');
-    const [pages, shortages] = await Promise.all([
+    const [pages, planning] = await Promise.all([
       loadAllBinderPages((offset, limit) => operations.binderVersion(versionId, offset, limit)),
       loadAllBinderShortages((offset, limit) =>
         operations.binderShortages(versionId, offset, limit),
@@ -339,13 +378,9 @@ desktopApiRoutes.get('/desktop/binders/versions/:id/suggest', async (c) => {
     ]);
     return c.json({
       ok: true,
-      shortages,
+      ...planning,
       nextOffset: null,
-      emptySlots: pages.flatMap((page) =>
-        page.slots
-          .filter((slot) => slot.cardId === null)
-          .map((slot) => ({ ...slot, page: page.position })),
-      ),
+      emptySlots: binderSuggestionEmptySlots(pages),
     });
   } catch (error) {
     return apiFailure(c, error);
@@ -452,7 +487,7 @@ desktopApiRoutes.put('/desktop/binders/versions/:id/reserved-page', async (c) =>
         c.req.param('id'),
         parsed.data.page,
         parsed.data.reserved,
-        parsed.data.label,
+        parsed.data.label ?? null,
         parsed.data.expectedRevision,
       ),
     });
@@ -485,6 +520,24 @@ desktopApiRoutes.post('/desktop/binders/versions/:id/full-pokedex', async (c) =>
     return c.json({
       ok: true,
       binder: await operations.insertFullPokedex(
+        c.req.param('id'),
+        parsed.data.at,
+        parsed.data.regionPageBreaks,
+        parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+desktopApiRoutes.post('/desktop/binders/versions/:id/full-pokedex/preview', async (c) => {
+  try {
+    const parsed = binderFullPokedexRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const operations = ownerOperations(c.env, await desktopOwner(c, 'binders:write'));
+    return c.json({
+      ok: true,
+      preview: await operations.previewFullPokedex(
         c.req.param('id'),
         parsed.data.at,
         parsed.data.regionPageBreaks,

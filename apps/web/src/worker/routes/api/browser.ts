@@ -121,7 +121,7 @@ browserApiRoutes.use('/art*', requireSession);
 browserApiRoutes.get('/dashboard', async (c) => {
   try {
     const ownerId = sessionOwner(c);
-    const [collection, pricing, binders, activeShortages, ownedCards] = await Promise.all([
+    const [collection, pricing, binders, activeBinderTargets, ownedCards] = await Promise.all([
       collectionSummary(c.env.DB, ownerId),
       priceCoverage(c.env.DB, ownerId),
       ownerOperations(c.env, ownerId).listBinders(),
@@ -138,7 +138,8 @@ browserApiRoutes.get('/dashboard', async (c) => {
       collection,
       pricing,
       binderCount: binders.length,
-      activeShortages,
+      activeShortages: activeBinderTargets.shortages,
+      activePokemonShortages: activeBinderTargets.pokemonShortages,
       cards: ownedCards.cards,
     });
   } catch (error) {
@@ -578,6 +579,18 @@ browserApiRoutes.get('/binders/versions/:id/shortages', async (c) => {
     return apiFailure(c, error);
   }
 });
+browserApiRoutes.get('/binders/versions/:id/planner-summary', async (c) => {
+  try {
+    return c.json({
+      ok: true,
+      summary: await ownerOperations(c.env, sessionOwner(c)).binderPlannerSummary(
+        c.req.param('id'),
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
 browserApiRoutes.get('/binders/versions/:id/assignment-candidates', async (c) => {
   try {
     const parsed = binderAssignmentCandidatesQuerySchema.safeParse({
@@ -825,7 +838,7 @@ browserApiRoutes.put('/binders/versions/:id/reserved-page', async (c) => {
         c.req.param('id'),
         parsed.data.page,
         parsed.data.reserved,
-        parsed.data.label,
+        parsed.data.label ?? null,
         parsed.data.expectedRevision,
       ),
     });
@@ -856,6 +869,23 @@ browserApiRoutes.post('/binders/versions/:id/full-pokedex', async (c) => {
     return c.json({
       ok: true,
       binder: await ownerOperations(c.env, sessionOwner(c)).insertFullPokedex(
+        c.req.param('id'),
+        parsed.data.at,
+        parsed.data.regionPageBreaks,
+        parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.post('/binders/versions/:id/full-pokedex/preview', async (c) => {
+  try {
+    const parsed = binderFullPokedexRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      preview: await ownerOperations(c.env, sessionOwner(c)).previewFullPokedex(
         c.req.param('id'),
         parsed.data.at,
         parsed.data.regionPageBreaks,

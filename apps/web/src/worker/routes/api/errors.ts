@@ -1,4 +1,5 @@
 import type { Context } from 'hono';
+import type { ApiErrorDetails } from '@pokedex/shared';
 import { BinderDomainError, type BinderErrorCode } from '../../lib/binders';
 import { CollectionDomainError, type CollectionErrorCode } from '../../lib/collection';
 import { ApplicationError, describeError, logError } from '../../lib/log';
@@ -65,14 +66,15 @@ export function apiFailure(
       err: describeError(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
+  const details =
+    error instanceof BinderDomainError || error instanceof CollectionDomainError
+      ? (error.details as ApiErrorDetails | undefined)
+      : undefined;
   return c.json(
     {
       ok: false,
       error: failure.status >= 500 ? 'internal_error' : failure.code,
-      ...((error instanceof BinderDomainError || error instanceof CollectionDomainError) &&
-      error.details
-        ? { details: error.details }
-        : {}),
+      ...(details ? { details } : {}),
       requestId,
     },
     failure.status,

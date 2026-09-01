@@ -237,6 +237,7 @@ describe('backup restore', () => {
       .run(backupId, manifestKey, manifestChecksum);
 
     await restoreBackup(db, art, 'owner', backupId);
+    await restoreBackup(db, art, 'owner', backupId);
 
     expect(
       database.prepare('SELECT capacity FROM binder_versions WHERE id = ?1').get('v3-version'),
@@ -247,14 +248,64 @@ describe('backup restore', () => {
     expect(
       database
         .prepare(
-          `SELECT row_index, entry_kind, card_id FROM binder_slots
-           WHERE binder_page_id = 'v3-page' ORDER BY column_index`,
+          `SELECT row_index, column_index, entry_kind, card_id FROM binder_slots
+           WHERE binder_page_id = 'v3-page' ORDER BY row_index, column_index`,
         )
         .all(),
     ).toEqual([
-      { row_index: 0, entry_kind: 'exact-card', card_id: 'card-binder' },
-      { row_index: 0, entry_kind: 'empty', card_id: null },
+      {
+        row_index: 0,
+        column_index: 0,
+        entry_kind: 'exact-card',
+        card_id: 'card-binder',
+      },
+      { row_index: 0, column_index: 1, entry_kind: 'empty', card_id: null },
+      { row_index: 1, column_index: 0, entry_kind: 'empty', card_id: null },
+      { row_index: 1, column_index: 1, entry_kind: 'empty', card_id: null },
     ]);
+  });
+
+  it('preserves page reservations while repairing every missing pocket', async () => {
+    const { database, db, art } = setup();
+    await seedReferencedArt(art);
+    database.exec(`
+      INSERT INTO binder_pages (id,binder_version_id,position,kind,label)
+      VALUES ('page-2','version-1',1,'reserved','Trades');
+      UPDATE binder_versions SET capacity = 8 WHERE id = 'version-1';
+    `);
+    const backupId = 'backup_incomplete_reserved_page';
+    await createBackup(db, art, 'owner', { backupId });
+
+    await restoreBackup(db, art, 'owner', backupId);
+
+    expect(
+      database.prepare('SELECT capacity FROM binder_versions WHERE id = ?1').get('version-1'),
+    ).toEqual({ capacity: 8 });
+    expect(
+      database.prepare('SELECT kind, label FROM binder_pages WHERE id = ?1').get('page-2'),
+    ).toEqual({ kind: 'reserved', label: 'Trades' });
+    expect(
+      database
+        .prepare(
+          `SELECT page.id, COUNT(slot.binder_page_id) AS slots
+           FROM binder_pages page
+           LEFT JOIN binder_slots slot ON slot.binder_page_id = page.id
+           WHERE page.binder_version_id = 'version-1'
+           GROUP BY page.id ORDER BY page.position`,
+        )
+        .all(),
+    ).toEqual([
+      { id: 'page-1', slots: 4 },
+      { id: 'page-2', slots: 4 },
+    ]);
+    expect(
+      database
+        .prepare(
+          `SELECT entry_kind, card_id FROM binder_slots
+           WHERE binder_page_id = 'page-1' AND row_index = 0 AND column_index = 0`,
+        )
+        .get(),
+    ).toEqual({ entry_kind: 'exact-card', card_id: 'card-binder' });
   });
 
   it('includes art metadata for cards that appear only in binder slots', async () => {

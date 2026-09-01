@@ -1,4 +1,4 @@
-use crate::error::Result;
+use crate::error::{DesktopError, Result};
 use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::extract::State;
@@ -323,6 +323,7 @@ async fn call_tool(state: &McpState, id: Value, params: Option<Value>) -> Value 
             tool = name.as_str(),
             duration_ms = started.elapsed().as_millis(),
             error_class = std::any::type_name_of_val(error),
+            request_id = ?cloud_request_id(error),
             "MCP tool failed"
         ),
     }
@@ -343,13 +344,7 @@ async fn call_tool(state: &McpState, id: Value, params: Option<Value>) -> Value 
                 "isError": false
             }),
         ),
-        Err(error) => rpc_success(
-            id,
-            json!({
-                "content": [{ "type": "text", "text": error.to_string() }],
-                "isError": true
-            }),
-        ),
+        Err(error) => rpc_success(id, structured_tool_error(&error)),
     }
 }
 
@@ -483,6 +478,28 @@ fn structured_tool_result(value: Value) -> Value {
     })
 }
 
+fn structured_tool_error(error: &DesktopError) -> Value {
+    let structured = match error {
+        DesktopError::Cloud {
+            status,
+            code,
+            request_id,
+            details,
+        } => json!({
+            "error": code,
+            "status": status,
+            "requestId": request_id,
+            "details": details,
+        }),
+        _ => json!({ "error": "tool_failed" }),
+    };
+    json!({
+        "content": [{ "type": "text", "text": error.to_string() }],
+        "structuredContent": structured,
+        "isError": true
+    })
+}
+
 fn rpc_success(id: Value, result: Value) -> Value {
     json!({ "jsonrpc": "2.0", "id": id, "result": result })
 }
@@ -511,7 +528,7 @@ fn tool_definitions() -> Value {
             json!({
                 "type": "object",
                 "properties": {
-                    "query": { "type": "string", "minLength": 1, "maxLength": 200 },
+                    "query": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": ".*\\S.*" },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
                 },
                 "required": ["query"],
@@ -547,8 +564,8 @@ fn tool_definitions() -> Value {
             ToolName::BinderAssignmentCandidates.as_str(),
             "List owned physical card copies available for a binder target.",
             json!({"type":"object","properties":{
-                "versionId":{"type":"string","minLength":1,"maxLength":128},"page":{"type":"integer","minimum":0},"row":{"type":"integer","minimum":0},"column":{"type":"integer","minimum":0}
-            },"required":["versionId","page","row","column"],"additionalProperties":false}),
+                "versionId":{"type":"string","minLength":1,"maxLength":128,"pattern":".*\\S.*"},"at":slot_location_schema()
+            },"required":["versionId","at"],"additionalProperties":false}),
             true
         ),
         read_tool(
@@ -570,7 +587,7 @@ fn tool_definitions() -> Value {
                 "type": "object",
                 "properties": {
                     "scanId": { "type": "string", "format": "uuid" },
-                    "cardId": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "cardId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": ".*\\S.*" },
                     "confirmed": { "const": true }
                 },
                 "required": ["scanId", "cardId", "confirmed"],
@@ -585,7 +602,7 @@ fn tool_definitions() -> Value {
             json!({
                 "type": "object",
                 "properties": {
-                    "cardId": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "cardId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": ".*\\S.*" },
                     "quantity": { "type": "integer", "minimum": 0, "maximum": 9999 },
                     "expectedRevision": { "type": "integer", "minimum": 0 },
                     "notes": { "type": ["string", "null"], "maxLength": 2000 }
@@ -602,7 +619,7 @@ fn tool_definitions() -> Value {
             json!({
                 "type": "object",
                 "properties": {
-                    "cardId": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "cardId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": ".*\\S.*" },
                     "notes": { "type": ["string", "null"], "maxLength": 2000 }
                     ,"expectedRevision": { "type": "integer", "minimum": 0 }
                 },
@@ -618,17 +635,8 @@ fn tool_definitions() -> Value {
             json!({
                 "type": "object",
                 "properties": {
-                    "name": { "type": "string", "minLength": 1, "maxLength": 120 },
-                    "layout": {
-                        "type": "object",
-                        "properties": {
-                            "kind": { "enum": ["2x2", "3x3", "4x3", "top-loader", "custom"] },
-                            "rows": { "type": "integer", "minimum": 1, "maximum": 20 },
-                            "columns": { "type": "integer", "minimum": 1, "maximum": 20 }
-                        },
-                        "required": ["kind", "rows", "columns"],
-                        "additionalProperties": false
-                    },
+                    "name": { "type": "string", "minLength": 1, "maxLength": 120, "pattern": ".*\\S.*" },
+                    "layout": binder_layout_schema(),
                     "capacity": { "type": "integer", "minimum": 1 }
                 },
                 "required": ["name", "layout"],
@@ -643,12 +651,12 @@ fn tool_definitions() -> Value {
             json!({
                 "type": "object",
                 "properties": {
-                    "versionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "versionId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": ".*\\S.*" },
                     "expectedRevision": { "type": "integer", "minimum": 1 },
                     "page": { "type": "integer", "minimum": 0 },
                     "row": { "type": "integer", "minimum": 0 },
                     "column": { "type": "integer", "minimum": 0 },
-                    "cardId": { "type": ["string", "null"], "maxLength": 128 }
+                    "cardId": { "type": ["string", "null"], "minLength": 1, "maxLength": 128, "pattern": ".*\\S.*" }
                 },
                 "required": ["versionId", "expectedRevision", "page", "row", "column", "cardId"],
                 "additionalProperties": false
@@ -662,7 +670,7 @@ fn tool_definitions() -> Value {
             json!({
                 "type": "object",
                 "properties": {
-                    "versionId": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "versionId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": ".*\\S.*" },
                     "expectedRevision": { "type": "integer", "minimum": 1 },
                     "source": slot_location_schema(),
                     "target": slot_location_schema()
@@ -691,7 +699,7 @@ fn tool_definitions() -> Value {
             ToolName::BinderMove.as_str(),
             "Move a binder entry by an explicit signed offset.",
             json!({"type":"object","properties":{
-                "versionId":{"type":"string","minLength":1,"maxLength":128},
+                "versionId":{"type":"string","minLength":1,"maxLength":128,"pattern":".*\\S.*"},
                 "expectedRevision":{"type":"integer","minimum":1},
                 "from":slot_location_schema(),"offset":{"type":"integer","minimum":-120000,"maximum":120000,"not":{"const":0}}
             },"required":["versionId","expectedRevision","from","offset"],"additionalProperties":false}),
@@ -702,7 +710,7 @@ fn tool_definitions() -> Value {
             ToolName::BinderAssign.as_str(),
             "Assign or clear a physical card copy for a binder target.",
             json!({"type":"object","properties":{
-                "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema(),"cardId":{"type":["string","null"],"maxLength":128}
+                "versionId":{"type":"string","minLength":1,"maxLength":128,"pattern":".*\\S.*"},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema(),"cardId":{"type":["string","null"],"minLength":1,"maxLength":128,"pattern":".*\\S.*"}
             },"required":["versionId","expectedRevision","at","cardId"],"additionalProperties":false}),
             true,
             true
@@ -711,7 +719,7 @@ fn tool_definitions() -> Value {
             ToolName::BinderPageBreak.as_str(),
             "Toggle the page-break rule on a binder target.",
             json!({"type":"object","properties":{
-                "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema(),"startsNewPage":{"type":"boolean"}
+                "versionId":{"type":"string","minLength":1,"maxLength":128,"pattern":".*\\S.*"},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema(),"startsNewPage":{"type":"boolean"}
             },"required":["versionId","expectedRevision","at","startsNewPage"],"additionalProperties":false}),
             false,
             true
@@ -720,7 +728,7 @@ fn tool_definitions() -> Value {
             ToolName::BinderReservePage.as_str(),
             "Reserve or release a whole binder page.",
             json!({"type":"object","properties":{
-                "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"page":{"type":"integer","minimum":0},"reserved":{"type":"boolean"},"label":{"type":["string","null"],"maxLength":120}
+                "versionId":{"type":"string","minLength":1,"maxLength":128,"pattern":".*\\S.*"},"expectedRevision":{"type":"integer","minimum":1},"page":{"type":"integer","minimum":0},"reserved":{"type":"boolean"},"label":optional_label_schema()
             },"required":["versionId","expectedRevision","page","reserved"],"additionalProperties":false}),
             true,
             true
@@ -729,7 +737,7 @@ fn tool_definitions() -> Value {
             ToolName::BinderResize.as_str(),
             "Explicitly resize binder pocket capacity.",
             json!({"type":"object","properties":{
-                "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"capacity":{"type":"integer","minimum":1}
+                "versionId":{"type":"string","minLength":1,"maxLength":128,"pattern":".*\\S.*"},"expectedRevision":{"type":"integer","minimum":1},"capacity":{"type":"integer","minimum":1}
             },"required":["versionId","expectedRevision","capacity"],"additionalProperties":false}),
             true,
             true
@@ -738,7 +746,7 @@ fn tool_definitions() -> Value {
             ToolName::BinderFullPokedex.as_str(),
             "Insert the full National Pokédex as unassigned targets.",
             json!({"type":"object","properties":{
-                "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema(),"regionPageBreaks":{"type":"boolean","default":true}
+                "versionId":{"type":"string","minLength":1,"maxLength":128,"pattern":".*\\S.*"},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema(),"regionPageBreaks":{"type":"boolean","default":true}
             },"required":["versionId","expectedRevision","at"],"additionalProperties":false}),
             true,
             true
@@ -748,20 +756,35 @@ fn tool_definitions() -> Value {
 
 fn binder_location_revision_schema() -> Value {
     json!({"type":"object","properties":{
-        "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema()
+        "versionId":{"type":"string","minLength":1,"maxLength":128,"pattern":".*\\S.*"},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema()
     },"required":["versionId","expectedRevision","at"],"additionalProperties":false})
 }
 
 fn binder_insert_schema() -> Value {
     json!({"type":"object","properties":{
-        "versionId":{"type":"string","minLength":1,"maxLength":128},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema(),
-        "entries":{"type":"array","minItems":1,"maxItems":1025,"items":{"oneOf":[
-            {"type":"object","properties":{"kind":{"const":"empty"}},"required":["kind"],"additionalProperties":false},
-            {"type":"object","properties":{"kind":{"const":"reserved"},"label":{"type":["string","null"],"minLength":1,"maxLength":120}},"required":["kind"],"additionalProperties":false},
-            {"type":"object","properties":{"kind":{"const":"exact-card"},"cardId":{"type":"string","minLength":1,"maxLength":128},"startsNewPage":{"type":"boolean"}},"required":["kind","cardId"],"additionalProperties":false},
-            {"type":"object","properties":{"kind":{"const":"pokemon"},"pokemonNumber":{"type":"integer","minimum":1,"maximum":1025},"startsNewPage":{"type":"boolean"}},"required":["kind","pokemonNumber"],"additionalProperties":false}
-        ]}}
+        "versionId":{"type":"string","minLength":1,"maxLength":128,"pattern":".*\\S.*"},"expectedRevision":{"type":"integer","minimum":1},"at":slot_location_schema(),
+        "entries":{"type":"array","minItems":1,"maxItems":1025,"items":binder_entry_schema()}
     },"required":["versionId","expectedRevision","at","entries"],"additionalProperties":false})
+}
+
+fn binder_entry_schema() -> Value {
+    json!({"oneOf":[
+        {"type":"object","properties":{"kind":{"const":"empty"}},"required":["kind"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"reserved"},"label":optional_label_schema()},"required":["kind"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"exact-card"},"cardId":{"type":"string","minLength":1,"maxLength":128,"pattern":".*\\S.*"},"startsNewPage":{"type":"boolean"}},"required":["kind","cardId"],"additionalProperties":false},
+        {"type":"object","properties":{"kind":{"const":"pokemon"},"pokemonNumber":{"type":"integer","minimum":1,"maximum":1025},"startsNewPage":{"type":"boolean"}},"required":["kind","pokemonNumber"],"additionalProperties":false}
+    ]})
+}
+
+fn optional_label_schema() -> Value {
+    json!({"type":["string", "null"], "minLength":1, "maxLength":120, "pattern":".*\\S.*"})
+}
+
+fn cloud_request_id(error: &DesktopError) -> Option<&str> {
+    match error {
+        DesktopError::Cloud { request_id, .. } => request_id.as_deref(),
+        _ => None,
+    }
 }
 
 fn read_tool(name: &str, description: &str, input_schema: Value, open_world: bool) -> Value {
@@ -807,7 +830,7 @@ fn empty_schema() -> Value {
 fn id_schema(name: &str) -> Value {
     json!({
         "type": "object",
-        "properties": { (name): { "type": "string", "minLength": 1, "maxLength": 128 } },
+        "properties": { (name): { "type": "string", "minLength": 1, "maxLength": 128, "pattern": ".*\\S.*" } },
         "required": [name],
         "additionalProperties": false
     })
@@ -826,6 +849,16 @@ fn slot_location_schema() -> Value {
     })
 }
 
+fn binder_layout_schema() -> Value {
+    json!({ "oneOf": [
+        { "type": "object", "properties": { "kind": { "const": "2x2" }, "rows": { "const": 2 }, "columns": { "const": 2 } }, "required": ["kind", "rows", "columns"], "additionalProperties": false },
+        { "type": "object", "properties": { "kind": { "const": "3x3" }, "rows": { "const": 3 }, "columns": { "const": 3 } }, "required": ["kind", "rows", "columns"], "additionalProperties": false },
+        { "type": "object", "properties": { "kind": { "const": "4x3" }, "rows": { "const": 3 }, "columns": { "const": 4 } }, "required": ["kind", "rows", "columns"], "additionalProperties": false },
+        { "type": "object", "properties": { "kind": { "const": "top-loader" }, "rows": { "const": 2 }, "columns": { "const": 2 } }, "required": ["kind", "rows", "columns"], "additionalProperties": false },
+        { "type": "object", "properties": { "kind": { "const": "custom" }, "rows": { "type": "integer", "minimum": 1, "maximum": 20 }, "columns": { "type": "integer", "minimum": 1, "maximum": 20 } }, "required": ["kind", "rows", "columns"], "additionalProperties": false }
+    ] })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -834,6 +867,8 @@ mod tests {
     use tower::ServiceExt;
 
     struct FakeBackend;
+
+    struct CapacityErrorBackend;
 
     #[async_trait]
     impl McpBackend for FakeBackend {
@@ -846,6 +881,25 @@ mod tests {
                 });
             }
             Ok(ToolPayload::Structured(json!({ "name": name.as_str() })))
+        }
+    }
+
+    #[async_trait]
+    impl McpBackend for CapacityErrorBackend {
+        async fn call_tool(&self, _name: ToolName, _arguments: Value) -> Result<ToolPayload> {
+            Err(DesktopError::Cloud {
+                status: 409,
+                code: "binder_capacity_exceeded".to_string(),
+                request_id: Some("request-409".to_string()),
+                details: Some(crate::error::CloudErrorDetails::BinderCapacity(
+                    crate::error::CloudBinderCapacityDetails {
+                        current_capacity: 9,
+                        required_capacity: 18,
+                        additional_pockets: 9,
+                        page_increment: 9,
+                    },
+                )),
+            })
         }
     }
 
@@ -869,6 +923,35 @@ mod tests {
                 .expect("response bytes"),
         )
         .expect("response JSON")
+    }
+
+    fn assert_nonempty_string_schemas_reject_whitespace(value: &Value) {
+        match value {
+            Value::Array(values) => {
+                for value in values {
+                    assert_nonempty_string_schemas_reject_whitespace(value);
+                }
+            }
+            Value::Object(object) => {
+                let string_type = object.get("type").is_some_and(|kind| {
+                    kind == "string"
+                        || kind
+                            .as_array()
+                            .is_some_and(|kinds| kinds.iter().any(|kind| kind == "string"))
+                });
+                if string_type && object.get("minLength") == Some(&json!(1)) {
+                    assert_eq!(
+                        object.get("pattern"),
+                        Some(&json!(".*\\S.*")),
+                        "non-empty MCP strings must reject whitespace-only values: {value}"
+                    );
+                }
+                for value in object.values() {
+                    assert_nonempty_string_schemas_reject_whitespace(value);
+                }
+            }
+            _ => {}
+        }
     }
 
     #[tokio::test]
@@ -923,6 +1006,27 @@ mod tests {
             .expect("required fields")
             .iter()
             .any(|field| field == "label"));
+        assert_eq!(
+            reserve["inputSchema"]["properties"]["label"]["minLength"],
+            1
+        );
+        let candidates = tools
+            .iter()
+            .find(|tool| tool["name"] == "pokedex_binder_assignment_candidates")
+            .expect("assignment candidates tool");
+        assert_eq!(
+            candidates["inputSchema"]["required"],
+            json!(["versionId", "at"])
+        );
+        let create = tools
+            .iter()
+            .find(|tool| tool["name"] == "pokedex_binder_create_draft")
+            .expect("create binder tool");
+        assert_eq!(
+            create["inputSchema"]["properties"]["layout"]["oneOf"][1]["properties"]["rows"]
+                ["const"],
+            3
+        );
         let insert = tools
             .iter()
             .find(|tool| tool["name"] == "pokedex_binder_insert")
@@ -931,7 +1035,15 @@ mod tests {
             insert["inputSchema"]["properties"]["entries"]["maxItems"],
             1025
         );
+        assert_eq!(
+            insert["inputSchema"]["properties"]["entries"]["items"]["oneOf"][1]["properties"]
+                ["label"]["minLength"],
+            1
+        );
         assert_eq!(tools.len(), ToolName::ALL.len());
+        for tool in tools {
+            assert_nonempty_string_schemas_reject_whitespace(&tool["inputSchema"]);
+        }
         for tool in ToolName::ALL {
             assert_eq!(
                 tools
@@ -967,6 +1079,46 @@ mod tests {
         assert_eq!(
             value["result"]["structuredContent"]["name"],
             "pokedex_binder_suggest"
+        );
+    }
+
+    #[tokio::test]
+    async fn cloud_tool_errors_preserve_request_id_and_recovery_details() {
+        let app = router("secret".to_string(), Arc::new(CapacityErrorBackend));
+        let response = app
+            .oneshot(request(
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": 5,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "pokedex_binder_resize",
+                        "arguments": {
+                            "versionId": "version-1",
+                            "expectedRevision": 2,
+                            "capacity": 18
+                        }
+                    }
+                }),
+                "secret",
+            ))
+            .await
+            .expect("capacity error response");
+        let value = response_json(response).await;
+        assert_eq!(value["result"]["isError"], true);
+        assert_eq!(
+            value["result"]["structuredContent"],
+            json!({
+                "error": "binder_capacity_exceeded",
+                "status": 409,
+                "requestId": "request-409",
+                "details": {
+                    "currentCapacity": 9,
+                    "requiredCapacity": 18,
+                    "additionalPockets": 9,
+                    "pageIncrement": 9
+                }
+            })
         );
     }
 

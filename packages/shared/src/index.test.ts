@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   DESKTOP_SCOPES,
   artUrlSchema,
+  apiErrorSchema,
+  binderEntrySchema,
+  binderFullPokedexPreviewSchema,
+  binderPlannerSummarySchema,
   desktopScopeSchema,
   binderLayoutSchema,
   binderMutationResultSchema,
@@ -11,6 +15,7 @@ import {
   collectionNotesPatchRequestSchema,
   collectionSetRequestSchema,
   collectionStateSchema,
+  binderReservePageRequestSchema,
   languageSchema,
   NATIONAL_POKEDEX,
   pokemonDiscoveryCategory,
@@ -152,6 +157,81 @@ describe('shared wire schemas', () => {
     expect(
       binderAssignmentCandidatesSchema.safeParse({ candidates: [{ ...candidate, ignored: true }] })
         .success,
+    ).toBe(false);
+  });
+
+  it('keeps optional reserved labels and structured error details on the wire', () => {
+    expect(binderEntrySchema.parse({ kind: 'reserved' })).toEqual({ kind: 'reserved' });
+    expect(binderEntrySchema.parse({ kind: 'reserved', label: null })).toEqual({
+      kind: 'reserved',
+      label: null,
+    });
+    expect(binderEntrySchema.safeParse({ kind: 'reserved', label: '   ' }).success).toBe(false);
+    expect(
+      binderReservePageRequestSchema.parse({
+        expectedRevision: 1,
+        page: 0,
+        reserved: true,
+      }).label,
+    ).toBeUndefined();
+    expect(
+      apiErrorSchema.parse({
+        ok: false,
+        error: 'binder_capacity_exceeded',
+        details: {
+          currentCapacity: 9,
+          requiredCapacity: 18,
+          additionalPockets: 9,
+          pageIncrement: 9,
+        },
+      }).details,
+    ).toMatchObject({ requiredCapacity: 18 });
+    expect(
+      apiErrorSchema.safeParse({
+        ok: false,
+        error: 'collection_quantity_below_active_assignments',
+        details: {
+          activeAssignments: [
+            { binderId: 'binder-1', versionId: 'version-1', page: 0, row: 0, column: 0 },
+          ],
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('strictly validates planner summary and full-Pokedex preview responses', () => {
+    expect(
+      binderPlannerSummarySchema.parse({
+        pageIds: ['page-1'],
+        revision: 3,
+        targets: 4,
+        placed: 2,
+        reservedSleeves: 1,
+        reservedPages: 1,
+        generatedPadding: 0,
+        available: 12,
+        capacity: 18,
+        pageSize: 9,
+      }).pageIds,
+    ).toEqual(['page-1']);
+    expect(
+      binderFullPokedexPreviewSchema.parse({
+        currentCapacity: 18,
+        requiredCapacity: 36,
+        additionalPockets: 18,
+        pageIncrement: 9,
+        generatedPadding: 3,
+      }).requiredCapacity,
+    ).toBe(36);
+    expect(
+      binderFullPokedexPreviewSchema.safeParse({
+        currentCapacity: 18,
+        requiredCapacity: 36,
+        additionalPockets: 18,
+        pageIncrement: 9,
+        generatedPadding: 3,
+        ignored: true,
+      }).success,
     ).toBe(false);
   });
 });

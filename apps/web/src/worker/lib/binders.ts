@@ -40,7 +40,7 @@ export function reflowBinderEntries(
   capacity: number,
   pageSize: number,
   entries: readonly ReflowEntry[],
-  options: { anchorReservations?: boolean } = {},
+  options: { anchorReservations?: boolean; startIndex?: number } = {},
 ): Array<ReflowEntry | null> {
   const placed: Array<ReflowEntry | null> = Array.from({ length: capacity }, () => null);
   if (options.anchorReservations)
@@ -51,13 +51,15 @@ export function reflowBinderEntries(
         domainError('binder_slot_out_of_bounds');
       placed[index] = item;
     }
-  let cursor = 0;
+  let cursor = options.startIndex ?? 0;
   for (const item of entries) {
     if (options.anchorReservations && item.entry.kind === 'reserved') continue;
-    if ('startsNewPage' in item.entry && item.entry.startsNewPage && cursor % pageSize !== 0) {
-      cursor += pageSize - (cursor % pageSize);
+    if ('startsNewPage' in item.entry && item.entry.startsNewPage) {
+      if (cursor % pageSize !== 0) cursor += pageSize - (cursor % pageSize);
+      while (cursor < capacity && placed[cursor] !== null) cursor += pageSize;
+    } else {
+      while (cursor < capacity && placed[cursor] !== null) cursor += 1;
     }
-    while (cursor < capacity && placed[cursor] !== null) cursor += 1;
     if (cursor >= capacity) {
       const requiredCapacity = cursor + 1;
       throw new BinderDomainError('binder_capacity_exceeded', {
@@ -464,51 +466,108 @@ export async function listBinders(db: D1Database, ownerId: string): Promise<Bind
 export async function activeBinderShortages(
   db: D1Database,
   ownerId: string,
-): Promise<BinderShortage[]> {
-  const result = await db
+): Promise<{ shortages: BinderShortage[]; pokemonShortages: BinderPokemonShortage[] }> {
+  const exact = await db
     .prepare(
-      `WITH assignments AS (
+      `WITH assigned AS (
          SELECT slot.assigned_card_id AS card_id, COUNT(*) AS assigned
-         FROM binder_slots slot JOIN binder_pages page ON page.id = slot.binder_page_id
-         JOIN binder_versions version ON version.id = page.binder_version_id
-         JOIN binders binder ON binder.id = version.binder_id
-         WHERE binder.owner_id = ?1 AND version.status = 'active'
-           AND slot.assigned_card_id IS NOT NULL GROUP BY slot.assigned_card_id
+         FROM binder_slots slot JOIN binder_pages page ON page.id=slot.binder_page_id
+         JOIN binder_versions version ON version.id=page.binder_version_id
+         JOIN binders binder ON binder.id=version.binder_id
+         WHERE binder.owner_id=?1 AND version.status='active' AND slot.assigned_card_id IS NOT NULL
+         GROUP BY slot.assigned_card_id
        ), targets AS (
-         SELECT slot.card_id, COUNT(*) AS required
-         FROM binder_slots slot JOIN binder_pages page ON page.id = slot.binder_page_id
-         JOIN binder_versions version ON version.id = page.binder_version_id
-         JOIN binders binder ON binder.id = version.binder_id
-         WHERE binder.owner_id = ?1 AND version.status = 'active'
-           AND slot.entry_kind = 'exact-card' AND slot.assigned_card_id IS NULL
-         GROUP BY slot.card_id
+         SELECT slot.card_id, COUNT(*) AS required FROM binder_slots slot
+         JOIN binder_pages page ON page.id=slot.binder_page_id
+         JOIN binder_versions version ON version.id=page.binder_version_id
+         JOIN binders binder ON binder.id=version.binder_id
+         WHERE binder.owner_id=?1 AND version.status='active' AND slot.entry_kind='exact-card'
+           AND slot.assigned_card_id IS NULL GROUP BY slot.card_id
        )
-       SELECT targets.card_id, targets.required, COALESCE(collection.quantity, 0) AS owned,
-         COALESCE(assignments.assigned, 0) AS assigned,
-         MAX(COALESCE(collection.quantity, 0) - COALESCE(assignments.assigned, 0), 0) AS available
-       FROM targets LEFT JOIN collection_cards collection
-         ON collection.owner_id = ?1 AND collection.card_id = targets.card_id
-       LEFT JOIN assignments ON assignments.card_id = targets.card_id
-       WHERE targets.required > MAX(COALESCE(collection.quantity, 0) - COALESCE(assignments.assigned, 0), 0)
-       ORDER BY (targets.required - MAX(COALESCE(collection.quantity, 0) - COALESCE(assignments.assigned, 0), 0)) DESC,
-         targets.card_id LIMIT ?2`,
+       SELECT targets.card_id, card.pokedex_number, targets.required,
+         COALESCE(collection.quantity,0) AS owned, COALESCE(assigned.assigned,0) AS assigned,
+         MAX(COALESCE(collection.quantity,0)-COALESCE(assigned.assigned,0),0) AS available
+       FROM targets JOIN catalogue_cards card ON card.id=targets.card_id
+       LEFT JOIN collection_cards collection ON collection.owner_id=?1 AND collection.card_id=targets.card_id
+       LEFT JOIN assigned ON assigned.card_id=targets.card_id`,
     )
-    .bind(ownerId, MAX_SHORTAGE_PAGE)
+    .bind(ownerId)
     .all<{
       card_id: string;
+      pokedex_number: number | null;
       required: number;
       owned: number;
       assigned: number;
       available: number;
     }>();
-  return result.results.map((row) => ({
-    cardId: cardIdSchema.parse(row.card_id),
-    required: row.required,
-    owned: row.owned,
-    assigned: row.assigned,
-    available: row.available,
-    missing: row.required - row.available,
-  }));
+  const pokemon = await db
+    .prepare(
+      `WITH assigned AS (
+       SELECT card.pokedex_number, COUNT(*) AS assigned FROM binder_slots slot
+       JOIN binder_pages page ON page.id=slot.binder_page_id
+       JOIN binder_versions version ON version.id=page.binder_version_id
+       JOIN binders binder ON binder.id=version.binder_id
+       JOIN catalogue_cards card ON card.id=slot.assigned_card_id
+       WHERE binder.owner_id=?1 AND version.status='active' AND slot.assigned_card_id IS NOT NULL
+       GROUP BY card.pokedex_number
+     ), targets AS (
+       SELECT slot.pokemon_number, COUNT(*) AS required FROM binder_slots slot
+       JOIN binder_pages page ON page.id=slot.binder_page_id
+       JOIN binder_versions version ON version.id=page.binder_version_id
+       JOIN binders binder ON binder.id=version.binder_id
+       WHERE binder.owner_id=?1 AND version.status='active' AND slot.entry_kind='pokemon'
+         AND slot.assigned_card_id IS NULL GROUP BY slot.pokemon_number
+     ), owned AS (
+       SELECT card.pokedex_number, SUM(collection.quantity) AS owned FROM catalogue_cards card
+       JOIN collection_cards collection ON collection.card_id=card.id
+       WHERE collection.owner_id=?1 AND card.category='pokemon' GROUP BY card.pokedex_number
+     )
+     SELECT targets.pokemon_number, targets.required, COALESCE(owned.owned,0) AS owned,
+       COALESCE(assigned.assigned,0) AS assigned,
+       MAX(COALESCE(owned.owned,0)-COALESCE(assigned.assigned,0),0) AS available
+     FROM targets LEFT JOIN owned ON owned.pokedex_number=targets.pokemon_number
+     LEFT JOIN assigned ON assigned.pokedex_number=targets.pokemon_number`,
+    )
+    .bind(ownerId)
+    .all<{
+      pokemon_number: number;
+      required: number;
+      owned: number;
+      assigned: number;
+      available: number;
+    }>();
+  const allocated = new Map<number, number>();
+  for (const row of exact.results) {
+    row.available = Math.min(row.required, row.available);
+    if (row.pokedex_number !== null)
+      allocated.set(row.pokedex_number, (allocated.get(row.pokedex_number) ?? 0) + row.available);
+  }
+  for (const row of pokemon.results)
+    row.available = Math.max(row.available - (allocated.get(row.pokemon_number) ?? 0), 0);
+  return {
+    shortages: exact.results
+      .filter((row) => row.required > row.available)
+      .map((row) => ({
+        cardId: cardIdSchema.parse(row.card_id),
+        required: row.required,
+        owned: row.owned,
+        assigned: row.assigned,
+        available: row.available,
+        missing: row.required - row.available,
+      }))
+      .slice(0, MAX_SHORTAGE_PAGE),
+    pokemonShortages: pokemon.results
+      .filter((row) => row.required > row.available)
+      .map((row) => ({
+        pokemonNumber: row.pokemon_number,
+        required: row.required,
+        owned: row.owned,
+        assigned: row.assigned,
+        available: row.available,
+        missing: row.required - row.available,
+      }))
+      .slice(0, MAX_SHORTAGE_PAGE),
+  };
 }
 
 export async function getBinderVersion(
@@ -526,6 +585,38 @@ export async function getBinderVersion(
     pages,
     nextPage: page + pages.length < row.page_count ? page + pages.length : null,
   });
+}
+
+export async function getBinderPlannerSummary(db: D1Database, ownerId: string, versionId: string) {
+  const version = await readVersion(db, ownerId, versionId);
+  const pages = await listPageRows(db, versionId);
+  const slots = await materializedSlots(db, versionId);
+  const usable = slots.filter((slot) => slot.page_kind !== 'reserved');
+  let previousOccupied = -1;
+  let generatedPadding = 0;
+  for (const [index, slot] of usable.entries()) {
+    const entry = slotEntry(slot);
+    if (!entry) continue;
+    if ('startsNewPage' in entry && entry.startsNewPage)
+      generatedPadding += Math.max(0, index - previousOccupied - 1);
+    previousOccupied = index;
+  }
+  const targets = slots.filter(
+    (slot) => slot.entry_kind === 'exact-card' || slot.entry_kind === 'pokemon',
+  ).length;
+  const reservedSleeves = slots.filter((slot) => slot.entry_kind === 'reserved').length;
+  return {
+    pageIds: pages.map((page) => page.id),
+    revision: version.revision,
+    targets,
+    placed: slots.filter((slot) => slot.assigned_card_id !== null).length,
+    reservedSleeves,
+    reservedPages: pages.filter((page) => page.kind === 'reserved').length,
+    generatedPadding,
+    available: Math.max(0, usable.length - targets - reservedSleeves - generatedPadding),
+    capacity: version.capacity,
+    pageSize: version.rows * version.columns,
+  };
 }
 
 export async function getBinderVersionShortages(
@@ -561,16 +652,19 @@ export async function getBinderVersionShortages(
          WHERE page.binder_version_id = ?1 AND slot.entry_kind = 'exact-card'
            AND slot.assigned_card_id IS NULL GROUP BY slot.card_id
        )
-       SELECT targets.card_id, targets.required, COALESCE(collection.quantity, 0) AS owned,
+       SELECT targets.card_id, card.pokedex_number, targets.required,
+         COALESCE(collection.quantity, 0) AS owned,
          COALESCE(assignments.assigned, 0) AS assigned,
          MAX(COALESCE(collection.quantity, 0) - COALESCE(assignments.assigned, 0), 0) AS available
        FROM targets LEFT JOIN collection_cards collection
          ON collection.owner_id = ?2 AND collection.card_id = targets.card_id
+       LEFT JOIN catalogue_cards card ON card.id = targets.card_id
        LEFT JOIN assignments ON assignments.card_id = targets.card_id`,
     )
     .bind(versionId, ownerId, version.status, version.binder_id)
     .all<{
       card_id: string;
+      pokedex_number: number | null;
       required: number;
       owned: number;
       assigned: number;
@@ -613,6 +707,23 @@ export async function getBinderVersionShortages(
       assigned: number;
       available: number;
     }>();
+  // Exact targets have only one compatible card, so reserve their copies first.
+  // Pokemon targets then share the residual species pool. This joint allocation
+  // prevents one physical copy from making both target kinds ready.
+  const exactAllocatedByPokemon = new Map<number, number>();
+  for (const row of exact.results) {
+    row.available = Math.min(row.required, row.available);
+    if (row.pokedex_number !== null)
+      exactAllocatedByPokemon.set(
+        row.pokedex_number,
+        (exactAllocatedByPokemon.get(row.pokedex_number) ?? 0) + row.available,
+      );
+  }
+  for (const row of pokemon.results)
+    row.available = Math.max(
+      row.available - (exactAllocatedByPokemon.get(row.pokemon_number) ?? 0),
+      0,
+    );
   const exactShortages = exact.results
     .filter((row) => row.required > row.available)
     .sort((left, right) => right.required - right.available - (left.required - left.available));
@@ -651,7 +762,8 @@ export async function getBinderVersionShortages(
     pokemonShortages,
     readyToPlace,
     nextOffset:
-      exactShortages.length > offset + bounded || pokemon.results.length > offset + bounded
+      exactShortages.length > offset + bounded ||
+      pokemon.results.filter((row) => row.required > row.available).length > offset + bounded
         ? offset + bounded
         : null,
   };
@@ -665,13 +777,17 @@ export async function getBinderAssignmentCandidates(
 ): Promise<{ candidates: BinderAssignmentCandidate[] }> {
   const version = await readVersion(db, ownerId, versionId);
   validateLocation(version, location);
-  const slots = await materializedSlots(db, versionId);
-  const target = slots.find(
-    (slot) =>
-      slot.page_position === location.page &&
-      slot.row_index === location.row &&
-      slot.column_index === location.column,
-  );
+  const target = await db
+    .prepare(
+      `SELECT slot.binder_page_id, slot.row_index, slot.column_index, slot.card_id,
+        slot.entry_kind, slot.label, slot.pokemon_number, slot.assigned_card_id,
+        slot.starts_new_page, page.position AS page_position, page.kind AS page_kind
+       FROM binder_pages page JOIN binder_slots slot ON slot.binder_page_id = page.id
+       WHERE page.binder_version_id = ?1 AND page.position = ?2
+         AND slot.row_index = ?3 AND slot.column_index = ?4 LIMIT 1`,
+    )
+    .bind(versionId, location.page, location.row, location.column)
+    .first<MaterializedSlot>();
   if (!target) domainError('binder_slot_not_found');
   if (target.page_kind === 'reserved') domainError('binder_reserved_page_not_empty');
   if (target.entry_kind !== 'exact-card' && target.entry_kind !== 'pokemon')
@@ -1342,6 +1458,9 @@ export async function activateBinderVersion(
         .bind(versionId, now, version.binder_id),
     ]);
   } catch (error) {
+    // D1 batch failures expose only the SQLite error. Re-run the same owner-scoped
+    // allocation check read-only so callers receive the stable domain error; this
+    // diagnostic must never replace or weaken the atomic assertion above.
     const conflict = await db
       .prepare(
         `SELECT proposed.assigned_card_id
@@ -1440,7 +1559,7 @@ function rewriteSlotsStatement(
   const rows = available.map((slot, index) => encodedSlot(entries[index] ?? null, slot));
   return db
     .prepare(
-      `WITH replacement AS (
+      `WITH replacement AS MATERIALIZED (
         SELECT json_extract(value, '$.pageId') AS page_id,
           CAST(json_extract(value, '$.row') AS INTEGER) AS row_index,
           CAST(json_extract(value, '$.column') AS INTEGER) AS column_index,
@@ -1452,21 +1571,15 @@ function rewriteSlotsStatement(
           ,json_extract(value, '$.assignedCardId') AS assigned_card_id
         FROM json_each(?1)
        )
-       UPDATE binder_slots SET
-         entry_kind = (SELECT entry_kind FROM replacement WHERE page_id = binder_page_id
-           AND row_index = binder_slots.row_index AND column_index = binder_slots.column_index),
-         label = (SELECT label FROM replacement WHERE page_id = binder_page_id
-           AND row_index = binder_slots.row_index AND column_index = binder_slots.column_index),
-         card_id = (SELECT card_id FROM replacement WHERE page_id = binder_page_id
-           AND row_index = binder_slots.row_index AND column_index = binder_slots.column_index),
-         pokemon_number = (SELECT pokemon_number FROM replacement WHERE page_id = binder_page_id
-           AND row_index = binder_slots.row_index AND column_index = binder_slots.column_index),
-         assigned_card_id = (SELECT assigned_card_id FROM replacement WHERE page_id = binder_page_id
-           AND row_index = binder_slots.row_index AND column_index = binder_slots.column_index),
-         starts_new_page = (SELECT starts_new_page FROM replacement WHERE page_id = binder_page_id
-           AND row_index = binder_slots.row_index AND column_index = binder_slots.column_index)
-       WHERE EXISTS (SELECT 1 FROM replacement WHERE page_id = binder_page_id
-         AND row_index = binder_slots.row_index AND column_index = binder_slots.column_index)`,
+       UPDATE binder_slots AS target SET entry_kind = replacement.entry_kind,
+         label = replacement.label, card_id = replacement.card_id,
+         pokemon_number = replacement.pokemon_number,
+         assigned_card_id = replacement.assigned_card_id,
+         starts_new_page = replacement.starts_new_page
+       FROM replacement
+       WHERE replacement.page_id = target.binder_page_id
+         AND replacement.row_index = target.row_index
+         AND replacement.column_index = target.column_index`,
     )
     .bind(JSON.stringify(rows));
 }
@@ -1494,7 +1607,8 @@ async function mutateLogicalEntries(
     domainError('binder_reserved_page_not_empty');
   const available = slots.filter((slot) => slot.page_kind !== 'reserved');
   const availableIndex = available.indexOf(anchorSlot);
-  const dense = available
+  const suffixSlots = available.slice(availableIndex);
+  const dense = suffixSlots
     .map((slot, index) => {
       const entry = slotEntry(slot);
       return entry
@@ -1502,13 +1616,13 @@ async function mutateLogicalEntries(
         : null;
     })
     .filter((entry) => entry !== null);
-  const logicalIndex = available
-    .slice(0, availableIndex)
-    .filter((slot) => slotEntry(slot) !== null).length;
-  const changed = mutate(dense, logicalIndex, availableIndex, available.length);
-  const flowed = reflowBinderEntries(available.length, version.rows * version.columns, changed);
+  const changed = mutate(dense, 0, availableIndex, suffixSlots.length);
+  const pageSize = version.rows * version.columns;
+  const flowed = reflowBinderEntries(available.length, pageSize, changed, {
+    startIndex: availableIndex,
+  }).slice(availableIndex);
   await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-    rewriteSlotsStatement(db, slots, flowed),
+    rewriteSlotsStatement(db, suffixSlots, flowed),
     ...revisionStatements(db, version, nowSeconds()),
   ]);
   return { ...(await mutationResult(db, ownerId, versionId, [anchor.page])), anchor };
@@ -1536,9 +1650,11 @@ export function compactRemoveBinderEntry(
   at: BinderSlotLocation,
   expectedRevision: number,
 ): Promise<BinderMutationResult> {
-  return mutateLogicalEntries(db, ownerId, versionId, expectedRevision, at, (current, index) =>
-    current.filter((_entry, entryIndex) => entryIndex !== index),
-  );
+  return mutateLogicalEntries(db, ownerId, versionId, expectedRevision, at, (current, index) => {
+    const item = current[index];
+    if (!item || item.originalIndex !== 0) domainError('binder_slot_not_found');
+    return current.filter((_entry, entryIndex) => entryIndex !== index);
+  });
 }
 
 export async function moveBinderEntryByOffset(
@@ -1613,6 +1729,62 @@ export async function moveBinderEntryByOffset(
   };
 }
 
+function fullPokedexEntries(regionPageBreaks: boolean): BinderEntry[] {
+  let previousCategory: string | undefined;
+  return NATIONAL_POKEDEX.map((pokemon) => {
+    const startsNewPage =
+      regionPageBreaks &&
+      (previousCategory === undefined || previousCategory !== pokemon.discoveryCategory);
+    previousCategory = pokemon.discoveryCategory;
+    return { kind: 'pokemon', pokemonNumber: pokemon.number, startsNewPage };
+  });
+}
+
+export async function previewFullPokedexInsert(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  at: BinderSlotLocation,
+  regionPageBreaks: boolean,
+  requestedRevision: number,
+) {
+  const version = await readVersion(db, ownerId, versionId);
+  requireEditable(version);
+  expectedRevision(version, requestedRevision);
+  const slots = await materializedSlots(db, versionId);
+  const anchorSlot = slots[locationIndex(version, at)];
+  if (!anchorSlot || anchorSlot.page_kind === 'reserved')
+    domainError('binder_reserved_page_not_empty');
+  const usable = slots.filter((slot) => slot.page_kind !== 'reserved');
+  const startIndex = usable.indexOf(anchorSlot);
+  const existing = usable
+    .slice(startIndex)
+    .map((slot, index) => {
+      const entry = slotEntry(slot);
+      return entry
+        ? { entry, assignedCardId: slot.assigned_card_id ?? null, originalIndex: index }
+        : null;
+    })
+    .filter((entry) => entry !== null);
+  const inserted = fullPokedexEntries(regionPageBreaks).map((entry) => ({ entry }));
+  const pageSize = version.rows * version.columns;
+  const probeCapacity = usable.length + inserted.length + NATIONAL_POKEDEX.length * pageSize;
+  const flowed = reflowBinderEntries(probeCapacity, pageSize, [...inserted, ...existing], {
+    startIndex,
+  });
+  let requiredUsable = flowed.length;
+  while (requiredUsable > 0 && flowed[requiredUsable - 1] === null) requiredUsable -= 1;
+  const additionalPages = Math.ceil(Math.max(0, requiredUsable - usable.length) / pageSize);
+  const requiredCapacity = version.capacity + additionalPages * pageSize;
+  return {
+    currentCapacity: version.capacity,
+    requiredCapacity,
+    additionalPockets: requiredCapacity - version.capacity,
+    pageIncrement: pageSize,
+    generatedPadding: Math.max(0, requiredUsable - startIndex - inserted.length - existing.length),
+  };
+}
+
 export function insertFullPokedex(
   db: D1Database,
   ownerId: string,
@@ -1621,14 +1793,7 @@ export function insertFullPokedex(
   regionPageBreaks: boolean,
   expectedRevision: number,
 ): Promise<BinderMutationResult> {
-  let previousCategory: string | undefined;
-  const entries: BinderEntry[] = NATIONAL_POKEDEX.map((pokemon) => {
-    const startsNewPage =
-      regionPageBreaks &&
-      (previousCategory === undefined || previousCategory !== pokemon.discoveryCategory);
-    previousCategory = pokemon.discoveryCategory;
-    return { kind: 'pokemon', pokemonNumber: pokemon.number, startsNewPage };
-  });
+  const entries = fullPokedexEntries(regionPageBreaks);
   return insertBinderEntries(db, ownerId, versionId, at, entries, expectedRevision);
 }
 
@@ -1693,6 +1858,7 @@ export async function setBinderEntryAssignment(
       ...revisionStatements(db, version, now),
     ]);
   } catch (error) {
+    if (error instanceof BinderDomainError) throw error;
     if (cardId !== null) {
       const budget = await db
         .prepare(
@@ -1701,10 +1867,23 @@ export async function setBinderEntryAssignment(
             (SELECT COUNT(*) FROM binder_slots slot
              JOIN binder_pages page ON page.id = slot.binder_page_id
              JOIN binder_versions assigned_version ON assigned_version.id = page.binder_version_id
-             WHERE slot.assigned_card_id = ?2
-               AND (assigned_version.id = ?3 OR assigned_version.status = 'active')) AS assigned`,
+             JOIN binders assigned_binder ON assigned_binder.id = assigned_version.binder_id
+             WHERE assigned_binder.owner_id = ?1 AND slot.assigned_card_id = ?2
+               AND (assigned_version.id = ?3 OR (assigned_version.status = 'active'
+                 AND NOT (?4 = 'draft' AND assigned_version.binder_id = ?5)))
+               AND NOT (slot.binder_page_id = ?6 AND slot.row_index = ?7
+                 AND slot.column_index = ?8)) AS assigned`,
         )
-        .bind(ownerId, cardId, versionId)
+        .bind(
+          ownerId,
+          cardId,
+          versionId,
+          version.status,
+          version.binder_id,
+          page.id,
+          at.row,
+          at.column,
+        )
         .first<{ quantity: number; assigned: number }>();
       if ((budget?.assigned ?? 0) >= (budget?.quantity ?? 0))
         throw new BinderDomainError('binder_assignment_quantity_exceeded');
@@ -1724,7 +1903,11 @@ export async function setBinderEntryPageBreak(
 ): Promise<BinderMutationResult> {
   return mutateLogicalEntries(db, ownerId, versionId, requestedRevision, at, (current, index) => {
     const item = current[index];
-    if (!item || (item.entry.kind !== 'exact-card' && item.entry.kind !== 'pokemon'))
+    if (
+      !item ||
+      item.originalIndex !== 0 ||
+      (item.entry.kind !== 'exact-card' && item.entry.kind !== 'pokemon')
+    )
       domainError('binder_slot_not_found');
     const replacement: ReflowEntry = {
       ...item,
@@ -1776,7 +1959,7 @@ export async function reserveBinderPage(
       : []),
     db
       .prepare('UPDATE binder_pages SET kind = ?1, label = ?2 WHERE id = ?3')
-      .bind(reserved ? 'reserved' : 'slots', label, page.id),
+      .bind(reserved ? 'reserved' : 'slots', reserved ? label : null, page.id),
     rewriteSlotsStatement(db, futureSlots, flowed),
     ...revisionStatements(db, version, nowSeconds()),
   ]);

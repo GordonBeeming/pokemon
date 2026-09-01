@@ -79,6 +79,12 @@ const sharedRoutes = [
     body: { at: { page: 0, row: 0, column: 0 }, regionPageBreaks: true, expectedRevision: 1 },
   },
   {
+    method: 'POST',
+    browser: '/binders/versions/version-1/full-pokedex/preview',
+    desktop: '/desktop/binders/versions/version-1/full-pokedex/preview',
+    body: { at: { page: 0, row: 0, column: 0 }, regionPageBreaks: true, expectedRevision: 1 },
+  },
+  {
     method: 'PATCH',
     browser: '/collection/card-1/notes',
     desktop: '/desktop/collection/card-1/notes',
@@ -100,6 +106,11 @@ const sharedRoutes = [
     method: 'GET',
     browser: '/binders/versions/version-1/shortages',
     desktop: '/desktop/binders/versions/version-1/shortages',
+  },
+  {
+    method: 'GET',
+    browser: '/binders/versions/version-1/planner-summary',
+    desktop: '/desktop/binders/versions/version-1/planner-summary',
   },
   {
     method: 'GET',

@@ -28,6 +28,29 @@ import type { AuthVars } from '../../lib/types';
 
 export { binderRevisionRequestSchema, binderSlotSetRequestSchema, binderSlotSwapRequestSchema };
 export const binderAssignmentCandidatesQuerySchema = binderSlotLocationSchema;
+export const binderPlannerSummarySchema = z
+  .object({
+    pageIds: z.array(z.string().min(1)),
+    revision: z.number().int().positive(),
+    targets: z.number().int().nonnegative(),
+    placed: z.number().int().nonnegative(),
+    reservedSleeves: z.number().int().nonnegative(),
+    reservedPages: z.number().int().nonnegative(),
+    generatedPadding: z.number().int().nonnegative(),
+    available: z.number().int().nonnegative(),
+    capacity: z.number().int().positive(),
+    pageSize: z.number().int().positive(),
+  })
+  .strict();
+export const binderFullPokedexPreviewSchema = z
+  .object({
+    currentCapacity: z.number().int().positive(),
+    requiredCapacity: z.number().int().positive(),
+    additionalPockets: z.number().int().nonnegative(),
+    pageIncrement: z.number().int().positive(),
+    generatedPadding: z.number().int().nonnegative(),
+  })
+  .strict();
 export {
   binderInsertRequestSchema,
   binderCompactRemoveRequestSchema,

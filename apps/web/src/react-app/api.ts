@@ -3,7 +3,13 @@ import {
   apiErrorSchema,
   artUrlSchema,
   binderLayoutSchema,
+  binderAssignmentCandidatesSchema,
+  binderFullPokedexPreviewSchema,
+  binderFullPokedexRequestSchema,
+  binderPokemonShortageSchema,
   binderMutationResultSchema,
+  binderPlannerSummarySchema,
+  binderReadyToPlaceSchema,
   binderShortageSchema,
   binderVersionPagesSchema,
   binderViewSchema,
@@ -16,8 +22,13 @@ import {
 } from '@pokedex/shared';
 import type {
   BinderLayout,
+  BinderEntry,
+  BinderAssignmentCandidate,
   BinderMutationResult,
   BinderSlotLocation,
+  ApiErrorDetails,
+  BinderFullPokedexPreview,
+  BinderPlannerSummary,
   BinderVersionPages,
   BinderView,
   CatalogueCardView,
@@ -46,6 +57,7 @@ const dashboardSchema = successSchema.extend({
   pricing: z.object({ priced: z.number(), missing: z.number(), estimateAud: z.number() }).strict(),
   binderCount: z.number(),
   activeShortages: z.array(binderShortageSchema),
+  activePokemonShortages: z.array(binderPokemonShortageSchema).optional().default([]),
   cards: z.array(catalogueCardViewSchema),
 });
 const searchSchema = successSchema.extend({
@@ -58,6 +70,15 @@ const collectionSchema = successSchema.merge(collectionMutationResultSchema);
 const bindersSchema = successSchema.extend({ binders: z.array(binderViewSchema) });
 const binderPagesEnvelopeSchema = successSchema.extend({ binder: binderVersionPagesSchema });
 const binderMutationEnvelopeSchema = successSchema.extend({ binder: binderMutationResultSchema });
+const binderAssignmentCandidatesEnvelopeSchema = successSchema.extend({
+  candidates: binderAssignmentCandidatesSchema.shape.candidates,
+});
+const binderPlannerSummaryEnvelopeSchema = successSchema.extend({
+  summary: binderPlannerSummarySchema,
+});
+const binderFullPokedexPreviewEnvelopeSchema = successSchema.extend({
+  preview: binderFullPokedexPreviewSchema,
+});
 const binderCardsEnvelopeSchema = binderMutationEnvelopeSchema.extend({
   added: z.number().int().positive(),
 });
@@ -70,6 +91,8 @@ const nationalRepresentativesSchema = successSchema.extend({
 });
 const shortagePageSchema = successSchema.extend({
   shortages: z.array(binderShortageSchema),
+  pokemonShortages: z.array(binderPokemonShortageSchema),
+  readyToPlace: binderReadyToPlaceSchema,
   nextOffset: z.number().int().nonnegative().nullable(),
 });
 const setsSchema = successSchema.extend({
@@ -190,6 +213,7 @@ export class ApiError extends Error {
     public readonly status: number,
     public readonly requestId: string | null,
     public readonly retryAfterSeconds: number | null,
+    public readonly details: ApiErrorDetails | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -250,6 +274,7 @@ async function request<Output, Definition extends z.ZodTypeDef, Input>(
       response.status,
       requestId,
       Number.isFinite(retryAfter) ? retryAfter : null,
+      failure.success ? (failure.data.details ?? null) : null,
     );
   }
   const parsed = schema.safeParse(body);
@@ -390,10 +415,20 @@ export const api = {
       shortagePageSchema,
       { signal },
     ),
-  createBinder: (name: string, layout: BinderLayout): Promise<BinderMutationResult> =>
+  plannerSummary: (id: string, signal?: AbortSignal): Promise<BinderPlannerSummary> =>
+    request(
+      `/api/binders/versions/${encoded(id)}/planner-summary`,
+      binderPlannerSummaryEnvelopeSchema,
+      { signal },
+    ).then((body) => body.summary),
+  createBinder: (
+    name: string,
+    layout: BinderLayout,
+    capacity: number,
+  ): Promise<BinderMutationResult> =>
     request('/api/binders', binderMutationEnvelopeSchema, {
       method: 'POST',
-      body: json({ name, layout: binderLayoutSchema.parse(layout) }),
+      body: json({ name, layout: binderLayoutSchema.parse(layout), capacity }),
     }).then((body) => body.binder),
   addCardsToBinder: (
     id: string,
@@ -413,6 +448,117 @@ export const api = {
       method: 'PUT',
       body: json({ assignments, expectedRevision }),
     }).then((body) => body.binder),
+  assignmentCandidates: (
+    id: string,
+    at: BinderSlotLocation,
+    signal?: AbortSignal,
+  ): Promise<BinderAssignmentCandidate[]> =>
+    request(
+      `/api/binders/versions/${encoded(id)}/assignment-candidates?${new URLSearchParams({
+        page: String(at.page),
+        row: String(at.row),
+        column: String(at.column),
+      })}`,
+      binderAssignmentCandidatesEnvelopeSchema,
+      { signal },
+    ).then((body) => body.candidates),
+  insertEntries: (
+    id: string,
+    at: BinderSlotLocation,
+    entries: BinderEntry[],
+    expectedRevision: number,
+  ): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/entries/insert`, binderMutationEnvelopeSchema, {
+      method: 'POST',
+      body: json({ at, entries, expectedRevision }),
+    }).then((body) => body.binder),
+  removeEntry: (
+    id: string,
+    at: BinderSlotLocation,
+    expectedRevision: number,
+  ): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/entries/remove`, binderMutationEnvelopeSchema, {
+      method: 'POST',
+      body: json({ at, expectedRevision }),
+    }).then((body) => body.binder),
+  moveEntry: (
+    id: string,
+    from: BinderSlotLocation,
+    offset: number,
+    expectedRevision: number,
+  ): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/entries/move`, binderMutationEnvelopeSchema, {
+      method: 'POST',
+      body: json({ from, offset, expectedRevision }),
+    }).then((body) => body.binder),
+  assignEntry: (
+    id: string,
+    at: BinderSlotLocation,
+    cardId: string | null,
+    expectedRevision: number,
+  ): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/assignment`, binderMutationEnvelopeSchema, {
+      method: 'PUT',
+      body: json({ at, cardId, expectedRevision }),
+    }).then((body) => body.binder),
+  setPageBreak: (
+    id: string,
+    at: BinderSlotLocation,
+    startsNewPage: boolean,
+    expectedRevision: number,
+  ): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/page-break`, binderMutationEnvelopeSchema, {
+      method: 'PUT',
+      body: json({ at, startsNewPage, expectedRevision }),
+    }).then((body) => body.binder),
+  reservePage: (
+    id: string,
+    page: number,
+    reserved: boolean,
+    label: string | null | undefined,
+    expectedRevision: number,
+  ): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/reserved-page`, binderMutationEnvelopeSchema, {
+      method: 'PUT',
+      body: json({ page, reserved, label, expectedRevision }),
+    }).then((body) => body.binder),
+  resizeBinder: (
+    id: string,
+    capacity: number,
+    expectedRevision: number,
+  ): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/capacity`, binderMutationEnvelopeSchema, {
+      method: 'PUT',
+      body: json({ capacity, expectedRevision }),
+    }).then((body) => body.binder),
+  insertFullPokedex: (
+    id: string,
+    at: BinderSlotLocation,
+    regionPageBreaks: boolean,
+    expectedRevision: number,
+  ): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/full-pokedex`, binderMutationEnvelopeSchema, {
+      method: 'POST',
+      body: json({ at, regionPageBreaks, expectedRevision }),
+    }).then((body) => body.binder),
+  previewFullPokedex: (
+    id: string,
+    at: BinderSlotLocation,
+    regionPageBreaks: boolean,
+    expectedRevision: number,
+    signal?: AbortSignal,
+  ): Promise<BinderFullPokedexPreview> =>
+    request(
+      `/api/binders/versions/${encoded(id)}/full-pokedex/preview`,
+      binderFullPokedexPreviewEnvelopeSchema,
+      {
+        method: 'POST',
+        signal,
+        body: json(
+          binderFullPokedexRequestSchema.parse({ at, regionPageBreaks, expectedRevision }),
+        ),
+      },
+    ).then((body) => body.preview),
   startCatalogueSync: (signal?: AbortSignal): Promise<string> =>
     request('/api/catalogue/full-sync', workflowStartedSchema, { method: 'POST', signal }).then(
       (body) => body.workflowId,
@@ -517,7 +663,11 @@ export const api = {
 
 export type {
   BinderLayout,
+  BinderEntry,
+  BinderAssignmentCandidate,
+  BinderFullPokedexPreview,
   BinderMutationResult,
+  BinderPlannerSummary,
   BinderVersionPages,
   BinderView,
   CatalogueCardView,

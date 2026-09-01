@@ -145,6 +145,7 @@ export const apiErrorSchema = z
     ok: z.literal(false),
     error: z.string().min(1).max(80),
     message: z.string().max(500).optional(),
+    details: z.lazy(() => apiErrorDetailsSchema).optional(),
     requestId: z.string().max(128).optional(),
   })
   .strict();
@@ -345,7 +346,10 @@ export type BinderSlotSwapRequest = z.infer<typeof binderSlotSwapRequestSchema>;
 export const binderEntrySchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('empty') }).strict(),
   z
-    .object({ kind: z.literal('reserved'), label: z.string().trim().min(1).max(120).nullable() })
+    .object({
+      kind: z.literal('reserved'),
+      label: z.string().trim().min(1).max(120).nullable().optional(),
+    })
     .strict(),
   z
     .object({
@@ -400,7 +404,7 @@ export const binderReservePageRequestSchema = binderRevisionRequestSchema
   .extend({
     page: z.number().int().nonnegative(),
     reserved: z.boolean(),
-    label: z.string().trim().min(1).max(120).nullable(),
+    label: z.string().trim().min(1).max(120).nullable().optional(),
   })
   .strict();
 export const binderCapacityRequestSchema = binderRevisionRequestSchema
@@ -424,6 +428,55 @@ export const binderCapacityErrorSchema = z
   })
   .strict();
 export type BinderCapacityError = z.infer<typeof binderCapacityErrorSchema>;
+
+export const binderPlannerSummarySchema = z
+  .object({
+    pageIds: z.array(z.string().trim().min(1).max(128)),
+    revision: z.number().int().positive(),
+    targets: z.number().int().nonnegative(),
+    placed: z.number().int().nonnegative(),
+    reservedSleeves: z.number().int().nonnegative(),
+    reservedPages: z.number().int().nonnegative(),
+    generatedPadding: z.number().int().nonnegative(),
+    available: z.number().int(),
+    capacity: z.number().int().positive(),
+    pageSize: z.number().int().positive(),
+  })
+  .strict();
+export type BinderPlannerSummary = z.infer<typeof binderPlannerSummarySchema>;
+
+export const binderFullPokedexPreviewSchema = z
+  .object({
+    currentCapacity: z.number().int().positive(),
+    requiredCapacity: z.number().int().positive(),
+    additionalPockets: z.number().int().nonnegative(),
+    pageIncrement: z.number().int().positive(),
+    generatedPadding: z.number().int().nonnegative(),
+  })
+  .strict();
+export type BinderFullPokedexPreview = z.infer<typeof binderFullPokedexPreviewSchema>;
+
+export const activeBinderAssignmentLocationSchema = z
+  .object({
+    binderId: z.string().trim().min(1).max(128),
+    versionId: z.string().trim().min(1).max(128),
+    page: z.number().int().nonnegative(),
+    row: z.number().int().nonnegative(),
+    column: z.number().int().nonnegative(),
+  })
+  .strict();
+export type ActiveBinderAssignmentLocation = z.infer<typeof activeBinderAssignmentLocationSchema>;
+
+export const activeBinderAssignmentsErrorSchema = z
+  .object({ activeAssignments: z.array(activeBinderAssignmentLocationSchema).min(1) })
+  .strict();
+export type ActiveBinderAssignmentsError = z.infer<typeof activeBinderAssignmentsErrorSchema>;
+
+export const apiErrorDetailsSchema = z.union([
+  binderCapacityErrorSchema,
+  activeBinderAssignmentsErrorSchema,
+]);
+export type ApiErrorDetails = z.infer<typeof apiErrorDetailsSchema>;
 
 export const catalogueCardViewSchema = catalogueBriefSchema.extend({
   imageHighUrl: artUrlSchema,

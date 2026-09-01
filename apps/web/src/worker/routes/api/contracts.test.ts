@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { arrangementBody, pageOrderBody } from './index';
+import {
+  arrangementBody,
+  binderFullPokedexPreviewSchema,
+  binderPlannerSummarySchema,
+  pageOrderBody,
+} from './index';
 import { catalogueFilters } from './operations';
 
 describe('API contracts', () => {
@@ -34,5 +39,31 @@ describe('API contracts', () => {
     });
     expect(catalogueFilters({ owned: 'true' }, false).owned).toBeUndefined();
     expect(() => catalogueFilters({ owned: 'sometimes' }, true)).toThrow('invalid_filter');
+  });
+
+  it('defines bounded planner summary and preview response shapes', () => {
+    expect(
+      binderPlannerSummarySchema.parse({
+        pageIds: ['page-1'],
+        revision: 2,
+        targets: 3,
+        placed: 1,
+        reservedSleeves: 1,
+        reservedPages: 0,
+        generatedPadding: 2,
+        available: 3,
+        capacity: 9,
+        pageSize: 9,
+      }),
+    ).toMatchObject({ pageIds: ['page-1'], generatedPadding: 2, available: 3 });
+    expect(
+      binderFullPokedexPreviewSchema.parse({
+        currentCapacity: 9,
+        requiredCapacity: 1035,
+        additionalPockets: 1026,
+        pageIncrement: 9,
+        generatedPadding: 10,
+      }),
+    ).toMatchObject({ additionalPockets: 1026, pageIncrement: 9 });
   });
 });

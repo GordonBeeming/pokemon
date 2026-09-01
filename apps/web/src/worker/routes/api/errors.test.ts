@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { Hono } from 'hono';
 import { BinderDomainError, type BinderErrorCode } from '../../lib/binders';
 import { CollectionDomainError, type CollectionErrorCode } from '../../lib/collection';
 import { ApplicationError } from '../../lib/log';
-import { asApplicationError, parsedJson } from './errors';
+import type { AuthVars } from '../../lib/types';
+import { apiFailure, asApplicationError, parsedJson } from './errors';
 
 const binderStatuses = {
   binder_version_not_found: 404,
@@ -63,5 +65,34 @@ describe('API error mapping', () => {
     await expect(
       parsedJson(new Request('https://example.test', { method: 'POST', body: '{' })),
     ).rejects.toMatchObject({ code: 'invalid_json', status: 400 });
+  });
+
+  it('returns capacity details with the request ID', async () => {
+    const app = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
+    app.get('/', (c) => {
+      c.set('requestId', 'request-409');
+      return apiFailure(
+        c,
+        new BinderDomainError('binder_capacity_exceeded', {
+          currentCapacity: 9,
+          requiredCapacity: 18,
+          additionalPockets: 9,
+          pageIncrement: 9,
+        }),
+      );
+    });
+    const response = await app.request('https://example.test/');
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: 'binder_capacity_exceeded',
+      details: {
+        currentCapacity: 9,
+        requiredCapacity: 18,
+        additionalPockets: 9,
+        pageIncrement: 9,
+      },
+      requestId: 'request-409',
+    });
   });
 });

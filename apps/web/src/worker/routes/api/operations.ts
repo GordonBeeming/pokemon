@@ -18,6 +18,7 @@ import {
   getBinderVersion,
   getBinderVersionShortages,
   getBinderAssignmentCandidates,
+  getBinderPlannerSummary,
   listBinders,
   reorderBinderPages,
   setBinderSlot,
@@ -31,6 +32,7 @@ import {
   reserveBinderPage,
   resizeBinderCapacity,
   insertFullPokedex,
+  previewFullPokedexInsert,
   type ArrangementMode,
 } from '../../lib/binders';
 import { getCardDetail, searchCards, type CatalogueFilters } from '../../lib/catalogue';
@@ -106,6 +108,8 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       getBinderVersionShortages(env.DB, ownerId, versionId, offset, limit),
     binderAssignmentCandidates: (versionId: string, location: BinderSlotLocation) =>
       getBinderAssignmentCandidates(env.DB, ownerId, versionId, location),
+    binderPlannerSummary: (versionId: string) =>
+      getBinderPlannerSummary(env.DB, ownerId, versionId),
     createBinder: (name: string, layout: BinderLayout, capacity?: number) =>
       createBinder(env.DB, ownerId, name, layout, capacity),
     addCardsToBinderVersion: (versionId: string, cardIds: string[], expectedRevision: number) =>
@@ -196,6 +200,13 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       regionPageBreaks: boolean,
       expectedRevision: number,
     ) => insertFullPokedex(env.DB, ownerId, versionId, at, regionPageBreaks, expectedRevision),
+    previewFullPokedex: (
+      versionId: string,
+      at: BinderSlotLocation,
+      regionPageBreaks: boolean,
+      expectedRevision: number,
+    ) =>
+      previewFullPokedexInsert(env.DB, ownerId, versionId, at, regionPageBreaks, expectedRevision),
     artManifest: (cursor: string | null, limit: number) => listArtManifest(env.DB, cursor, limit),
     art: (cardId: string, variant: 'high' | 'low', request: Request) =>
       getArtResponse(env.DB, env.ART, cardId, variant, request),

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api';
-import { BinderView, binderMutationPage, containsCardSequence } from './binder-view';
+import { BinderView, binderMutationPage } from './binder-view';
 import { CatalogueView } from './catalogue-view';
 import { DevicesView, FacetsView, Login, Shell, userMessage } from './ui';
 
@@ -146,15 +146,6 @@ describe('accessible frontend structure', () => {
     expect(html).toContain('Set 30');
     expect(html).not.toContain('Show 24 more');
     expect(html).not.toContain('Browse cards');
-  });
-});
-
-describe('binder planning helpers', () => {
-  it('finds an existing ordered card sequence without matching gaps or partial runs', () => {
-    const slots = ['lead', 'card-1', 'card-2', 'card-3', null, 'tail'];
-    expect(containsCardSequence(slots, ['card-1', 'card-2', 'card-3'])).toBe(true);
-    expect(containsCardSequence(slots, ['card-1', 'card-3'])).toBe(false);
-    expect(containsCardSequence(slots, [])).toBe(false);
   });
 });
 

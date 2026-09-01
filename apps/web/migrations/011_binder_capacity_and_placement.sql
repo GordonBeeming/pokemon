@@ -1,12 +1,24 @@
 ALTER TABLE binder_versions ADD COLUMN capacity INTEGER;
 
+-- Legacy databases can contain a partially-created page. Repair its rectangular
+-- grid before deriving capacity so the invariant is true immediately after migration.
+WITH RECURSIVE
+  row_numbers(value) AS (
+    SELECT 0 UNION ALL SELECT value + 1 FROM row_numbers WHERE value < 19
+  ),
+  column_numbers(value) AS (
+    SELECT 0 UNION ALL SELECT value + 1 FROM column_numbers WHERE value < 19
+  )
+INSERT OR IGNORE INTO binder_slots (binder_page_id, row_index, column_index, card_id)
+SELECT page.id, row_numbers.value, column_numbers.value, NULL
+FROM binder_pages page
+JOIN binder_versions version ON version.id = page.binder_version_id
+JOIN row_numbers ON row_numbers.value < version.rows
+JOIN column_numbers ON column_numbers.value < version.columns;
+
 UPDATE binder_versions
-SET capacity = (
-  SELECT COUNT(*)
-  FROM binder_slots slot
-  JOIN binder_pages page ON page.id = slot.binder_page_id
-  WHERE page.binder_version_id = binder_versions.id
-);
+SET capacity = (SELECT COUNT(*) FROM binder_pages page
+  WHERE page.binder_version_id = binder_versions.id) * rows * columns;
 
 CREATE TRIGGER binder_versions_capacity_insert
 BEFORE INSERT ON binder_versions

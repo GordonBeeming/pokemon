@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { cardIdSchema } from '@pokedex/shared';
 import { apiRoutes, parseDesktopBearer } from './index';
-import { loadAllBinderPages, loadAllBinderShortages } from './desktop';
+import { binderSuggestionEmptySlots, loadAllBinderPages, loadAllBinderShortages } from './desktop';
 
 const token = 'a'.repeat(64);
 
@@ -45,12 +45,53 @@ describe('desktop bearer parsing', () => {
           owned: 1,
           missing: 1,
         })),
+        pokemonShortages: [
+          {
+            pokemonNumber: offset === 0 ? 1 : 2,
+            required: 2,
+            owned: 1,
+            assigned: 1,
+            available: 0,
+            missing: 2,
+          },
+        ],
+        readyToPlace: { exactTargets: 3, pokemonTargets: 4 },
         nextOffset: offset === 0 ? 100 : null,
       });
     });
 
     expect(offsets).toEqual([0, 100]);
-    expect(shortages).toHaveLength(101);
+    expect(shortages.shortages).toHaveLength(101);
+    expect(shortages.pokemonShortages.map((item) => item.pokemonNumber)).toEqual([1, 2]);
+    expect(shortages.readyToPlace).toEqual({ exactTargets: 3, pokemonTargets: 4 });
+  });
+
+  it('only suggests real empty pockets and excludes reserved pages', () => {
+    const slot = (column: number, entryKind: 'empty' | 'reserved' | 'exact-card' | 'pokemon') => ({
+      pageId: 'page-1',
+      row: 0,
+      column,
+      cardId: entryKind === 'exact-card' ? cardIdSchema.parse('card-1') : null,
+      entryKind,
+    });
+    const suggestions = binderSuggestionEmptySlots([
+      {
+        id: 'page-1',
+        position: 0,
+        kind: 'slots',
+        slots: [slot(0, 'empty'), slot(1, 'reserved'), slot(2, 'exact-card'), slot(3, 'pokemon')],
+      },
+      {
+        id: 'page-2',
+        position: 1,
+        kind: 'reserved',
+        slots: [{ ...slot(0, 'empty'), pageId: 'page-2' }],
+      },
+    ]);
+
+    expect(suggestions.map(({ page, column, entryKind }) => ({ page, column, entryKind }))).toEqual(
+      [{ page: 0, column: 0, entryKind: 'empty' }],
+    );
   });
 
   it('accepts an exact paired bearer token', () => {

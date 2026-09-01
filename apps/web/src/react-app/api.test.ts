@@ -138,6 +138,120 @@ describe('API client', () => {
     });
   });
 
+  it('reads planner summaries and previews a full-Pokedex insert', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            summary: {
+              pageIds: ['page-1'],
+              revision: 2,
+              targets: 4,
+              placed: 2,
+              reservedSleeves: 1,
+              reservedPages: 0,
+              generatedPadding: 0,
+              available: 4,
+              capacity: 9,
+              pageSize: 9,
+            },
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ok: true,
+            preview: {
+              currentCapacity: 9,
+              requiredCapacity: 18,
+              additionalPockets: 9,
+              pageIncrement: 9,
+              generatedPadding: 1,
+            },
+          }),
+        ),
+      );
+    await expect(api.plannerSummary('version-1')).resolves.toMatchObject({ pageSize: 9 });
+    await expect(
+      api.previewFullPokedex('version-1', { page: 0, row: 0, column: 0 }, true, 2),
+    ).resolves.toMatchObject({ requiredCapacity: 18 });
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
+      '/api/binders/versions/version-1/planner-summary',
+    );
+    expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe(
+      '/api/binders/versions/version-1/full-pokedex/preview',
+    );
+    expect(vi.mocked(fetch).mock.calls[1]?.[1]?.method).toBe('POST');
+    expect(bodyAt(1)).toEqual({
+      at: { page: 0, row: 0, column: 0 },
+      regionPageBreaks: true,
+      expectedRevision: 2,
+    });
+  });
+
+  it('preserves exact and Pokemon shortage planning details', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          shortages: [
+            {
+              cardId: 'card-1',
+              required: 2,
+              owned: 1,
+              assigned: 1,
+              available: 0,
+              missing: 2,
+            },
+          ],
+          pokemonShortages: [
+            {
+              pokemonNumber: 25,
+              required: 2,
+              owned: 1,
+              assigned: 1,
+              available: 0,
+              missing: 2,
+            },
+          ],
+          readyToPlace: { exactTargets: 3, pokemonTargets: 4 },
+          nextOffset: 100,
+        }),
+      ),
+    );
+
+    await expect(api.binderShortages('version-1')).resolves.toEqual({
+      ok: true,
+      shortages: [
+        {
+          cardId: 'card-1',
+          required: 2,
+          owned: 1,
+          assigned: 1,
+          available: 0,
+          missing: 2,
+        },
+      ],
+      pokemonShortages: [
+        {
+          pokemonNumber: 25,
+          required: 2,
+          owned: 1,
+          assigned: 1,
+          available: 0,
+          missing: 2,
+        },
+      ],
+      readyToPlace: { exactTargets: 3, pokemonTargets: 4 },
+      nextOffset: 100,
+    });
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
+      '/api/binders/versions/version-1/shortages?offset=0&limit=100',
+    );
+  });
+
   it('preserves status, request ID, and retry timing on structured errors', async () => {
     vi.mocked(fetch).mockResolvedValue(
       new Response(
@@ -154,6 +268,30 @@ describe('API client', () => {
       status: 429,
       requestId: 'request-123',
       retryAfterSeconds: 30,
+    });
+  });
+
+  it('preserves typed capacity details on structured errors', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: false,
+          error: 'binder_capacity_exceeded',
+          requestId: 'request-409',
+          details: {
+            currentCapacity: 9,
+            requiredCapacity: 18,
+            additionalPockets: 9,
+            pageIncrement: 9,
+          },
+        }),
+        { status: 409 },
+      ),
+    );
+    await expect(api.pair()).rejects.toMatchObject({
+      code: 'binder_capacity_exceeded',
+      requestId: 'request-409',
+      details: { requiredCapacity: 18 },
     });
   });
 

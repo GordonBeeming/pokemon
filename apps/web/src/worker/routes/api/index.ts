@@ -10,4 +10,10 @@ api.route('/', desktopApiRoutes);
 api.route('/', browserApiRoutes);
 
 export { api as apiRoutes };
-export { arrangementBody, pageOrderBody, parseDesktopBearer } from './contracts';
+export {
+  arrangementBody,
+  binderFullPokedexPreviewSchema,
+  binderPlannerSummarySchema,
+  pageOrderBody,
+  parseDesktopBearer,
+} from './contracts';

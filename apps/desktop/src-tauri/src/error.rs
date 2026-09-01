@@ -1,4 +1,37 @@
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudBinderCapacityDetails {
+    pub current_capacity: u32,
+    pub required_capacity: u32,
+    pub additional_pockets: u32,
+    pub page_increment: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudActiveAssignmentLocation {
+    pub binder_id: String,
+    pub version_id: String,
+    pub page: u32,
+    pub row: u32,
+    pub column: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudActiveAssignmentsDetails {
+    pub active_assignments: Vec<CloudActiveAssignmentLocation>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum CloudErrorDetails {
+    BinderCapacity(CloudBinderCapacityDetails),
+    ActiveAssignments(CloudActiveAssignmentsDetails),
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DesktopError {
@@ -13,7 +46,12 @@ pub enum DesktopError {
     #[error("operation cancelled")]
     Cancelled,
     #[error("cloud request failed with status {status}: {code}")]
-    Cloud { status: u16, code: String },
+    Cloud {
+        status: u16,
+        code: String,
+        request_id: Option<String>,
+        details: Option<CloudErrorDetails>,
+    },
     #[error("cloud response was invalid: {0}")]
     InvalidCloudResponse(String),
     #[error("art checksum mismatch for {card_id}/{variant}")]

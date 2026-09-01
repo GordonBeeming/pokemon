@@ -3,6 +3,7 @@ import { cardIdSchema } from '@pokedex/shared';
 import { DatabaseSync } from 'node:sqlite';
 import {
   BinderDomainError,
+  activeBinderShortages,
   activateBinderVersion,
   addCardsToBinderVersion,
   arrangeBinderVersion,
@@ -12,13 +13,16 @@ import {
   getBinderVersion,
   getBinderVersionShortages,
   getBinderAssignmentCandidates,
+  getBinderPlannerSummary,
   insertBinderEntries,
   insertFullPokedex,
+  previewFullPokedexInsert,
   moveBinderEntryByOffset,
   reflowBinderEntries,
   reserveBinderPage,
   resizeBinderCapacity,
   setBinderEntryAssignment,
+  setBinderEntryPageBreak,
   swapBinderSlots,
 } from './binders';
 import { setCollectionState } from './collection';
@@ -43,6 +47,23 @@ function setup() {
 }
 
 describe('binder row-major reflow', () => {
+  it('keeps a page break aligned after an anchored reservation', () => {
+    const slots = reflowBinderEntries(
+      12,
+      4,
+      [
+        { entry: { kind: 'reserved', label: 'anchor' }, originalIndex: 4 },
+        ...Array.from({ length: 4 }, (_, index) => ({
+          entry: { kind: 'pokemon' as const, pokemonNumber: index + 1, startsNewPage: false },
+        })),
+        { entry: { kind: 'pokemon', pokemonNumber: 1, startsNewPage: true } },
+      ],
+      { anchorReservations: true },
+    );
+    expect(slots[4]?.entry.kind).toBe('reserved');
+    expect(slots[8]?.entry).toMatchObject({ kind: 'pokemon', startsNewPage: true });
+  });
+
   it('generates page-break padding without losing an assigned printing', () => {
     const assignedCardId = cardIdSchema.parse('base1-001');
     const slots = reflowBinderEntries(8, 4, [
@@ -90,6 +111,251 @@ describe('binder row-major reflow', () => {
 });
 
 describe('binder D1 domain', () => {
+  it('summarizes planner usage and previews full Pokedex reflow without mutation', async () => {
+    const { database, db } = setup();
+    const created = await createBinder(
+      db,
+      'owner',
+      'Planner',
+      { kind: '3x3', rows: 3, columns: 3 },
+      18,
+    );
+    const inserted = await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      [
+        { kind: 'exact-card', cardId: cardIdSchema.parse('bulba'), startsNewPage: false },
+        { kind: 'reserved', label: 'Sleeve' },
+        { kind: 'pokemon', pokemonNumber: 2, startsNewPage: true },
+      ],
+      created.version.revision,
+    );
+    const summary = await getBinderPlannerSummary(db, 'owner', created.version.id);
+    expect(summary).toMatchObject({
+      revision: inserted.version.revision,
+      targets: 2,
+      placed: 0,
+      reservedSleeves: 1,
+      reservedPages: 0,
+      generatedPadding: 7,
+      available: 8,
+      capacity: 18,
+      pageSize: 9,
+    });
+    expect(summary.pageIds).toHaveLength(2);
+    const before = database
+      .prepare('SELECT revision FROM binder_versions WHERE id=?1')
+      .get(created.version.id);
+    const preview = await previewFullPokedexInsert(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      true,
+      inserted.version.revision,
+    );
+    expect(preview.currentCapacity).toBe(18);
+    expect(preview.requiredCapacity).toBeGreaterThan(18);
+    expect(preview.additionalPockets % 9).toBe(0);
+    expect(preview.pageIncrement).toBe(9);
+    expect(preview.generatedPadding).toBeGreaterThan(0);
+    expect(
+      database.prepare('SELECT revision FROM binder_versions WHERE id=?1').get(created.version.id),
+    ).toEqual(before);
+    await expect(
+      previewFullPokedexInsert(
+        db,
+        'owner',
+        created.version.id,
+        { page: 0, row: 0, column: 0 },
+        false,
+        inserted.version.revision - 1,
+      ),
+    ).rejects.toMatchObject({ code: 'binder_revision_conflict' });
+    await expect(
+      getBinderPlannerSummary(db, 'other-owner', created.version.id),
+    ).rejects.toMatchObject({ code: 'binder_version_not_found' });
+  });
+
+  it('supports 1,200 slots and the 120,000-slot hard boundary', async () => {
+    const { db } = setup();
+    const medium = await createBinder(
+      db,
+      'owner',
+      '1200',
+      { kind: 'custom', rows: 20, columns: 20 },
+      1200,
+    );
+    expect(medium.version).toMatchObject({ capacity: 1200, pageCount: 3 });
+    const mediumStarted = performance.now();
+    await insertBinderEntries(
+      db,
+      'owner',
+      medium.version.id,
+      { page: 2, row: 19, column: 19 },
+      [{ kind: 'pokemon', pokemonNumber: 1, startsNewPage: false }],
+      medium.version.revision,
+    );
+    const mediumMs = performance.now() - mediumStarted;
+    const maximum = await createBinder(
+      db,
+      'owner',
+      'Maximum',
+      { kind: 'custom', rows: 20, columns: 20 },
+      120000,
+    );
+    expect(maximum.version).toMatchObject({ capacity: 120000, pageCount: 300 });
+    const maximumStarted = performance.now();
+    await insertBinderEntries(
+      db,
+      'owner',
+      maximum.version.id,
+      { page: 299, row: 19, column: 19 },
+      [{ kind: 'pokemon', pokemonNumber: 1, startsNewPage: false }],
+      maximum.version.revision,
+    );
+    const maximumMs = performance.now() - maximumStarted;
+    expect(Number.isFinite(mediumMs)).toBe(true);
+    expect(Number.isFinite(maximumMs)).toBe(true);
+    console.info(
+      `binder suffix mutation timing: 1200=${mediumMs.toFixed(1)}ms 120000=${maximumMs.toFixed(1)}ms`,
+    );
+    await expect(
+      createBinder(db, 'owner', 'Too large', { kind: 'custom', rows: 20, columns: 20 }, 120400),
+    ).rejects.toMatchObject({ code: 'binder_page_limit_reached' });
+  }, 15_000);
+
+  it('bounds a one-entry mutation in a 2,700-slot binder', async () => {
+    const { db } = setup();
+    const created = await createBinder(
+      db,
+      'owner',
+      '2700',
+      { kind: '3x3', rows: 3, columns: 3 },
+      2700,
+    );
+    const started = performance.now();
+    await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 299, row: 2, column: 2 },
+      [{ kind: 'pokemon', pokemonNumber: 1, startsNewPage: false }],
+      created.version.revision,
+    );
+    const durationMs = performance.now() - started;
+    console.info(`binder suffix mutation timing: 2700=${durationMs.toFixed(1)}ms`);
+    expect(durationMs).toBeLessThan(2_000);
+  });
+
+  it('preserves prefix gaps and rejects compact removal from an empty pocket', async () => {
+    const { db } = setup();
+    const created = await createBinder(
+      db,
+      'owner',
+      'Sparse',
+      { kind: '2x2', rows: 2, columns: 2 },
+      8,
+    );
+    const first = await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      [{ kind: 'exact-card', cardId: cardIdSchema.parse('bulba'), startsNewPage: false }],
+      created.version.revision,
+    );
+    const sparse = await swapBinderSlots(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      { page: 1, row: 0, column: 0 },
+      first.version.revision,
+    );
+    const inserted = await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 1, column: 0 },
+      [{ kind: 'pokemon', pokemonNumber: 2, startsNewPage: false }],
+      sparse.version.revision,
+    );
+    await expect(
+      setBinderEntryPageBreak(
+        db,
+        'owner',
+        created.version.id,
+        { page: 0, row: 0, column: 0 },
+        true,
+        inserted.version.revision,
+      ),
+    ).rejects.toMatchObject({ code: 'binder_slot_not_found' });
+    const pages = await getBinderVersion(db, 'owner', created.version.id, 0, 2);
+    expect(pages.pages[0]?.slots[0]).toMatchObject({ entryKind: 'empty' });
+    expect(pages.pages[0]?.slots[3]).toMatchObject({ cardId: 'bulba' });
+    await expect(
+      compactRemoveBinderEntry(
+        db,
+        'owner',
+        created.version.id,
+        { page: 0, row: 0, column: 0 },
+        inserted.version.revision,
+      ),
+    ).rejects.toMatchObject({ code: 'binder_slot_not_found' });
+  });
+
+  it('allocates one owned copy jointly across exact and Pokemon targets', async () => {
+    const { database, db } = setup();
+    database.exec(
+      "UPDATE collection_cards SET quantity = 1 WHERE owner_id = 'owner' AND card_id = 'bulba'",
+    );
+    const created = await createBinder(
+      db,
+      'owner',
+      'Joint',
+      { kind: '2x2', rows: 2, columns: 2 },
+      4,
+    );
+    await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      [
+        { kind: 'exact-card', cardId: cardIdSchema.parse('bulba'), startsNewPage: false },
+        { kind: 'pokemon', pokemonNumber: 1, startsNewPage: false },
+      ],
+      created.version.revision,
+    );
+    const shortages = await getBinderVersionShortages(db, 'owner', created.version.id);
+    expect(shortages.readyToPlace).toEqual({ exactTargets: 1, pokemonTargets: 0 });
+    expect(shortages.pokemonShortages).toEqual([
+      expect.objectContaining({ pokemonNumber: 1, available: 0, missing: 1 }),
+    ]);
+    const other = await createBinder(
+      db,
+      'owner',
+      'Other active',
+      { kind: '2x2', rows: 2, columns: 2 },
+      4,
+    );
+    await insertBinderEntries(
+      db,
+      'owner',
+      other.version.id,
+      { page: 0, row: 0, column: 0 },
+      [{ kind: 'pokemon', pokemonNumber: 1, startsNewPage: false }],
+      other.version.revision,
+    );
+    const dashboard = await activeBinderShortages(db, 'owner');
+    expect(dashboard.pokemonShortages).toEqual([
+      expect.objectContaining({ pokemonNumber: 1, required: 2, available: 0, missing: 2 }),
+    ]);
+  });
+
   it('backfills legacy projections and enforces storage combinations', () => {
     const { database } = setup();
     database.exec(`
@@ -796,6 +1062,30 @@ describe('binder D1 domain', () => {
       'bulba',
       inserted.version.revision,
     );
+    const draft = await cloneBinderVersion(
+      db,
+      'owner',
+      created.version.id,
+      assigned.version.revision,
+    );
+    const draftTarget = await insertBinderEntries(
+      db,
+      'owner',
+      draft.version.id,
+      { page: 0, row: 0, column: 1 },
+      [{ kind: 'pokemon', pokemonNumber: 2, startsNewPage: false }],
+      draft.version.revision,
+    );
+    await expect(
+      setBinderEntryAssignment(
+        db,
+        'owner',
+        draft.version.id,
+        { page: 0, row: 0, column: 1 },
+        'bulba',
+        draftTarget.version.revision,
+      ),
+    ).rejects.toMatchObject({ code: 'binder_assignment_incompatible' });
     await expect(
       setCollectionState(db, 'owner', {
         cardId: 'bulba',
