@@ -1218,6 +1218,7 @@ dd {
   background: #fff;
   color: var(--ink);
   padding: 0.55rem 0.7rem;
+  font-variant-numeric: tabular-nums;
   text-align: left;
 }
 .region-picker-trigger:hover {
@@ -1255,23 +1256,19 @@ dd {
 }
 .region-picker-popover button {
   display: flex;
-  justify-content: space-between;
   gap: 0.75rem;
   border: 0;
   border-radius: 0.4rem;
   background: transparent;
   color: #193f3c;
   padding: 0.6rem;
+  font-variant-numeric: tabular-nums;
   text-align: left;
 }
 .region-picker-popover button:hover,
 .region-picker-popover button[aria-selected='true'] {
   background: #dceee6;
   color: #123e35;
-}
-.region-picker-popover small {
-  color: #355d57;
-  font-variant-numeric: tabular-nums;
 }
 .national-more {
   display: flex;

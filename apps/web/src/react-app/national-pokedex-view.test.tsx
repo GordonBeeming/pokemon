@@ -192,8 +192,9 @@ describe('National Pokédex planning view', () => {
     const counts = Array.from(listbox.querySelectorAll('[role="option"]')).map((option) =>
       option.textContent?.replace(/\s+/gu, ' ').trim(),
     );
-    expect(counts).toContain('All1,025');
-    expect(counts).toContain('Kanto151');
+    expect(trigger.textContent).toContain('All (1,025)');
+    expect(counts).toContain('All (1,025)');
+    expect(counts).toContain('Kanto (151)');
     await act(() =>
       listbox.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })),
     );

@@ -13,6 +13,11 @@ export interface RegionOption {
   count: number;
 }
 
+function optionLabel(option: RegionOption | undefined): string {
+  if (!option) return 'All';
+  return `${option.value} (${option.count.toLocaleString('en-AU')})`;
+}
+
 export function RegionPicker({
   value,
   options,
@@ -127,7 +132,7 @@ export function RegionPicker({
         onClick={() => setOpen((current) => !current)}
         onKeyDown={onButtonKeyDown}
       >
-        <span>{selected?.value ?? 'All'}</span>
+        <span>{optionLabel(selected)}</span>
         <svg className="region-picker-chevron" viewBox="0 0 16 16" aria-hidden="true">
           <path d="m4 6 4 4 4-4" />
         </svg>
@@ -158,8 +163,7 @@ export function RegionPicker({
               onFocus={() => setActiveIndex(index)}
               onClick={() => choose(index)}
             >
-              <span>{option.value}</span>
-              <small>{option.count.toLocaleString('en-AU')}</small>
+              <span>{optionLabel(option)}</span>
             </button>
           ))}
         </div>
