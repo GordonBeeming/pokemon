@@ -42,7 +42,7 @@ if [ "$1" = "audit" ]; then
       ;;
     *) mkdir -p "$CARGO_HOME/advisory-db/crates" ;;
   esac
-  printf '{"vulnerabilities":{"list":[]},"warnings":{}}\\n'
+  printf '{"vulnerabilities":{"list":[]},"warnings":{"unmaintained":[{"package":{"name":"pokedex-desktop","version":"0.1.0"},"advisory":null}]}}\\n'
   exit 0
 fi
 printf 'unexpected cargo command: %s\\n' "$*" >&2
@@ -81,6 +81,7 @@ exit 2
     });
     expect(audit.status).toBe(0);
     expect(audit.stdout).toContain('macOS audit passed');
+    expect(audit.stderr).toContain('unmaintained: pokedex-desktop@0.1.0 affects');
     expect(readFileSync(callLog, 'utf8')).toContain(
       'audit --json --no-fetch --file src-tauri/Cargo.lock',
     );

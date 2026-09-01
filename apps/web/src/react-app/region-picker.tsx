@@ -32,6 +32,7 @@ export function RegionPicker({
   const listbox = useRef<HTMLDivElement>(null);
   const labelId = useId();
   const listboxId = useId();
+  const selectedId = `${listboxId}-selected`;
   const selectedIndex = Math.max(
     0,
     options.findIndex((option) => option.value === value),
@@ -124,7 +125,7 @@ export function RegionPicker({
         ref={button}
         className="region-picker-trigger"
         type="button"
-        aria-labelledby={labelId}
+        aria-labelledby={`${labelId} ${selectedId}`}
         aria-describedby={`${listboxId}-description`}
         aria-haspopup="listbox"
         aria-expanded={open}
@@ -132,7 +133,7 @@ export function RegionPicker({
         onClick={() => setOpen((current) => !current)}
         onKeyDown={onButtonKeyDown}
       >
-        <span>{optionLabel(selected)}</span>
+        <span id={selectedId}>{optionLabel(selected)}</span>
         <svg className="region-picker-chevron" viewBox="0 0 16 16" aria-hidden="true">
           <path d="m4 6 4 4 4-4" />
         </svg>

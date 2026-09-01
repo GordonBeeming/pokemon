@@ -50,21 +50,21 @@ const issues = [
   ),
 ];
 const applies = (issue) => supportedPackages.has(`${issue.package.name}@${issue.package.version}`);
+const advisoryId = (issue) =>
+  issue.advisory?.id ?? `${issue.package.name}@${issue.package.version}`;
+const advisoryTitle = (issue) => issue.advisory?.title ?? 'No advisory metadata available';
 const applicable = issues.filter(applies);
 const excluded = issues.filter((issue) => !applies(issue));
 
 if (excluded.length) {
-  const ids = excluded
-    .map((issue) => issue.advisory.id)
-    .sort()
-    .join(', ');
+  const ids = excluded.map(advisoryId).sort().join(', ');
   process.stdout.write(
     `Excluded ${excluded.length} advisories absent from both supported macOS trees: ${ids}\n`,
   );
 }
 for (const issue of applicable) {
   process.stderr.write(
-    `${issue.kind}: ${issue.advisory.id} affects ${issue.package.name} ${issue.package.version}: ${issue.advisory.title}\n`,
+    `${issue.kind}: ${advisoryId(issue)} affects ${issue.package.name} ${issue.package.version}: ${advisoryTitle(issue)}\n`,
   );
 }
 

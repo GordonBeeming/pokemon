@@ -30,7 +30,7 @@ export { binderRevisionRequestSchema, binderSlotSetRequestSchema, binderSlotSwap
 export const binderAssignmentCandidatesQuerySchema = binderSlotLocationSchema;
 export const binderPlannerSummarySchema = z
   .object({
-    pageIds: z.array(z.string().min(1)),
+    pageIds: z.array(z.string().trim().min(1).max(128)),
     revision: z.number().int().positive(),
     targets: z.number().int().nonnegative(),
     placed: z.number().int().nonnegative(),

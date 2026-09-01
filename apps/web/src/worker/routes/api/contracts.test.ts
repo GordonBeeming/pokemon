@@ -57,6 +57,20 @@ describe('API contracts', () => {
       }),
     ).toMatchObject({ pageIds: ['page-1'], generatedPadding: 2, available: 3 });
     expect(
+      binderPlannerSummarySchema.safeParse({
+        pageIds: ['   ', 'x'.repeat(129)],
+        revision: 2,
+        targets: 3,
+        placed: 1,
+        reservedSleeves: 1,
+        reservedPages: 0,
+        generatedPadding: 2,
+        available: 3,
+        capacity: 9,
+        pageSize: 9,
+      }).success,
+    ).toBe(false);
+    expect(
       binderFullPokedexPreviewSchema.parse({
         currentCapacity: 9,
         requiredCapacity: 1035,

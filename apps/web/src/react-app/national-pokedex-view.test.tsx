@@ -183,6 +183,9 @@ describe('National Pokédex planning view', () => {
     });
     const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="listbox"]');
     if (!trigger) throw new Error('Region picker trigger missing.');
+    const selectedId = trigger.getAttribute('aria-labelledby')?.split(' ').at(-1);
+    expect(selectedId).toBeTruthy();
+    expect(document.getElementById(selectedId ?? '')?.textContent).toBe('All (1,025)');
     await act(() =>
       trigger.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })),
     );
