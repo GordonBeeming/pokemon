@@ -1,4 +1,5 @@
 import type { Context } from 'hono';
+import type { ApiErrorDetails } from '@pokedex/shared';
 import { BinderDomainError, type BinderErrorCode } from '../../lib/binders';
 import { CollectionDomainError, type CollectionErrorCode } from '../../lib/collection';
 import { ApplicationError, describeError, logError } from '../../lib/log';
@@ -20,6 +21,12 @@ const binderStatuses = {
   binder_slot_not_found: 404,
   binder_slot_out_of_bounds: 400,
   binder_arrangement_card_missing: 400,
+  binder_capacity_exceeded: 409,
+  binder_capacity_invalid: 400,
+  binder_shrink_occupied: 409,
+  binder_assignment_incompatible: 409,
+  binder_assignment_quantity_exceeded: 409,
+  binder_reserved_page_not_empty: 409,
   card_not_found: 404,
 } as const satisfies Record<BinderErrorCode, PublicStatus>;
 
@@ -29,6 +36,7 @@ const collectionStatuses = {
   collection_revision_conflict: 409,
   collection_mutation_conflict: 409,
   collection_quantity_out_of_bounds: 409,
+  collection_quantity_below_active_assignments: 409,
   invalid_stored_mutation: 500,
 } as const satisfies Record<CollectionErrorCode, PublicStatus>;
 
@@ -58,10 +66,15 @@ export function apiFailure(
       err: describeError(error),
       stack: error instanceof Error ? error.stack : undefined,
     });
+  const details =
+    error instanceof BinderDomainError || error instanceof CollectionDomainError
+      ? (error.details as ApiErrorDetails | undefined)
+      : undefined;
   return c.json(
     {
       ok: false,
       error: failure.status >= 500 ? 'internal_error' : failure.code,
+      ...(details ? { details } : {}),
       requestId,
     },
     failure.status,

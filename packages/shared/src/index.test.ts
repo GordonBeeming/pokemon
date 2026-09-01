@@ -2,15 +2,23 @@ import { describe, expect, it } from 'vitest';
 import {
   DESKTOP_SCOPES,
   artUrlSchema,
+  apiErrorSchema,
+  binderEntrySchema,
+  binderFullPokedexPreviewSchema,
+  binderPlannerSummarySchema,
   desktopScopeSchema,
   binderLayoutSchema,
   binderMutationResultSchema,
+  binderAssignmentCandidatesSchema,
   cardIdSchema,
   collectionIncrementRequestSchema,
   collectionNotesPatchRequestSchema,
   collectionSetRequestSchema,
   collectionStateSchema,
+  binderReservePageRequestSchema,
   languageSchema,
+  NATIONAL_POKEDEX,
+  pokemonDiscoveryCategory,
 } from './index';
 
 describe('shared wire schemas', () => {
@@ -130,5 +138,135 @@ describe('shared wire schemas', () => {
     expect(
       binderMutationResultSchema.safeParse({ ...result, pages: [page, page, page] }).success,
     ).toBe(false);
+  });
+
+  it('strictly validates assignment candidate availability', () => {
+    const candidate = {
+      cardId: 'sv1-001',
+      name: 'Bulbasaur',
+      setName: 'Base',
+      number: '1',
+      language: 'en',
+      owned: 2,
+      assigned: 1,
+      available: 1,
+    };
+    expect(binderAssignmentCandidatesSchema.parse({ candidates: [candidate] }).candidates).toEqual([
+      candidate,
+    ]);
+    expect(
+      binderAssignmentCandidatesSchema.safeParse({ candidates: [{ ...candidate, ignored: true }] })
+        .success,
+    ).toBe(false);
+  });
+
+  it('keeps optional reserved labels and structured error details on the wire', () => {
+    expect(binderEntrySchema.parse({ kind: 'reserved' })).toEqual({ kind: 'reserved' });
+    expect(binderEntrySchema.parse({ kind: 'reserved', label: null })).toEqual({
+      kind: 'reserved',
+      label: null,
+    });
+    expect(binderEntrySchema.safeParse({ kind: 'reserved', label: '   ' }).success).toBe(false);
+    expect(
+      binderReservePageRequestSchema.parse({
+        expectedRevision: 1,
+        page: 0,
+        reserved: true,
+      }).label,
+    ).toBeUndefined();
+    expect(
+      apiErrorSchema.parse({
+        ok: false,
+        error: 'binder_capacity_exceeded',
+        details: {
+          currentCapacity: 9,
+          requiredCapacity: 18,
+          additionalPockets: 9,
+          pageIncrement: 9,
+        },
+      }).details,
+    ).toMatchObject({ requiredCapacity: 18 });
+    expect(
+      apiErrorSchema.safeParse({
+        ok: false,
+        error: 'collection_quantity_below_active_assignments',
+        details: {
+          activeAssignments: [
+            { binderId: 'binder-1', versionId: 'version-1', page: 0, row: 0, column: 0 },
+          ],
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('strictly validates planner summary and full-Pokedex preview responses', () => {
+    expect(
+      binderPlannerSummarySchema.parse({
+        pageIds: ['page-1'],
+        revision: 3,
+        targets: 4,
+        placed: 2,
+        reservedSleeves: 1,
+        reservedPages: 1,
+        generatedPadding: 0,
+        available: 12,
+        capacity: 18,
+        pageSize: 9,
+      }).pageIds,
+    ).toEqual(['page-1']);
+    expect(
+      binderPlannerSummarySchema.safeParse({
+        pageIds: ['page-1'],
+        revision: 3,
+        targets: 4,
+        placed: 2,
+        reservedSleeves: 1,
+        reservedPages: 1,
+        generatedPadding: 0,
+        available: -1,
+        capacity: 18,
+        pageSize: 9,
+      }).success,
+    ).toBe(false);
+    expect(
+      binderFullPokedexPreviewSchema.parse({
+        currentCapacity: 18,
+        requiredCapacity: 36,
+        additionalPockets: 18,
+        pageIncrement: 9,
+        generatedPadding: 3,
+      }).requiredCapacity,
+    ).toBe(36);
+    expect(
+      binderFullPokedexPreviewSchema.safeParse({
+        currentCapacity: 18,
+        requiredCapacity: 36,
+        additionalPockets: 18,
+        pageIncrement: 9,
+        generatedPadding: 3,
+        ignored: true,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe('National Pokedex registry', () => {
+  it('contains every named species exactly once in National order', () => {
+    expect(NATIONAL_POKEDEX).toHaveLength(1025);
+    expect(NATIONAL_POKEDEX.map((entry) => entry.number)).toEqual(
+      Array.from({ length: 1025 }, (_unused, index) => index + 1),
+    );
+    expect(new Set(NATIONAL_POKEDEX.map((entry) => entry.name)).size).toBe(1025);
+  });
+
+  it('uses discovery categories, including Hisui and the Alolan Meltan family', () => {
+    expect(pokemonDiscoveryCategory(151)).toBe('Kanto');
+    expect(pokemonDiscoveryCategory(899)).toBe('Hisui');
+    expect(pokemonDiscoveryCategory(905)).toBe('Hisui');
+    expect(pokemonDiscoveryCategory(906)).toBe('Paldea');
+    expect(NATIONAL_POKEDEX[807]?.name).toBe('Meltan');
+    expect(NATIONAL_POKEDEX[807]?.discoveryCategory).toBe('Alola');
+    expect(NATIONAL_POKEDEX[808]?.name).toBe('Melmetal');
+    expect(NATIONAL_POKEDEX[808]?.discoveryCategory).toBe('Alola');
   });
 });

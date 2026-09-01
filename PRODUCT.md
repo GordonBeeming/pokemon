@@ -24,7 +24,7 @@ TCGdex supplies physical card metadata and source art. Pokédex excludes TCG Poc
 
 ## Binders
 
-Binder plans are digital copies of physical layouts. Drafts can repeat card targets. Active versions report shortages instead of rejecting an incomplete plan. Layouts include 2x2, 3x3, 4x3, top-loader, and custom rows and columns.
+Binder plans are fixed-capacity digital copies of physical layouts. A creator chooses the page face and total pocket count in whole pages, then deliberately grows or safely shrinks the plan when needed. Each sleeve is empty, reserved, an exact-card target, or a National Pokédex target. Targets and owned-card placement are separate, so a target is not presented as physically filled until a compatible copy is assigned. Editable binder versions support page starts, signed-offset moves, closing gaps, anchored reservations, and a full 1,025-entry National Pokédex insert without catalogue synchronisation. Active versions report shortages, while archived versions remain readable but cannot change.
 
 ## Desktop companion
 

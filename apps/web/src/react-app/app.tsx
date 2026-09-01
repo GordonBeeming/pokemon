@@ -13,7 +13,7 @@ import {
 import { BinderView } from './binder-view';
 import { CatalogueView } from './catalogue-view';
 import { NationalPokedexView, type OwnershipFilter } from './national-pokedex-view';
-import { NATIONAL_POKEDEX, type NationalPokedexEntry } from './national-pokedex';
+import { NATIONAL_POKEDEX, type NationalPokedexEntry } from '@pokedex/shared';
 import { LoadingOverlay } from './loading-overlay';
 import {
   DashboardView,
@@ -120,6 +120,7 @@ export function App(): ReactElement {
   const [nationalQuery, setNationalQuery] = useState('');
   const [nationalOwnership, setNationalOwnership] = useState<OwnershipFilter>('all');
   const [nationalPage, setNationalPage] = useState(0);
+  const [nationalRegion, setNationalRegion] = useState('All');
   const [nationalFocus, setNationalFocus] = useState<number | null>(null);
   const [nationalScrollY, setNationalScrollY] = useState(0);
   const loadGeneration = useRef(0);
@@ -324,7 +325,10 @@ export function App(): ReactElement {
         retryIndexing={() => {
           const number = Number(catalogueParams.get('pokedexNumber'));
           const name = catalogueParams.get('species');
-          if (Number.isInteger(number) && name) discoverSpecies({ number, name }, true);
+          const entry = NATIONAL_POKEDEX.find(
+            (item) => item.number === number && item.name === name,
+          );
+          if (entry) discoverSpecies(entry, true);
         }}
         onBackToNational={() => navigate('species')}
         onBackToSets={() => navigate('sets')}
@@ -370,12 +374,14 @@ export function App(): ReactElement {
         query={nationalQuery}
         ownership={nationalOwnership}
         page={nationalPage}
+        region={nationalRegion}
         focusNumber={nationalFocus}
         restoreScrollY={nationalScrollY}
         pendingNumber={discoveringSpecies}
         onQueryChange={setNationalQuery}
         onOwnershipChange={setNationalOwnership}
         onPageChange={setNationalPage}
+        onRegionChange={setNationalRegion}
         onChoose={openSpecies}
       />
     ) : routeError ? (

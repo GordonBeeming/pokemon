@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, type ReactElement } from 'react';
 import type { NationalPokedexCoverage, NationalPokedexPreview } from './api';
-import { NATIONAL_POKEDEX, type NationalPokedexEntry } from './national-pokedex';
+import { NATIONAL_POKEDEX, type NationalPokedexEntry } from '@pokedex/shared';
 import { SegmentedControl } from './segmented-control';
 import { CardArt } from './card-art';
 import { CardTile } from './card-tile';
 import { Pagination } from './pagination';
+import { RegionPicker } from './region-picker';
 
 export type OwnershipFilter = 'all' | 'owned' | 'missing';
 
@@ -34,12 +35,14 @@ export function NationalPokedexView({
   query,
   ownership,
   page,
+  region = 'All',
   focusNumber,
   restoreScrollY,
   pendingNumber,
   onQueryChange,
   onOwnershipChange,
   onPageChange,
+  onRegionChange = () => undefined,
   onChoose,
 }: {
   coverage: NationalPokedexCoverage[];
@@ -47,12 +50,14 @@ export function NationalPokedexView({
   query: string;
   ownership: OwnershipFilter;
   page: number;
+  region?: string;
   focusNumber: number | null;
   restoreScrollY: number;
   pendingNumber: number | null;
   onQueryChange: (value: string) => void;
   onOwnershipChange: (value: OwnershipFilter) => void;
   onPageChange: (value: number) => void;
+  onRegionChange?: (value: string) => void;
   onChoose: (entry: NationalPokedexEntry) => void;
 }): ReactElement {
   const coverageByNumber = useMemo(
@@ -65,9 +70,9 @@ export function NationalPokedexView({
   );
   const list = useRef<HTMLElement>(null);
   const ownedSpecies = coverage.filter((entry) => entry.ownedCards > 0).length;
-  const filtered = useMemo(() => {
+  const regionOptions = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase('en-AU');
-    return NATIONAL_POKEDEX.filter((entry) => {
+    const matchesBaseFilters = (entry: NationalPokedexEntry): boolean => {
       const state = coverageByNumber.get(entry.number);
       const owned = (state?.ownedCards ?? 0) > 0;
       if (ownership === 'owned' && !owned) return false;
@@ -75,11 +80,39 @@ export function NationalPokedexView({
       return (
         !needle ||
         entry.name.toLocaleLowerCase('en-AU').includes(needle) ||
+        entry.discoveryCategory.toLocaleLowerCase('en-AU').includes(needle) ||
+        String(entry.number).padStart(4, '0').includes(needle.replace(/^#/u, '')) ||
+        state?.types.some((type) => type.toLocaleLowerCase('en-AU').includes(needle)) === true
+      );
+    };
+    const regions = [...new Set(NATIONAL_POKEDEX.map((entry) => entry.discoveryCategory))];
+    return [
+      { value: 'All', count: NATIONAL_POKEDEX.filter(matchesBaseFilters).length },
+      ...regions.map((value) => ({
+        value,
+        count: NATIONAL_POKEDEX.filter(
+          (entry) => entry.discoveryCategory === value && matchesBaseFilters(entry),
+        ).length,
+      })),
+    ];
+  }, [coverageByNumber, ownership, query]);
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase('en-AU');
+    return NATIONAL_POKEDEX.filter((entry) => {
+      const state = coverageByNumber.get(entry.number);
+      const owned = (state?.ownedCards ?? 0) > 0;
+      if (ownership === 'owned' && !owned) return false;
+      if (ownership === 'missing' && owned) return false;
+      if (region !== 'All' && entry.discoveryCategory !== region) return false;
+      return (
+        !needle ||
+        entry.name.toLocaleLowerCase('en-AU').includes(needle) ||
+        entry.discoveryCategory.toLocaleLowerCase('en-AU').includes(needle) ||
         String(entry.number).padStart(4, '0').includes(needle.replace(/^#/u, '')) ||
         state?.types.some((type) => type.toLocaleLowerCase('en-AU').includes(needle)) === true
       );
     });
-  }, [coverageByNumber, ownership, query]);
+  }, [coverageByNumber, ownership, query, region]);
   useEffect(() => {
     window.scrollTo({ top: restoreScrollY });
     if (focusNumber === null) return;
@@ -120,13 +153,21 @@ export function NationalPokedexView({
           <input
             value={query}
             type="search"
-            placeholder="Name, # number or type"
+            placeholder="Name, # number, type, or first-found region"
             onChange={(event) => {
               onQueryChange(event.target.value);
               onPageChange(0);
             }}
           />
         </label>
+        <RegionPicker
+          value={region}
+          options={regionOptions}
+          onChange={(value) => {
+            onRegionChange(value);
+            onPageChange(0);
+          }}
+        />
         <SegmentedControl
           label="Collection state"
           value={ownership}
@@ -156,13 +197,13 @@ export function NationalPokedexView({
               key={entry.number}
               data-pokedex-number={entry.number}
               disabled={pendingNumber !== null}
-              aria-label={`${String(entry.number).padStart(4, '0')} ${entry.name}. ${owned ? 'Owned' : 'Missing'}. ${state?.totalCards ?? 0} card variants loaded.`}
+              aria-label={`${String(entry.number).padStart(4, '0')} ${entry.name}. First found in ${entry.discoveryCategory}. ${owned ? 'Owned' : 'Missing'}. ${state?.totalCards ?? 0} card variants loaded.`}
               onClick={() => {
                 if (pendingNumber === null) onChoose(entry);
               }}
               art={<RepresentativeArt entry={state} preview={previewsByName.get(entry.name)} />}
               title={entry.name}
-              subtitle={`#${String(entry.number).padStart(4, '0')}`}
+              subtitle={`#${String(entry.number).padStart(4, '0')} · ${entry.discoveryCategory}`}
               quantity={state?.ownedCards ?? 0}
             />
           );
@@ -171,7 +212,7 @@ export function NationalPokedexView({
       {visible.length === 0 ? (
         <div className="empty-state">
           <h2>No Pokémon match these filters.</h2>
-          <p>Clear the name or change the collection state.</p>
+          <p>Clear the name, change the collection state, or choose another first-found region.</p>
         </div>
       ) : null}
       <Pagination

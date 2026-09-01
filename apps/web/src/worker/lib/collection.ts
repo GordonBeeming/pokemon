@@ -45,10 +45,22 @@ export type CollectionErrorCode =
   | 'collection_revision_conflict'
   | 'collection_mutation_conflict'
   | 'collection_quantity_out_of_bounds'
+  | 'collection_quantity_below_active_assignments'
   | 'invalid_stored_mutation';
 
+export interface ActiveBinderAssignmentLocation {
+  binderId: string;
+  versionId: string;
+  page: number;
+  row: number;
+  column: number;
+}
+
 export class CollectionDomainError extends Error {
-  constructor(public readonly code: CollectionErrorCode) {
+  constructor(
+    public readonly code: CollectionErrorCode,
+    public readonly details?: { activeAssignments: ActiveBinderAssignmentLocation[] },
+  ) {
     super(code);
     this.name = 'CollectionDomainError';
   }
@@ -201,15 +213,16 @@ export async function setCollectionState(
   if ((current?.revision ?? 0) !== expectedRevision)
     throw new CollectionDomainError('collection_revision_conflict');
   const now = nowSeconds();
-  return commitMutation(
-    db,
-    ownerId,
-    input.cardId,
-    input.mutationId,
-    hash,
-    db
-      .prepare(
-        `INSERT INTO collection_cards
+  try {
+    return await commitMutation(
+      db,
+      ownerId,
+      input.cardId,
+      input.mutationId,
+      hash,
+      db
+        .prepare(
+          `INSERT INTO collection_cards
           (owner_id, card_id, quantity, notes, revision, updated_at, last_mutation_id)
          VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6)
          ON CONFLICT(owner_id, card_id) DO UPDATE SET
@@ -218,19 +231,59 @@ export async function setCollectionState(
           revision = collection_cards.revision + 1,
           updated_at = excluded.updated_at,
           last_mutation_id = excluded.last_mutation_id
-         WHERE collection_cards.revision = ?7`,
+         WHERE collection_cards.revision = ?7
+           AND excluded.quantity >= (
+             SELECT COUNT(*) FROM binder_slots slot
+             JOIN binder_pages page ON page.id = slot.binder_page_id
+             JOIN binder_versions version ON version.id = page.binder_version_id
+             JOIN binders binder ON binder.id = version.binder_id
+             WHERE binder.owner_id = ?1 AND version.status = 'active'
+               AND slot.assigned_card_id = ?2
+           )`,
+        )
+        .bind(
+          ownerId,
+          input.cardId,
+          input.quantity,
+          input.notes,
+          now,
+          input.mutationId,
+          expectedRevision,
+        ),
+      'collection_revision_conflict',
+    );
+  } catch (error) {
+    const assigned = await db
+      .prepare(
+        `SELECT binder.id AS binder_id, version.id AS version_id, page.position,
+          slot.row_index, slot.column_index FROM binder_slots slot
+         JOIN binder_pages page ON page.id = slot.binder_page_id
+         JOIN binder_versions version ON version.id = page.binder_version_id
+         JOIN binders binder ON binder.id = version.binder_id
+         WHERE binder.owner_id = ?1 AND version.status = 'active'
+           AND slot.assigned_card_id = ?2
+         ORDER BY binder.id, version.id, page.position, slot.row_index, slot.column_index`,
       )
-      .bind(
-        ownerId,
-        input.cardId,
-        input.quantity,
-        input.notes,
-        now,
-        input.mutationId,
-        expectedRevision,
-      ),
-    'collection_revision_conflict',
-  );
+      .bind(ownerId, input.cardId)
+      .all<{
+        binder_id: string;
+        version_id: string;
+        position: number;
+        row_index: number;
+        column_index: number;
+      }>();
+    if (assigned.results.length > input.quantity)
+      throw new CollectionDomainError('collection_quantity_below_active_assignments', {
+        activeAssignments: assigned.results.map((location) => ({
+          binderId: location.binder_id,
+          versionId: location.version_id,
+          page: location.position,
+          row: location.row_index,
+          column: location.column_index,
+        })),
+      });
+    throw error;
+  }
 }
 
 export async function incrementCollectionQuantity(

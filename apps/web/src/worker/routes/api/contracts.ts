@@ -3,6 +3,15 @@ import {
   binderRevisionRequestSchema,
   binderSlotSetRequestSchema,
   binderSlotSwapRequestSchema,
+  binderSlotLocationSchema,
+  binderInsertRequestSchema,
+  binderCompactRemoveRequestSchema,
+  binderOffsetMoveRequestSchema,
+  binderAssignRequestSchema,
+  binderPageBreakRequestSchema,
+  binderReservePageRequestSchema,
+  binderCapacityRequestSchema,
+  binderFullPokedexRequestSchema,
   cardCategorySchema,
   collectionIncrementRequestSchema,
   collectionNotesPatchRequestSchema,
@@ -18,6 +27,40 @@ import { ApplicationError } from '../../lib/log';
 import type { AuthVars } from '../../lib/types';
 
 export { binderRevisionRequestSchema, binderSlotSetRequestSchema, binderSlotSwapRequestSchema };
+export const binderAssignmentCandidatesQuerySchema = binderSlotLocationSchema;
+export const binderPlannerSummarySchema = z
+  .object({
+    pageIds: z.array(z.string().trim().min(1).max(128)),
+    revision: z.number().int().positive(),
+    targets: z.number().int().nonnegative(),
+    placed: z.number().int().nonnegative(),
+    reservedSleeves: z.number().int().nonnegative(),
+    reservedPages: z.number().int().nonnegative(),
+    generatedPadding: z.number().int().nonnegative(),
+    available: z.number().int().nonnegative(),
+    capacity: z.number().int().positive(),
+    pageSize: z.number().int().positive(),
+  })
+  .strict();
+export const binderFullPokedexPreviewSchema = z
+  .object({
+    currentCapacity: z.number().int().positive(),
+    requiredCapacity: z.number().int().positive(),
+    additionalPockets: z.number().int().nonnegative(),
+    pageIncrement: z.number().int().positive(),
+    generatedPadding: z.number().int().nonnegative(),
+  })
+  .strict();
+export {
+  binderInsertRequestSchema,
+  binderCompactRemoveRequestSchema,
+  binderOffsetMoveRequestSchema,
+  binderAssignRequestSchema,
+  binderPageBreakRequestSchema,
+  binderReservePageRequestSchema,
+  binderCapacityRequestSchema,
+  binderFullPokedexRequestSchema,
+};
 
 export const collectionBody = mutationRequestSchema
   .extend({
@@ -30,7 +73,11 @@ export const compatibleCollectionSetBody = z.union([collectionSetBody, collectio
 export const collectionIncrementBody = collectionIncrementRequestSchema;
 export const collectionNotesBody = collectionNotesPatchRequestSchema;
 export const createBinderBody = z
-  .object({ name: z.string().trim().min(1).max(120), layout: binderLayoutSchema })
+  .object({
+    name: z.string().trim().min(1).max(120),
+    layout: binderLayoutSchema,
+    capacity: z.number().int().positive().optional(),
+  })
   .strict();
 export const pageOrderBody = binderRevisionRequestSchema
   .extend({ pageIds: z.array(z.string().trim().min(1).max(128)).min(1) })

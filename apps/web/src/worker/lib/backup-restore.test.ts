@@ -5,6 +5,38 @@ import { applyAllMigrations, sqliteD1 } from './d1-test-helper';
 
 const databases: DatabaseSync[] = [];
 
+const V3_BINDER_FIXTURE = Object.freeze({
+  binders: [
+    {
+      id: 'v3-binder',
+      owner_id: 'owner',
+      name: 'V3 Binder',
+      active_version_id: 'v3-version',
+      created_at: 1,
+      updated_at: 1,
+    },
+  ],
+  versions: [
+    {
+      id: 'v3-version',
+      binder_id: 'v3-binder',
+      version_number: 1,
+      status: 'active',
+      layout_kind: '2x2',
+      rows: 2,
+      columns: 2,
+      created_at: 1,
+      activated_at: 1,
+      revision: 1,
+    },
+  ],
+  pages: [{ id: 'v3-page', binder_version_id: 'v3-version', position: 0 }],
+  slots: [
+    { binder_page_id: 'v3-page', row_index: 0, column_index: 0, card_id: 'card-binder' },
+    { binder_page_id: 'v3-page', row_index: 0, column_index: 1, card_id: null },
+  ],
+});
+
 afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
@@ -146,6 +178,11 @@ async function readObjectText(art: R2Bucket, key: string): Promise<string> {
   return text + decoder.decode();
 }
 
+async function checksum(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 async function seedReferencedArt(art: R2Bucket): Promise<void> {
   await art.put('cards/custom-a/high/hash.webp', Uint8Array.from([1, 2, 3]), {
     customMetadata: { ownerId: 'owner' },
@@ -156,6 +193,121 @@ async function seedReferencedArt(art: R2Bucket): Promise<void> {
 }
 
 describe('backup restore', () => {
+  it('restores the frozen v3 binder fixture with v4 defaults', async () => {
+    const { database, db, art } = setup();
+    const backupId = 'backup_v3_fixture';
+    const chunks: Array<{
+      kind: 'binders' | 'versions' | 'pages' | 'slots';
+      index: number;
+      objectKey: string;
+      checksum: string;
+      bytes: number;
+      rows: number;
+    }> = [];
+    for (const kind of ['binders', 'versions', 'pages', 'slots'] as const) {
+      const payload = JSON.stringify(V3_BINDER_FIXTURE[kind]);
+      const objectKey = `backups/owner/${backupId}/chunks/${kind}/0.json`;
+      const digest = await checksum(payload);
+      await art.put(objectKey, payload, { customMetadata: { checksum: digest } });
+      chunks.push({
+        kind,
+        index: 0,
+        objectKey,
+        checksum: digest,
+        bytes: new TextEncoder().encode(payload).byteLength,
+        rows: V3_BINDER_FIXTURE[kind].length,
+      });
+    }
+    const manifest = JSON.stringify({
+      version: 3,
+      ownerId: 'owner',
+      mutationEpoch: 0,
+      createdAt: '2026-08-28T00:00:00.000Z',
+      chunks,
+    });
+    const manifestChecksum = await checksum(manifest);
+    const manifestKey = `backups/owner/${backupId}/manifest.json`;
+    await art.put(manifestKey, manifest);
+    database
+      .prepare(
+        `INSERT INTO backup_runs
+          (id,owner_id,object_key,checksum,backup_epoch,created_at)
+         VALUES (?1,'owner',?2,?3,0,1)`,
+      )
+      .run(backupId, manifestKey, manifestChecksum);
+
+    await restoreBackup(db, art, 'owner', backupId);
+    await restoreBackup(db, art, 'owner', backupId);
+
+    expect(
+      database.prepare('SELECT capacity FROM binder_versions WHERE id = ?1').get('v3-version'),
+    ).toEqual({ capacity: 4 });
+    expect(
+      database.prepare('SELECT kind, label FROM binder_pages WHERE id = ?1').get('v3-page'),
+    ).toEqual({ kind: 'slots', label: null });
+    expect(
+      database
+        .prepare(
+          `SELECT row_index, column_index, entry_kind, card_id FROM binder_slots
+           WHERE binder_page_id = 'v3-page' ORDER BY row_index, column_index`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        row_index: 0,
+        column_index: 0,
+        entry_kind: 'exact-card',
+        card_id: 'card-binder',
+      },
+      { row_index: 0, column_index: 1, entry_kind: 'empty', card_id: null },
+      { row_index: 1, column_index: 0, entry_kind: 'empty', card_id: null },
+      { row_index: 1, column_index: 1, entry_kind: 'empty', card_id: null },
+    ]);
+  });
+
+  it('preserves page reservations while repairing every missing pocket', async () => {
+    const { database, db, art } = setup();
+    await seedReferencedArt(art);
+    database.exec(`
+      INSERT INTO binder_pages (id,binder_version_id,position,kind,label)
+      VALUES ('page-2','version-1',1,'reserved','Trades');
+      UPDATE binder_versions SET capacity = 8 WHERE id = 'version-1';
+    `);
+    const backupId = 'backup_incomplete_reserved_page';
+    await createBackup(db, art, 'owner', { backupId });
+
+    await restoreBackup(db, art, 'owner', backupId);
+
+    expect(
+      database.prepare('SELECT capacity FROM binder_versions WHERE id = ?1').get('version-1'),
+    ).toEqual({ capacity: 8 });
+    expect(
+      database.prepare('SELECT kind, label FROM binder_pages WHERE id = ?1').get('page-2'),
+    ).toEqual({ kind: 'reserved', label: 'Trades' });
+    expect(
+      database
+        .prepare(
+          `SELECT page.id, COUNT(slot.binder_page_id) AS slots
+           FROM binder_pages page
+           LEFT JOIN binder_slots slot ON slot.binder_page_id = page.id
+           WHERE page.binder_version_id = 'version-1'
+           GROUP BY page.id ORDER BY page.position`,
+        )
+        .all(),
+    ).toEqual([
+      { id: 'page-1', slots: 4 },
+      { id: 'page-2', slots: 4 },
+    ]);
+    expect(
+      database
+        .prepare(
+          `SELECT entry_kind, card_id FROM binder_slots
+           WHERE binder_page_id = 'page-1' AND row_index = 0 AND column_index = 0`,
+        )
+        .get(),
+    ).toEqual({ entry_kind: 'exact-card', card_id: 'card-binder' });
+  });
+
   it('includes art metadata for cards that appear only in binder slots', async () => {
     const { db, art } = setup();
     await seedReferencedArt(art);

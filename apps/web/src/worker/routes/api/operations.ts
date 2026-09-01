@@ -17,11 +17,22 @@ import {
   deleteBinderPage,
   getBinderVersion,
   getBinderVersionShortages,
+  getBinderAssignmentCandidates,
+  getBinderPlannerSummary,
   listBinders,
   reorderBinderPages,
   setBinderSlot,
   setBinderSlots,
   swapBinderSlots,
+  insertBinderEntries,
+  compactRemoveBinderEntry,
+  moveBinderEntryByOffset,
+  setBinderEntryAssignment,
+  setBinderEntryPageBreak,
+  reserveBinderPage,
+  resizeBinderCapacity,
+  insertFullPokedex,
+  previewFullPokedexInsert,
   type ArrangementMode,
 } from '../../lib/binders';
 import { getCardDetail, searchCards, type CatalogueFilters } from '../../lib/catalogue';
@@ -95,8 +106,12 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       getBinderVersion(env.DB, ownerId, versionId, page, limit),
     binderShortages: (versionId: string, offset = 0, limit = 100) =>
       getBinderVersionShortages(env.DB, ownerId, versionId, offset, limit),
-    createBinder: (name: string, layout: BinderLayout) =>
-      createBinder(env.DB, ownerId, name, layout),
+    binderAssignmentCandidates: (versionId: string, location: BinderSlotLocation) =>
+      getBinderAssignmentCandidates(env.DB, ownerId, versionId, location),
+    binderPlannerSummary: (versionId: string) =>
+      getBinderPlannerSummary(env.DB, ownerId, versionId),
+    createBinder: (name: string, layout: BinderLayout, capacity?: number) =>
+      createBinder(env.DB, ownerId, name, layout, capacity),
     addCardsToBinderVersion: (versionId: string, cardIds: string[], expectedRevision: number) =>
       addCardsToBinderVersion(env.DB, ownerId, versionId, cardIds, expectedRevision),
     cloneBinderVersion: (versionId: string, expectedRevision: number) =>
@@ -141,6 +156,57 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
     ) {
       return swapBinderSlots(env.DB, ownerId, versionId, source, target, expectedRevision);
     },
+    insertBinderEntries: (
+      versionId: string,
+      at: BinderSlotLocation,
+      entries: import('@pokedex/shared').BinderEntry[],
+      expectedRevision: number,
+    ) => insertBinderEntries(env.DB, ownerId, versionId, at, entries, expectedRevision),
+    compactRemoveBinderEntry: (
+      versionId: string,
+      at: BinderSlotLocation,
+      expectedRevision: number,
+    ) => compactRemoveBinderEntry(env.DB, ownerId, versionId, at, expectedRevision),
+    moveBinderEntryByOffset: (
+      versionId: string,
+      from: BinderSlotLocation,
+      offset: number,
+      expectedRevision: number,
+    ) => moveBinderEntryByOffset(env.DB, ownerId, versionId, from, offset, expectedRevision),
+    setBinderEntryAssignment: (
+      versionId: string,
+      at: BinderSlotLocation,
+      cardId: string | null,
+      expectedRevision: number,
+    ) => setBinderEntryAssignment(env.DB, ownerId, versionId, at, cardId, expectedRevision),
+    setBinderEntryPageBreak: (
+      versionId: string,
+      at: BinderSlotLocation,
+      startsNewPage: boolean,
+      expectedRevision: number,
+    ) => setBinderEntryPageBreak(env.DB, ownerId, versionId, at, startsNewPage, expectedRevision),
+    reserveBinderPage: (
+      versionId: string,
+      page: number,
+      reserved: boolean,
+      label: string | null,
+      expectedRevision: number,
+    ) => reserveBinderPage(env.DB, ownerId, versionId, page, reserved, label, expectedRevision),
+    resizeBinderCapacity: (versionId: string, capacity: number, expectedRevision: number) =>
+      resizeBinderCapacity(env.DB, ownerId, versionId, capacity, expectedRevision),
+    insertFullPokedex: (
+      versionId: string,
+      at: BinderSlotLocation,
+      regionPageBreaks: boolean,
+      expectedRevision: number,
+    ) => insertFullPokedex(env.DB, ownerId, versionId, at, regionPageBreaks, expectedRevision),
+    previewFullPokedex: (
+      versionId: string,
+      at: BinderSlotLocation,
+      regionPageBreaks: boolean,
+      expectedRevision: number,
+    ) =>
+      previewFullPokedexInsert(env.DB, ownerId, versionId, at, regionPageBreaks, expectedRevision),
     artManifest: (cursor: string | null, limit: number) => listArtManifest(env.DB, cursor, limit),
     art: (cardId: string, variant: 'high' | 'low', request: Request) =>
       getArtResponse(env.DB, env.ART, cardId, variant, request),

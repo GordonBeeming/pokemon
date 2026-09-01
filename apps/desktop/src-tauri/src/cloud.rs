@@ -1,4 +1,4 @@
-use crate::error::{DesktopError, Result};
+use crate::error::{CloudErrorDetails, DesktopError, Result};
 use futures_util::StreamExt;
 use reqwest::{redirect, Method, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -308,6 +308,25 @@ pub struct BinderSlot {
     pub row: u32,
     pub column: u32,
     pub card_id: Option<String>,
+    #[serde(default)]
+    pub entry_kind: Option<BinderEntryKind>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub pokemon_number: Option<u32>,
+    #[serde(default)]
+    pub assigned_card_id: Option<String>,
+    #[serde(default)]
+    pub starts_new_page: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BinderEntryKind {
+    Empty,
+    Reserved,
+    ExactCard,
+    Pokemon,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -369,6 +388,17 @@ pub struct BinderPage {
     pub id: String,
     pub position: u32,
     pub slots: Vec<BinderSlot>,
+    #[serde(default)]
+    pub kind: Option<BinderPageKind>,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BinderPageKind {
+    Slots,
+    Reserved,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -381,6 +411,8 @@ pub struct BinderVersionSummary {
     pub layout: BinderLayout,
     pub revision: u64,
     pub page_count: u32,
+    #[serde(default)]
+    pub capacity: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -397,7 +429,31 @@ pub struct BinderShortage {
     pub card_id: String,
     pub required: u32,
     pub owned: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available: Option<u32>,
     pub missing: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BinderPokemonShortage {
+    pub pokemon_number: u32,
+    pub required: u32,
+    pub owned: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assigned: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available: Option<u32>,
+    pub missing: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BinderReadyToPlace {
+    pub exact_targets: u32,
+    pub pokemon_targets: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -421,6 +477,16 @@ pub struct BinderListResult {
 pub struct BinderMutationResult {
     pub version: BinderVersionSummary,
     pub pages: Vec<BinderPage>,
+    #[serde(default)]
+    pub anchor: Option<BinderAnchor>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BinderAnchor {
+    pub page: u32,
+    pub row: u32,
+    pub column: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -436,6 +502,8 @@ pub struct BinderGetResult {
     pub pages: Vec<BinderPage>,
     pub next_page: Option<u32>,
     pub shortages: Vec<BinderShortage>,
+    pub pokemon_shortages: Vec<BinderPokemonShortage>,
+    pub ready_to_place: BinderReadyToPlace,
     pub next_offset: Option<u32>,
 }
 
@@ -443,8 +511,31 @@ pub struct BinderGetResult {
 #[serde(rename_all = "camelCase")]
 pub struct BinderSuggestionResult {
     pub shortages: Vec<BinderShortage>,
+    pub pokemon_shortages: Vec<BinderPokemonShortage>,
+    pub ready_to_place: BinderReadyToPlace,
     pub next_offset: Option<u32>,
     pub empty_slots: Vec<BinderSuggestedSlot>,
+    #[serde(default)]
+    pub assignment_candidates: Vec<BinderAssignmentCandidate>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BinderAssignmentCandidate {
+    pub card_id: String,
+    pub name: String,
+    pub set_name: String,
+    pub number: String,
+    pub language: LanguageCode,
+    pub owned: u32,
+    pub assigned: u32,
+    pub available: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BinderAssignmentCandidatesResult {
+    pub ok: bool,
+    pub candidates: Vec<BinderAssignmentCandidate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -507,6 +598,10 @@ struct BinderResponse {
 #[serde(rename_all = "camelCase")]
 struct BinderShortagesResponse {
     shortages: Vec<BinderShortage>,
+    #[serde(default)]
+    pokemon_shortages: Vec<BinderPokemonShortage>,
+    #[serde(default)]
+    ready_to_place: BinderReadyToPlace,
     next_offset: Option<u32>,
 }
 
@@ -514,13 +609,34 @@ struct BinderShortagesResponse {
 #[serde(rename_all = "camelCase")]
 struct BinderSuggestionResponse {
     shortages: Vec<BinderShortage>,
+    #[serde(default)]
+    pokemon_shortages: Vec<BinderPokemonShortage>,
+    #[serde(default)]
+    ready_to_place: BinderReadyToPlace,
     next_offset: Option<u32>,
     empty_slots: Vec<BinderSuggestedSlot>,
+    #[serde(default)]
+    assignment_candidates: Vec<BinderAssignmentCandidate>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ApiFailure {
     error: String,
+    #[serde(default)]
+    request_id: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_cloud_error_details")]
+    details: Option<CloudErrorDetails>,
+}
+
+fn deserialize_cloud_error_details<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<CloudErrorDetails>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Value>::deserialize(deserializer)?
+        .and_then(|value| serde_json::from_value(value).ok()))
 }
 
 impl CloudClient {
@@ -664,6 +780,8 @@ impl CloudClient {
             pages: binder.binder.pages,
             next_page: binder.binder.next_page,
             shortages: shortages.shortages,
+            pokemon_shortages: shortages.pokemon_shortages,
+            ready_to_place: shortages.ready_to_place,
             next_offset: shortages.next_offset,
         })
     }
@@ -692,9 +810,220 @@ impl CloudClient {
             .await?;
         Ok(BinderSuggestionResult {
             shortages: response.shortages,
+            pokemon_shortages: response.pokemon_shortages,
+            ready_to_place: response.ready_to_place,
             next_offset: response.next_offset,
             empty_slots: response.empty_slots,
+            assignment_candidates: response.assignment_candidates,
         })
+    }
+
+    pub async fn binder_assignment_candidates(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        location: Value,
+    ) -> Result<BinderAssignmentCandidatesResult> {
+        let page = location
+            .get("page")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                DesktopError::InvalidCloudResponse("assignment location requires page".to_string())
+            })?;
+        let row = location.get("row").and_then(Value::as_u64).ok_or_else(|| {
+            DesktopError::InvalidCloudResponse("assignment location requires row".to_string())
+        })?;
+        let column = location
+            .get("column")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                DesktopError::InvalidCloudResponse(
+                    "assignment location requires column".to_string(),
+                )
+            })?;
+        self.authorized_json(
+            Method::GET,
+            base_url,
+            &format!(
+                "/api/desktop/binders/versions/{}/assignment-candidates",
+                percent_encoding::utf8_percent_encode(
+                    version_id,
+                    percent_encoding::NON_ALPHANUMERIC
+                )
+            ),
+            token,
+            None,
+            &[
+                ("page", page.to_string()),
+                ("row", row.to_string()),
+                ("column", column.to_string()),
+            ],
+        )
+        .await
+    }
+
+    pub async fn insert_binder_entries(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::POST,
+            base_url,
+            token,
+            version_id,
+            "/entries/insert",
+            body,
+        )
+        .await
+    }
+
+    pub async fn remove_binder_entry(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::POST,
+            base_url,
+            token,
+            version_id,
+            "/entries/remove",
+            body,
+        )
+        .await
+    }
+
+    pub async fn move_binder_entry(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::POST,
+            base_url,
+            token,
+            version_id,
+            "/entries/move",
+            body,
+        )
+        .await
+    }
+
+    pub async fn assign_binder_entry(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::PUT,
+            base_url,
+            token,
+            version_id,
+            "/assignment",
+            body,
+        )
+        .await
+    }
+
+    pub async fn set_binder_page_break(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::PUT,
+            base_url,
+            token,
+            version_id,
+            "/page-break",
+            body,
+        )
+        .await
+    }
+
+    pub async fn reserve_binder_page(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::PUT,
+            base_url,
+            token,
+            version_id,
+            "/reserved-page",
+            body,
+        )
+        .await
+    }
+
+    pub async fn resize_binder_capacity(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(Method::PUT, base_url, token, version_id, "/capacity", body)
+            .await
+    }
+
+    pub async fn insert_full_pokedex(
+        &self,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.binder_mutation(
+            Method::POST,
+            base_url,
+            token,
+            version_id,
+            "/full-pokedex",
+            body,
+        )
+        .await
+    }
+
+    async fn binder_mutation(
+        &self,
+        method: Method,
+        base_url: &str,
+        token: &str,
+        version_id: &str,
+        suffix: &str,
+        body: Value,
+    ) -> Result<BinderMutationEnvelope> {
+        self.authorized_json(
+            method,
+            base_url,
+            &format!(
+                "/api/desktop/binders/versions/{}{suffix}",
+                percent_encoding::utf8_percent_encode(
+                    version_id,
+                    percent_encoding::NON_ALPHANUMERIC
+                )
+            ),
+            token,
+            Some(body),
+            &[],
+        )
+        .await
     }
 
     pub async fn set_collection(
@@ -802,12 +1131,28 @@ impl CloudClient {
         name: &str,
         layout: Value,
     ) -> Result<BinderMutationEnvelope> {
+        self.create_binder_with_capacity(base_url, token, name, layout, None)
+            .await
+    }
+
+    pub async fn create_binder_with_capacity(
+        &self,
+        base_url: &str,
+        token: &str,
+        name: &str,
+        layout: Value,
+        capacity: Option<u32>,
+    ) -> Result<BinderMutationEnvelope> {
+        let mut body = json!({ "name": name, "layout": layout });
+        if let Some(capacity) = capacity {
+            body["capacity"] = json!(capacity);
+        }
         self.authorized_json(
             Method::POST,
             base_url,
             "/api/desktop/binders",
             token,
-            Some(json!({ "name": name, "layout": layout })),
+            Some(body),
             &[],
         )
         .await
@@ -1336,12 +1681,26 @@ fn retry_delay_from_headers(
 
 async fn read_cloud_error(response: reqwest::Response) -> DesktopError {
     let status = response.status().as_u16();
-    let code = response
-        .json::<ApiFailure>()
-        .await
-        .map(|failure| failure.error)
-        .unwrap_or_else(|_| "cloud_request_failed".to_string());
-    DesktopError::Cloud { status, code }
+    let header_request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .map(str::to_string);
+    match response.json::<ApiFailure>().await {
+        Ok(failure) => DesktopError::Cloud {
+            status,
+            code: failure.error,
+            request_id: failure.request_id.or(header_request_id),
+            details: failure.details,
+        },
+        Err(_) => DesktopError::Cloud {
+            status,
+            code: "cloud_request_failed".to_string(),
+            request_id: header_request_id,
+            details: None,
+        },
+    }
 }
 
 #[cfg(test)]
@@ -1357,6 +1716,66 @@ mod tests {
     };
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
+
+    #[test]
+    fn api_failures_keep_request_ids_and_structured_details() {
+        let failure: ApiFailure = serde_json::from_value(json!({
+            "ok": false,
+            "error": "binder_capacity_exceeded",
+            "requestId": "request-409",
+            "details": {
+                "currentCapacity": 9,
+                "requiredCapacity": 18,
+                "additionalPockets": 9,
+                "pageIncrement": 9
+            }
+        }))
+        .expect("structured API failure");
+        assert_eq!(failure.request_id.as_deref(), Some("request-409"));
+        assert!(matches!(
+            failure.details,
+            Some(CloudErrorDetails::BinderCapacity(details)) if details.required_capacity == 18
+        ));
+        let unknown: ApiFailure = serde_json::from_value(json!({
+            "ok": false,
+            "error": "unknown_error",
+            "details": { "future": true }
+        }))
+        .expect("unknown details must not discard the API failure");
+        assert_eq!(unknown.error, "unknown_error");
+        assert!(unknown.details.is_none());
+    }
+
+    #[tokio::test]
+    async fn cloud_failures_fall_back_to_the_response_request_id_header() {
+        async fn invalid_body() -> Response {
+            let mut response = (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "ok": false, "error": "invalid_body" })),
+            )
+                .into_response();
+            response.headers_mut().insert(
+                "x-request-id",
+                "request-from-header".parse().expect("request ID header"),
+            );
+            response
+        }
+
+        let base = spawn(Router::new().route("/failure", get(invalid_body))).await;
+        let response = reqwest::get(format!("{base}/failure"))
+            .await
+            .expect("failure response");
+        let error = read_cloud_error(response).await;
+        assert!(matches!(
+            error,
+            DesktopError::Cloud {
+                status: 400,
+                ref code,
+                ref request_id,
+                ..
+            } if code == "invalid_body" && request_id.as_deref() == Some("request-from-header")
+        ));
+    }
 
     #[derive(Clone)]
     struct Reply(Arc<Mutex<(StatusCode, Value)>>);
@@ -1419,7 +1838,7 @@ mod tests {
             .await
             .expect_err("expired code");
         assert!(
-            matches!(error, DesktopError::Cloud { status: 400, code } if code == "pair_code_invalid")
+            matches!(error, DesktopError::Cloud { status: 400, code, .. } if code == "pair_code_invalid")
         );
     }
 
@@ -1436,7 +1855,7 @@ mod tests {
             .await
             .expect_err("replayed code");
         assert!(
-            matches!(error, DesktopError::Cloud { status: 409, code } if code == "pair_code_already_consumed")
+            matches!(error, DesktopError::Cloud { status: 409, code, .. } if code == "pair_code_already_consumed")
         );
     }
 
@@ -1506,7 +1925,15 @@ mod tests {
         async fn shortages() -> Json<Value> {
             Json(json!({
                 "ok": true,
-                "shortages": [{ "cardId": "card-1", "required": 2, "owned": 1, "missing": 1 }],
+                "shortages": [{
+                    "cardId": "card-1", "required": 2, "owned": 1,
+                    "assigned": 1, "available": 0, "missing": 2
+                }],
+                "pokemonShortages": [{
+                    "pokemonNumber": 25, "required": 2, "owned": 1,
+                    "assigned": 1, "available": 0, "missing": 2
+                }],
+                "readyToPlace": { "exactTargets": 3, "pokemonTargets": 4 },
                 "nextOffset": null,
                 "emptySlots": [{ "pageId": "page-1", "page": 4, "row": 0, "column": 0, "cardId": null }]
             }))
@@ -1533,7 +1960,14 @@ mod tests {
             .binder_suggestions(&base, "token", "version-1")
             .await
             .expect("binder suggestions");
-        assert_eq!(suggestions.shortages[0].missing, 1);
+        assert_eq!(suggestions.shortages[0].assigned, Some(1));
+        assert_eq!(suggestions.shortages[0].available, Some(0));
+        assert_eq!(suggestions.shortages[0].missing, 2);
+        assert_eq!(suggestions.pokemon_shortages[0].pokemon_number, 25);
+        assert_eq!(suggestions.pokemon_shortages[0].assigned, Some(1));
+        assert_eq!(suggestions.pokemon_shortages[0].available, Some(0));
+        assert_eq!(suggestions.ready_to_place.exact_targets, 3);
+        assert_eq!(suggestions.ready_to_place.pokemon_targets, 4);
         assert!(suggestions.next_offset.is_none());
         assert_eq!(suggestions.empty_slots.len(), 1);
         assert_eq!(suggestions.empty_slots[0].page, 4);
@@ -1914,7 +2348,7 @@ mod tests {
             .expect_err("invalid token");
 
         assert!(
-            matches!(error, DesktopError::Cloud { status: 409, ref code } if code == "art_upload_token_invalid")
+            matches!(error, DesktopError::Cloud { status: 409, ref code, .. } if code == "art_upload_token_invalid")
         );
         assert_eq!(*calls.0.lock().expect("calls lock"), 1);
     }

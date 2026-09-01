@@ -1,9 +1,10 @@
 use super::*;
 use crate::inbox::CaptureSource;
+use axum::body::Bytes;
 use axum::extract::{Path as AxumPath, State};
-use axum::http::Method;
+use axum::http::{Method, Uri};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, patch, post, put};
+use axum::routing::{any, get, patch, post, put};
 use axum::{Json, Router};
 use std::io::Write;
 use std::sync::Mutex;
@@ -163,7 +164,19 @@ async fn mock_binder() -> Json<Value> {
 }
 
 async fn mock_shortages() -> Json<Value> {
-    Json(json!({ "ok": true, "shortages": [], "nextOffset": null }))
+    Json(json!({
+        "ok": true,
+        "shortages": [{
+            "cardId": "card-1", "required": 2, "owned": 1,
+            "assigned": 1, "available": 0, "missing": 2
+        }],
+        "pokemonShortages": [{
+            "pokemonNumber": 25, "required": 2, "owned": 1,
+            "assigned": 1, "available": 0, "missing": 2
+        }],
+        "readyToPlace": { "exactTargets": 3, "pokemonTargets": 4 },
+        "nextOffset": null
+    }))
 }
 
 async fn mock_binder_mutation(Json(body): Json<Value>) -> Json<Value> {
@@ -181,8 +194,73 @@ async fn mock_binder_mutation(Json(body): Json<Value>) -> Json<Value> {
     }))
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct BinderRequest {
+    method: Method,
+    path: String,
+    query: Option<String>,
+    body: Option<Value>,
+}
+
+#[derive(Clone, Default)]
+struct BinderRequestLog(Arc<Mutex<Vec<BinderRequest>>>);
+
+async fn capture_binder_request(
+    State(log): State<BinderRequestLog>,
+    method: Method,
+    uri: Uri,
+    body: Bytes,
+) -> Json<Value> {
+    let body =
+        (!body.is_empty()).then(|| serde_json::from_slice(&body).expect("binder request JSON"));
+    log.0
+        .lock()
+        .expect("binder request log")
+        .push(BinderRequest {
+            method,
+            path: uri.path().to_string(),
+            query: uri.query().map(str::to_string),
+            body,
+        });
+    if uri.path().ends_with("/assignment-candidates") {
+        return Json(json!({ "ok": true, "candidates": [] }));
+    }
+    Json(json!({
+        "ok": true,
+        "binder": {
+            "version": {
+                "id": "version-1", "binderId": "binder-1", "versionNumber": 1,
+                "status": "draft", "layout": { "kind": "3x3", "rows": 3, "columns": 3 },
+                "revision": 2, "pageCount": 1
+            },
+            "pages": []
+        }
+    }))
+}
+
+async fn captured_binder_cloud() -> (String, BinderRequestLog) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("binder cloud listener");
+    let address = listener.local_addr().expect("binder cloud address");
+    let log = BinderRequestLog::default();
+    let router = Router::new()
+        .fallback(any(capture_binder_request))
+        .with_state(log.clone());
+    tokio::spawn(async move {
+        axum::serve(listener, router)
+            .await
+            .expect("captured binder cloud");
+    });
+    (format!("http://{address}"), log)
+}
+
 async fn mock_suggestions() -> Json<Value> {
     Json(json!({ "ok": true, "shortages": [], "nextOffset": null, "emptySlots": [] }))
+}
+
+async fn mock_assignment_candidates() -> Json<Value> {
+    Json(json!({ "ok": true, "candidates": [] }))
 }
 
 async fn mock_cloud() -> String {
@@ -252,11 +330,47 @@ async fn mock_backend_cloud() -> String {
             get(mock_suggestions),
         )
         .route(
+            "/api/desktop/binders/versions/{version_id}/assignment-candidates",
+            get(mock_assignment_candidates),
+        )
+        .route(
             "/api/desktop/binders/versions/{version_id}/slot",
             put(mock_binder_mutation),
         )
         .route(
             "/api/desktop/binders/versions/{version_id}/swap",
+            post(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/entries/insert",
+            post(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/entries/remove",
+            post(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/entries/move",
+            post(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/assignment",
+            put(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/page-break",
+            put(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/reserved-page",
+            put(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/capacity",
+            put(mock_binder_mutation),
+        )
+        .route(
+            "/api/desktop/binders/versions/{version_id}/full-pokedex",
             post(mock_binder_mutation),
         )
         .route(
@@ -595,6 +709,8 @@ async fn terminal_confirmation_failure_classification_is_exact() {
                 DesktopError::Cloud {
                     status,
                     code: "terminal".to_string(),
+                    request_id: None,
+                    details: None,
                 },
                 true,
             )
@@ -606,6 +722,8 @@ async fn terminal_confirmation_failure_classification_is_exact() {
             DesktopError::Cloud {
                 status,
                 code: "ambiguous".to_string(),
+                request_id: None,
+                details: None,
             },
             false,
         )
@@ -1120,6 +1238,35 @@ fn real_desktop_backend_lists_pending_scans() {
 }
 
 #[tokio::test]
+async fn binder_get_mcp_keeps_exact_and_pokemon_planning_details() {
+    let root = tempdir().expect("temp dir");
+    let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
+    let mut config = AppConfig::defaults(&paths);
+    config.cloud_base_url = mock_backend_cloud().await;
+    let services = DesktopServices::new(
+        paths,
+        config,
+        Arc::new(MemoryTokenStore(Mutex::new(Some("token".to_string())))),
+    )
+    .expect("services");
+
+    let result = services
+        .call_tool(ToolName::BinderGet, json!({ "versionId": "version-1" }))
+        .await
+        .expect("binder get tool");
+    let ToolPayload::Structured(value) = result else {
+        panic!("expected structured binder result");
+    };
+    assert_eq!(value["shortages"][0]["assigned"], 1);
+    assert_eq!(value["shortages"][0]["available"], 0);
+    assert_eq!(value["pokemonShortages"][0]["pokemonNumber"], 25);
+    assert_eq!(value["pokemonShortages"][0]["assigned"], 1);
+    assert_eq!(value["pokemonShortages"][0]["available"], 0);
+    assert_eq!(value["readyToPlace"]["exactTargets"], 3);
+    assert_eq!(value["readyToPlace"]["pokemonTargets"], 4);
+}
+
+#[tokio::test]
 async fn every_registered_tool_dispatches_through_the_real_desktop_backend() {
     let root = tempdir().expect("temp dir");
     let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
@@ -1158,6 +1305,10 @@ async fn every_registered_tool_dispatches_through_the_real_desktop_backend() {
         (ToolName::BindersList, json!({})),
         (ToolName::BinderGet, json!({ "versionId": "version-1" })),
         (ToolName::BinderSuggest, json!({ "versionId": "version-1" })),
+        (
+            ToolName::BinderAssignmentCandidates,
+            json!({ "versionId": "version-1", "at": { "page": 0, "row": 0, "column": 0 } }),
+        ),
         (ToolName::PendingScansList, json!({})),
         (
             ToolName::PendingScanImage,
@@ -1192,6 +1343,38 @@ async fn every_registered_tool_dispatches_through_the_real_desktop_backend() {
                 "target": { "page": 0, "row": 0, "column": 1 }
             }),
         ),
+        (
+            ToolName::BinderInsert,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "at": { "page": 0, "row": 0, "column": 0 }, "entries": [{ "kind": "empty" }] }),
+        ),
+        (
+            ToolName::BinderRemove,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "at": { "page": 0, "row": 0, "column": 0 } }),
+        ),
+        (
+            ToolName::BinderMove,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "from": { "page": 0, "row": 0, "column": 0 }, "offset": 1 }),
+        ),
+        (
+            ToolName::BinderAssign,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "at": { "page": 0, "row": 0, "column": 0 }, "cardId": null }),
+        ),
+        (
+            ToolName::BinderPageBreak,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "at": { "page": 0, "row": 0, "column": 0 }, "startsNewPage": true }),
+        ),
+        (
+            ToolName::BinderReservePage,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "page": 0, "reserved": true }),
+        ),
+        (
+            ToolName::BinderResize,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "capacity": 18 }),
+        ),
+        (
+            ToolName::BinderFullPokedex,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "at": { "page": 0, "row": 0, "column": 0 } }),
+        ),
     ];
 
     assert_eq!(cases.len(), ToolName::ALL.len());
@@ -1207,6 +1390,199 @@ async fn every_registered_tool_dispatches_through_the_real_desktop_backend() {
         .await
         .expect_err("missing query must fail");
     assert!(validation.to_string().contains("query must contain"));
+
+    let invalid_breaks = services
+        .call_tool(
+            ToolName::BinderFullPokedex,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "page": 0, "row": 0, "column": 0, "regionPageBreaks": "yes" }),
+        )
+        .await
+        .expect_err("non-boolean region page breaks must fail");
+    assert!(invalid_breaks.to_string().contains("regionPageBreaks"));
+    let invalid_entries = services
+        .call_tool(
+            ToolName::BinderInsert,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "at": { "page": 0, "row": 0, "column": 0 }, "entries": [{ "kind": "empty", "cardId": "unexpected" }] }),
+        )
+        .await
+        .expect_err("empty entries must reject extra fields");
+    assert!(invalid_entries.to_string().contains("unknown fields"));
+    let invalid_reserved_label = services
+        .call_tool(
+            ToolName::BinderInsert,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "at": { "page": 0, "row": 0, "column": 0 }, "entries": [{ "kind": "reserved", "label": "   " }] }),
+        )
+        .await
+        .expect_err("blank reserved labels must fail");
+    assert!(invalid_reserved_label
+        .to_string()
+        .contains("reserved label"));
+    let invalid_exact_card = services
+        .call_tool(
+            ToolName::BinderInsert,
+            json!({ "versionId": "version-1", "expectedRevision": 1, "at": { "page": 0, "row": 0, "column": 0 }, "entries": [{ "kind": "exact-card", "cardId": "   " }] }),
+        )
+        .await
+        .expect_err("blank exact-card identifiers must fail");
+    assert!(invalid_exact_card.to_string().contains("cardId"));
+    let invalid_standard_layout = services
+        .call_tool(
+            ToolName::BinderCreateDraft,
+            json!({ "name": "Invalid binder", "layout": { "kind": "3x3", "rows": 2, "columns": 2 } }),
+        )
+        .await
+        .expect_err("standard layout dimensions must match their kind");
+    assert!(invalid_standard_layout
+        .to_string()
+        .contains("kind and dimensions"));
+}
+
+#[tokio::test]
+async fn binder_mcp_tools_forward_the_advertised_contracts() {
+    let root = tempdir().expect("temp dir");
+    let paths = AppPaths::new(root.path().join("data"), root.path().join("config"));
+    let (cloud_base_url, log) = captured_binder_cloud().await;
+    let mut config = AppConfig::defaults(&paths);
+    config.cloud_base_url = cloud_base_url;
+    let services = DesktopServices::new(
+        paths,
+        config,
+        Arc::new(MemoryTokenStore(Mutex::new(Some("token".to_string())))),
+    )
+    .expect("services");
+
+    let location = json!({ "page": 2, "row": 1, "column": 0 });
+    let calls = [
+        (
+            ToolName::BinderCreateDraft,
+            json!({ "name": "Trade binder", "layout": { "kind": "3x3", "rows": 3, "columns": 3 }, "capacity": 18 }),
+        ),
+        (
+            ToolName::BinderAssignmentCandidates,
+            json!({ "versionId": "version-1", "at": location }),
+        ),
+        (
+            ToolName::BinderInsert,
+            json!({ "versionId": "version-1", "expectedRevision": 3, "at": location, "entries": [{ "kind": "reserved" }] }),
+        ),
+        (
+            ToolName::BinderRemove,
+            json!({ "versionId": "version-1", "expectedRevision": 3, "at": location }),
+        ),
+        (
+            ToolName::BinderMove,
+            json!({ "versionId": "version-1", "expectedRevision": 3, "from": location, "offset": 2 }),
+        ),
+        (
+            ToolName::BinderAssign,
+            json!({ "versionId": "version-1", "expectedRevision": 3, "at": location, "cardId": null }),
+        ),
+        (
+            ToolName::BinderPageBreak,
+            json!({ "versionId": "version-1", "expectedRevision": 3, "at": location, "startsNewPage": true }),
+        ),
+        (
+            ToolName::BinderReservePage,
+            json!({ "versionId": "version-1", "expectedRevision": 3, "page": 2, "reserved": true }),
+        ),
+        (
+            ToolName::BinderResize,
+            json!({ "versionId": "version-1", "expectedRevision": 3, "capacity": 27 }),
+        ),
+        (
+            ToolName::BinderFullPokedex,
+            json!({ "versionId": "version-1", "expectedRevision": 3, "at": location, "regionPageBreaks": false }),
+        ),
+    ];
+    for (tool, arguments) in calls {
+        services
+            .call_tool(tool, arguments)
+            .await
+            .expect("tool call");
+    }
+
+    let requests = log.0.lock().expect("binder request log").clone();
+    let expected = vec![
+        (
+            Method::POST,
+            "/api/desktop/binders",
+            None,
+            Some(
+                json!({ "name": "Trade binder", "layout": { "kind": "3x3", "rows": 3, "columns": 3 }, "capacity": 18 }),
+            ),
+        ),
+        (
+            Method::GET,
+            "/api/desktop/binders/versions/version%2D1/assignment-candidates",
+            Some("page=2&row=1&column=0".to_string()),
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/desktop/binders/versions/version%2D1/entries/insert",
+            None,
+            Some(
+                json!({ "expectedRevision": 3, "at": { "page": 2, "row": 1, "column": 0 }, "entries": [{ "kind": "reserved" }] }),
+            ),
+        ),
+        (
+            Method::POST,
+            "/api/desktop/binders/versions/version%2D1/entries/remove",
+            None,
+            Some(json!({ "expectedRevision": 3, "at": { "page": 2, "row": 1, "column": 0 } })),
+        ),
+        (
+            Method::POST,
+            "/api/desktop/binders/versions/version%2D1/entries/move",
+            None,
+            Some(
+                json!({ "expectedRevision": 3, "from": { "page": 2, "row": 1, "column": 0 }, "offset": 2 }),
+            ),
+        ),
+        (
+            Method::PUT,
+            "/api/desktop/binders/versions/version%2D1/assignment",
+            None,
+            Some(
+                json!({ "expectedRevision": 3, "at": { "page": 2, "row": 1, "column": 0 }, "cardId": null }),
+            ),
+        ),
+        (
+            Method::PUT,
+            "/api/desktop/binders/versions/version%2D1/page-break",
+            None,
+            Some(
+                json!({ "expectedRevision": 3, "at": { "page": 2, "row": 1, "column": 0 }, "startsNewPage": true }),
+            ),
+        ),
+        (
+            Method::PUT,
+            "/api/desktop/binders/versions/version%2D1/reserved-page",
+            None,
+            Some(json!({ "expectedRevision": 3, "page": 2, "reserved": true, "label": null })),
+        ),
+        (
+            Method::PUT,
+            "/api/desktop/binders/versions/version%2D1/capacity",
+            None,
+            Some(json!({ "expectedRevision": 3, "capacity": 27 })),
+        ),
+        (
+            Method::POST,
+            "/api/desktop/binders/versions/version%2D1/full-pokedex",
+            None,
+            Some(
+                json!({ "expectedRevision": 3, "at": { "page": 2, "row": 1, "column": 0 }, "regionPageBreaks": false }),
+            ),
+        ),
+    ];
+    assert_eq!(requests.len(), expected.len());
+    for (request, (method, path, query, body)) in requests.into_iter().zip(expected) {
+        assert_eq!(request.method, method);
+        assert_eq!(request.path, path);
+        assert_eq!(request.query, query);
+        assert_eq!(request.body, body);
+    }
 }
 
 #[test]
@@ -1266,6 +1642,8 @@ async fn revoked_cloud_token_is_removed_from_the_store() {
             Err(DesktopError::Cloud {
                 status: 401,
                 code: "desktop_token_invalid".to_string(),
+                request_id: None,
+                details: None,
             }),
         )
         .expect_err("revoked token error");

@@ -90,6 +90,7 @@ export function applyAllMigrations(database: DatabaseSync): void {
     '008_physical_printing_identity.sql',
     '009_species_discovery_cache.sql',
     '010_price_source_availability.sql',
+    '011_binder_capacity_and_placement.sql',
   ])
     database.exec(readFileSync(new URL(name, directory), 'utf8'));
 }
