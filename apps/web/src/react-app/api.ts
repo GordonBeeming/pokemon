@@ -8,10 +8,13 @@ import {
   binderFullPokedexRequestSchema,
   binderPokemonShortageSchema,
   binderMutationResultSchema,
+  binderPageSchema,
   binderPlannerSummarySchema,
   binderReadyToPlaceSchema,
   binderShortageSchema,
+  binderSlotSchema,
   binderVersionPagesSchema,
+  binderVersionSummarySchema,
   binderViewSchema,
   catalogueCardViewSchema,
   catalogueDetailViewSchema,
@@ -67,9 +70,33 @@ const searchSchema = successSchema.extend({
 });
 const detailSchema = successSchema.extend({ card: catalogueDetailViewSchema });
 const collectionSchema = successSchema.merge(collectionMutationResultSchema);
-const bindersSchema = successSchema.extend({ binders: z.array(binderViewSchema) });
-const binderPagesEnvelopeSchema = successSchema.extend({ binder: binderVersionPagesSchema });
-const binderMutationEnvelopeSchema = successSchema.extend({ binder: binderMutationResultSchema });
+// Browser tabs can remain open across a Worker deployment. Ignore additive
+// response fields so a newer server does not break an older loaded client.
+const binderViewResponseSchema = binderViewSchema.passthrough();
+const binderSlotResponseSchema = binderSlotSchema.passthrough();
+const binderPageResponseSchema = binderPageSchema
+  .extend({ slots: z.array(binderSlotResponseSchema).max(400) })
+  .passthrough();
+const binderVersionSummaryResponseSchema = binderVersionSummarySchema.passthrough();
+const binderVersionPagesResponseSchema = binderVersionPagesSchema
+  .extend({
+    version: binderVersionSummaryResponseSchema,
+    pages: z.array(binderPageResponseSchema).max(4),
+  })
+  .passthrough();
+const binderMutationResultResponseSchema = binderMutationResultSchema
+  .extend({
+    version: binderVersionSummaryResponseSchema,
+    pages: z.array(binderPageResponseSchema).max(2),
+  })
+  .passthrough();
+const bindersSchema = successSchema.extend({ binders: z.array(binderViewResponseSchema) });
+const binderPagesEnvelopeSchema = successSchema.extend({
+  binder: binderVersionPagesResponseSchema,
+});
+const binderMutationEnvelopeSchema = successSchema.extend({
+  binder: binderMutationResultResponseSchema,
+});
 const binderAssignmentCandidatesEnvelopeSchema = successSchema.extend({
   candidates: binderAssignmentCandidatesSchema.shape.candidates,
 });

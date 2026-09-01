@@ -1099,7 +1099,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
             </button>
           ))}
         </section>
-        {showCreate || (!pending && binders.length === 0) ? (
+        {showCreate || binders.length === 0 ? (
           <Create
             pending={pending}
             create={(name, layout, total) => {

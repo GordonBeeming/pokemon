@@ -138,6 +138,45 @@ describe('API client', () => {
     });
   });
 
+  it('accepts additive binder response fields across a rolling deployment', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ok: true,
+          responseGeneration: 2,
+          binder: {
+            responseGeneration: 2,
+            version: { ...version, capacity: 9, responseGeneration: 2 },
+            pages: [
+              {
+                ...page,
+                kind: 'slots',
+                responseGeneration: 2,
+                slots: [
+                  {
+                    ...page.slots[0],
+                    entryKind: 'empty',
+                    responseGeneration: 2,
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+        { status: 201 },
+      ),
+    );
+
+    await expect(
+      api.createBinder('Regional collection', { kind: '3x3', rows: 3, columns: 3 }, 9),
+    ).resolves.toMatchObject({ version: { id: 'version-1', capacity: 9 } });
+    expect(bodyAt(0)).toEqual({
+      name: 'Regional collection',
+      layout: { kind: '3x3', rows: 3, columns: 3 },
+      capacity: 9,
+    });
+  });
+
   it('reads planner summaries and previews a full-Pokedex insert', async () => {
     vi.mocked(fetch)
       .mockResolvedValueOnce(

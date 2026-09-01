@@ -1195,6 +1195,37 @@ describe('async frontend announcements', () => {
     );
   });
 
+  it('preserves the binder name when creation fails', async () => {
+    const onNotice = vi.fn();
+    apiMocks.binders.mockResolvedValue([]);
+    apiMocks.createBinder.mockRejectedValue(new Error('offline'));
+
+    await actAndSettle(() => root.render(<BinderView onNotice={onNotice} />));
+    const name = container.querySelector<HTMLInputElement>('input[required]');
+    if (!name) throw new Error('Binder name input missing.');
+    await actAndSettle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        name,
+        'Kanto master set',
+      );
+      name.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await actAndSettle(() =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find((button) => button.textContent === 'Create binder')
+        ?.click(),
+    );
+
+    expect(apiMocks.createBinder).toHaveBeenCalledOnce();
+    expect(container.querySelector<HTMLInputElement>('input[required]')?.value).toBe(
+      'Kanto master set',
+    );
+    expect(onNotice).toHaveBeenCalledWith({
+      kind: 'error',
+      message: 'The request could not be completed. Try again.',
+    });
+  });
+
   it('grows and shrinks capacity deliberately and prepares recovery after overflow', async () => {
     const target = {
       pageId: 'page-1',
