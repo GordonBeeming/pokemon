@@ -1377,6 +1377,54 @@ describe('async frontend announcements', () => {
     expect(apiMocks.resizeBinder).toHaveBeenCalledWith('version-1', 480, 1);
   });
 
+  it('prepares the exact required capacity after 3x3 overflow', async () => {
+    const slots = Array.from({ length: 9 }, (_value, index) => ({
+      pageId: 'page-1',
+      row: Math.floor(index / 3),
+      column: index % 3,
+      cardId: index === 0 ? 'card-1' : null,
+      entryKind: index === 0 ? ('exact-card' as const) : ('empty' as const),
+      assignedCardId: null,
+    }));
+    const initial = binderFixture(slots, { rows: 3, columns: 3, capacity: 9 });
+    apiMocks.binders.mockResolvedValue([testBinder]);
+    apiMocks.binder.mockResolvedValue(initial.response);
+    apiMocks.resolveCards.mockResolvedValue([]);
+    apiMocks.moveEntry.mockRejectedValue(
+      new ApiError('binder_capacity_exceeded', 'More space required.', 409, 'request-1', null, {
+        currentCapacity: 9,
+        requiredCapacity: 10,
+        additionalPockets: 1,
+        pageIncrement: 9,
+      }),
+    );
+
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await waitFor(() => container.querySelector('.binder-slot') !== null);
+    await actAndSettle(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
+    const offset = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="number"]'),
+    ).find((input) => input.id !== 'binder-capacity-input');
+    if (!offset) throw new Error('Offset input missing.');
+    await actAndSettle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(offset, '2');
+      offset.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await actAndSettle(() =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find((button) => button.textContent === 'Move target')
+        ?.click(),
+    );
+    await waitFor(() => apiMocks.moveEntry.mock.calls.length === 1);
+
+    expect(container.querySelector<HTMLInputElement>('#binder-capacity-input')?.value).toBe('10');
+    expect(container.textContent).toContain('The final page has 1 pocket.');
+  });
+
   it('wires target page breaks and signed moves with current revision and focus recovery', async () => {
     const target = {
       pageId: 'page-1',

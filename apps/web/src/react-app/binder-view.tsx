@@ -803,7 +803,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
       if (error instanceof ApiError && error.code === 'binder_capacity_exceeded') {
         const details = binderCapacityErrorSchema.safeParse(error.details);
         const required = details.success ? details.data.requiredCapacity : capacity + face;
-        setResize(String(required + ((face - (required % face)) % face)));
+        setResize(String(required));
         setStatus('This action needs more capacity. Resize is ready below.');
       }
       onNotice({ kind: 'error', message: userMessage(error) });
