@@ -1968,6 +1968,7 @@ dd {
 }
 .page-menu {
   position: relative;
+  justify-self: start;
 }
 .page-menu-popover {
   display: grid;
@@ -2097,6 +2098,10 @@ dd {
   }
   .binder-page-toolbar {
     grid-template-columns: 1fr auto;
+  }
+  .page-menu-popover {
+    right: auto;
+    left: 0;
   }
   .pocket-prompt {
     grid-column: 1 / -1;

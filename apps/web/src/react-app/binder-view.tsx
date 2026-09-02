@@ -47,6 +47,17 @@ function layoutFor(kind: BinderLayout['kind'], rows: number, columns: number): B
   if (kind === '4x3') return { kind, rows: 3, columns: 4 };
   return { kind: 'top-loader', rows: 2, columns: 2 };
 }
+function capacityDescription(capacity: number, face: number): string {
+  if (!Number.isInteger(capacity)) return 'Enter a whole number of pockets.';
+  if (capacity < 1) return 'Enter at least 1 pocket.';
+  const pages = Math.ceil(capacity / face);
+  const finalPage = capacity % face || face;
+  const pageLabel = pages === 1 ? 'page face' : 'page faces';
+  const pocketLabel = finalPage === 1 ? 'pocket' : 'pockets';
+  const capacityLabel = capacity === 1 ? 'pocket' : 'pockets';
+  const partial = finalPage < face ? ` The final page has ${finalPage} ${pocketLabel}.` : '';
+  return `${capacity.toLocaleString('en-AU')} ${capacityLabel} in this binder across ${pages.toLocaleString('en-AU')} ${pageLabel}.${partial}`;
+}
 function place(location: BinderSlotLocation): string {
   return `page ${location.page + 1}, row ${location.row + 1}, column ${location.column + 1}`;
 }
@@ -90,7 +101,7 @@ function Create({
   const [capacity, setCapacity] = useState(9);
   const layout = layoutFor(kind, rows, columns);
   const face = layout.rows * layout.columns;
-  const valid = capacity >= face && capacity % face === 0;
+  const valid = Number.isInteger(capacity) && capacity >= 1;
   return (
     <section className="surface activity-panel" aria-labelledby="create-binder-heading">
       <h1 id="create-binder-heading">Create your first binder.</h1>
@@ -119,7 +130,6 @@ function Create({
                 aria-pressed={kind === item.kind}
                 onClick={() => {
                   setKind(item.kind);
-                  if (item.kind !== 'custom') setCapacity(item.rows * item.columns);
                 }}
               >
                 <strong>{item.label}</strong>
@@ -152,19 +162,17 @@ function Create({
           </div>
         ) : null}
         <label>
-          Total pockets
+          Binder capacity (pockets)
           <input
             type="number"
-            min={face}
-            step={face}
+            min="1"
+            step="1"
             value={capacity}
             onChange={(event) => setCapacity(Number(event.target.value))}
           />
         </label>
         <p className="form-help">
-          {valid
-            ? `${capacity} pockets across ${capacity / face} page faces of ${layout.rows} × ${layout.columns}.`
-            : `Choose a whole number of ${face}-pocket page faces.`}
+          {capacityDescription(capacity, face)} Each full page is {layout.rows} × {layout.columns}.
         </p>
         <button
           className="quiet-button tone-accent"
@@ -590,18 +598,18 @@ function BinderCapacityControls({
   onInsertFull: () => void;
 }): ReactElement {
   const value = Number(resize || capacity);
-  const invalid = !Number.isInteger(value) || value < face || value % face !== 0;
+  const invalid = !Number.isInteger(value) || value < 1;
   return (
     <>
       <hr />
       <h3>Binder capacity</h3>
       <label htmlFor="binder-capacity-input">
-        Total pockets
+        Binder capacity (pockets)
         <input
           id="binder-capacity-input"
           type="number"
-          min={face}
-          step={face}
+          min="1"
+          step="1"
           value={resize || capacity}
           aria-describedby="binder-capacity-help"
           aria-invalid={resize !== '' && invalid}
@@ -609,9 +617,7 @@ function BinderCapacityControls({
         />
       </label>
       <p id="binder-capacity-help" className="form-help" aria-live="polite">
-        {resize !== '' && invalid
-          ? `Use a whole number of ${face}-pocket page faces.`
-          : `${value.toLocaleString('en-AU')} pockets across ${Math.max(1, value / face).toLocaleString('en-AU')} page faces.`}
+        {capacityDescription(value, face)}
       </p>
       <button
         className="quiet-button"
@@ -799,7 +805,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
       if (error instanceof ApiError && error.code === 'binder_capacity_exceeded') {
         const details = binderCapacityErrorSchema.safeParse(error.details);
         const required = details.success ? details.data.requiredCapacity : capacity + face;
-        setResize(String(required + ((face - (required % face)) % face)));
+        setResize(String(required));
         setStatus('This action needs more capacity. Resize is ready below.');
       }
       onNotice({ kind: 'error', message: userMessage(error) });
@@ -1099,7 +1105,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
             </button>
           ))}
         </section>
-        {showCreate || (!pending && binders.length === 0) ? (
+        {showCreate || binders.length === 0 ? (
           <Create
             pending={pending}
             create={(name, layout, total) => {
@@ -1542,12 +1548,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
           onGrow={() =>
             void mutate(
               () =>
-                api.resizeBinder(
-                  version.id,
-                  fullRequirement!.requiredCapacity +
-                    ((face - (fullRequirement!.requiredCapacity % face)) % face),
-                  version.revision,
-                ),
+                api.resizeBinder(version.id, fullRequirement!.requiredCapacity, version.revision),
               'Binder grew to fit the National Pokédex.',
             )
           }

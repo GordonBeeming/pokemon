@@ -170,6 +170,10 @@ function toLayout(row: VersionRow): BinderLayout {
   });
 }
 
+function pagesForCapacity(capacity: number, pageSize: number): number {
+  return Math.ceil(capacity / pageSize);
+}
+
 function toBinder(row: BinderRow): BinderView {
   return {
     id: row.id,
@@ -282,26 +286,6 @@ async function runVersionBatch(
   }
 }
 
-function createSlotsStatement(
-  db: D1Database,
-  pageId: string,
-  layout: BinderLayout,
-): D1PreparedStatement {
-  return db
-    .prepare(
-      `WITH RECURSIVE
-        rows(value) AS (
-          SELECT 0 UNION ALL SELECT value + 1 FROM rows WHERE value + 1 < ?2
-        ),
-        columns(value) AS (
-          SELECT 0 UNION ALL SELECT value + 1 FROM columns WHERE value + 1 < ?3
-        )
-       INSERT INTO binder_slots (binder_page_id, row_index, column_index, card_id)
-       SELECT ?1, rows.value, columns.value, NULL FROM rows CROSS JOIN columns`,
-    )
-    .bind(pageId, layout.rows, layout.columns);
-}
-
 async function readPages(
   db: D1Database,
   versionId: string,
@@ -401,9 +385,8 @@ export async function createBinder(
   const layout = binderLayoutSchema.parse(inputLayout);
   const pageSize = layout.rows * layout.columns;
   const capacity = requestedCapacity ?? pageSize;
-  if (!Number.isInteger(capacity) || capacity < pageSize || capacity % pageSize !== 0)
-    domainError('binder_capacity_invalid');
-  const pageCount = capacity / pageSize;
+  if (!Number.isInteger(capacity) || capacity < 1) domainError('binder_capacity_invalid');
+  const pageCount = pagesForCapacity(capacity, pageSize);
   if (pageCount > MAX_BINDER_PAGES) domainError('binder_page_limit_reached');
   const now = nowSeconds();
   const binderId = newId('binder');
@@ -443,9 +426,11 @@ export async function createBinder(
          )
          INSERT INTO binder_slots (binder_page_id, row_index, column_index, card_id)
          SELECT json_extract(page.value, '$.id'), rows.value, columns.value, NULL
-         FROM json_each(?1) page CROSS JOIN rows CROSS JOIN columns`,
+         FROM json_each(?1) page CROSS JOIN rows CROSS JOIN columns
+         WHERE CAST(json_extract(page.value, '$.position') AS INTEGER) * (?2 * ?3)
+           + rows.value * ?3 + columns.value < ?4`,
       )
-      .bind(JSON.stringify(pages), layout.rows, layout.columns),
+      .bind(JSON.stringify(pages), layout.rows, layout.columns, capacity),
   ]);
   return mutationResult(db, ownerId, versionId, [0]);
 }
@@ -856,24 +841,13 @@ async function addBinderPageOnce(
   const version = await readVersion(db, ownerId, versionId);
   requireEditable(version);
   expectedRevision(version, requestedRevision);
-  if (version.page_count >= MAX_BINDER_PAGES) domainError('binder_page_limit_reached');
-  const pageId = newId('page');
-  const now = nowSeconds();
-  await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-    db
-      .prepare(
-        `INSERT INTO binder_pages (id, binder_version_id, position)
-         SELECT ?1, ?2, COALESCE(MAX(position) + 1, 0)
-         FROM binder_pages WHERE binder_version_id = ?2`,
-      )
-      .bind(pageId, versionId),
-    createSlotsStatement(db, pageId, toLayout(version)),
-    db
-      .prepare('UPDATE binder_versions SET capacity = capacity + (?1 * ?2) WHERE id = ?3')
-      .bind(version.rows, version.columns, versionId),
-    ...revisionStatements(db, version, now),
-  ]);
-  return mutationResult(db, ownerId, versionId, [version.page_count]);
+  return resizeBinderCapacity(
+    db,
+    ownerId,
+    versionId,
+    version.capacity + version.rows * version.columns,
+    version.revision,
+  );
 }
 
 export async function addBinderPage(
@@ -909,6 +883,12 @@ export async function deleteBinderPage(
   const page = pages.find((item) => item.id === pageId);
   if (!page) domainError('binder_page_not_found');
   if (pages.length <= 1) domainError('binder_last_page');
+  const deletedSlots = await db
+    .prepare('SELECT COUNT(*) AS count FROM binder_slots WHERE binder_page_id = ?1')
+    .bind(pageId)
+    .first<{ count: number }>();
+  const deletedCapacity = deletedSlots?.count ?? 0;
+  if (deletedCapacity < 1) domainError('binder_slot_not_found');
   const remaining = pages.filter((item) => item.id !== pageId);
   const offset = pages.length + 1;
   const now = nowSeconds();
@@ -930,8 +910,8 @@ export async function deleteBinderPage(
       db.prepare('UPDATE binder_pages SET position = ?1 WHERE id = ?2').bind(position, item.id),
     ),
     db
-      .prepare('UPDATE binder_versions SET capacity = capacity - (?1 * ?2) WHERE id = ?3')
-      .bind(version.rows, version.columns, versionId),
+      .prepare('UPDATE binder_versions SET capacity = capacity - ?1 WHERE id = ?2')
+      .bind(deletedCapacity, versionId),
     ...revisionStatements(db, version, now),
   ]);
   return mutationResult(db, ownerId, versionId, [Math.min(page.position, remaining.length - 1)]);
@@ -953,6 +933,18 @@ export async function reorderBinderPages(
     new Set(pageIds).size !== pageIds.length ||
     pages.some((page) => !pageIds.includes(page.id))
   )
+    domainError('binder_page_order_invalid');
+  const pageSize = version.rows * version.columns;
+  const counts = await db
+    .prepare(
+      `SELECT page.id, COUNT(slot.binder_page_id) AS slots
+       FROM binder_pages page LEFT JOIN binder_slots slot ON slot.binder_page_id = page.id
+       WHERE page.binder_version_id = ?1 GROUP BY page.id`,
+    )
+    .bind(versionId)
+    .all<{ id: string; slots: number }>();
+  const partial = counts.results.filter((item) => item.slots < pageSize);
+  if (partial.length > 1 || (partial[0] && pageIds.at(-1) !== partial[0].id))
     domainError('binder_page_order_invalid');
   const offset = pages.length + 1;
   const now = nowSeconds();
@@ -1079,6 +1071,8 @@ export async function arrangeBinderVersion(
 }
 
 function validateLocation(version: VersionRow, location: BinderSlotLocation): void {
+  if (!Number.isInteger(location.page) || location.page < 0 || location.page >= version.page_count)
+    domainError('binder_page_not_found');
   if (
     location.row < 0 ||
     location.column < 0 ||
@@ -1086,6 +1080,11 @@ function validateLocation(version: VersionRow, location: BinderSlotLocation): vo
     location.column >= version.columns
   )
     domainError('binder_slot_out_of_bounds');
+  const index =
+    location.page * version.rows * version.columns +
+    location.row * version.columns +
+    location.column;
+  if (index >= version.capacity) domainError('binder_slot_out_of_bounds');
 }
 
 async function pageAt(db: D1Database, versionId: string, position: number): Promise<PageRow> {
@@ -1526,7 +1525,6 @@ async function materializedSlots(db: D1Database, versionId: string): Promise<Mat
 
 function locationIndex(version: VersionRow, location: BinderSlotLocation): number {
   validateLocation(version, location);
-  if (location.page >= version.page_count) domainError('binder_page_not_found');
   return (
     location.page * version.rows * version.columns +
     location.row * version.columns +
@@ -1800,12 +1798,12 @@ export async function previewFullPokedexInsert(
   });
   let requiredUsable = flowed.length;
   while (requiredUsable > 0 && flowed[requiredUsable - 1] === null) requiredUsable -= 1;
-  const additionalPages = Math.ceil(Math.max(0, requiredUsable - usable.length) / pageSize);
-  const requiredCapacity = version.capacity + additionalPages * pageSize;
+  const additionalPockets = Math.max(0, requiredUsable - usable.length);
+  const requiredCapacity = version.capacity + additionalPockets;
   return {
     currentCapacity: version.capacity,
     requiredCapacity,
-    additionalPockets: requiredCapacity - version.capacity,
+    additionalPockets,
     pageIncrement: pageSize,
     generatedPadding: Math.max(0, requiredUsable - startIndex - inserted.length - existing.length),
   };
@@ -2003,11 +2001,17 @@ export async function resizeBinderCapacity(
   requireEditable(version);
   expectedRevision(version, requestedRevision);
   const pageSize = version.rows * version.columns;
-  if (!Number.isInteger(capacity) || capacity < pageSize || capacity % pageSize !== 0)
-    domainError('binder_capacity_invalid');
-  const targetPages = capacity / pageSize;
+  if (!Number.isInteger(capacity) || capacity < 1) domainError('binder_capacity_invalid');
+  const targetPages = pagesForCapacity(capacity, pageSize);
   if (targetPages > MAX_BINDER_PAGES) domainError('binder_page_limit_reached');
   if (capacity === version.capacity) return mutationResult(db, ownerId, versionId, [0]);
+  const pages = Array.from(
+    { length: Math.max(0, targetPages - version.page_count) },
+    (_unused, index) => ({
+      id: newId('page'),
+      position: version.page_count + index,
+    }),
+  );
   const statements: D1PreparedStatement[] = [
     db
       .prepare(
@@ -2015,69 +2019,79 @@ export async function resizeBinderCapacity(
       )
       .bind(targetPages, MAX_BINDER_PAGES),
   ];
-  if (targetPages < version.page_count) {
+  if (capacity < version.capacity) {
     statements.push(
       db
         .prepare(
           `SELECT CASE WHEN NOT EXISTS (
             SELECT 1 FROM binder_pages page LEFT JOIN binder_slots slot ON slot.binder_page_id = page.id
-            WHERE page.binder_version_id = ?1 AND page.position >= ?2
-              AND (page.kind = 'reserved' OR slot.entry_kind <> 'empty' OR slot.assigned_card_id IS NOT NULL
-                OR slot.starts_new_page = 1)
+            WHERE page.binder_version_id = ?1 AND (
+              (page.position >= ?2 AND page.kind = 'reserved') OR
+              (page.position * ?3 + slot.row_index * ?4 + slot.column_index >= ?5
+                AND (slot.entry_kind <> 'empty' OR slot.assigned_card_id IS NOT NULL
+                  OR slot.starts_new_page = 1))
+            )
            ) THEN 1 ELSE json_extract('binder_shrink_occupied', '$') END AS valid`,
         )
-        .bind(versionId, targetPages),
-      db
-        .prepare('DELETE FROM binder_pages WHERE binder_version_id = ?1 AND position >= ?2')
-        .bind(versionId, targetPages),
-    );
-  } else {
-    const pages = Array.from({ length: targetPages - version.page_count }, (_unused, index) => ({
-      id: newId('page'),
-      position: version.page_count + index,
-    }));
-    statements.push(
+        .bind(versionId, targetPages, pageSize, version.columns, capacity),
       db
         .prepare(
-          `INSERT INTO binder_pages (id, binder_version_id, position)
-           SELECT json_extract(value, '$.id'), ?1, CAST(json_extract(value, '$.position') AS INTEGER)
-           FROM json_each(?2)`,
+          `DELETE FROM binder_slots AS slot WHERE EXISTS (
+             SELECT 1 FROM binder_pages page
+             WHERE page.id = slot.binder_page_id AND page.binder_version_id = ?1
+               AND page.position * ?2 + slot.row_index * ?3 + slot.column_index >= ?4
+           )`,
         )
-        .bind(versionId, JSON.stringify(pages)),
-      db
-        .prepare(
-          `WITH RECURSIVE rows(value) AS (
-             SELECT 0 UNION ALL SELECT value + 1 FROM rows WHERE value + 1 < ?2
-           ), columns(value) AS (
-             SELECT 0 UNION ALL SELECT value + 1 FROM columns WHERE value + 1 < ?3
-           )
-           INSERT INTO binder_slots (binder_page_id, row_index, column_index, card_id)
-           SELECT json_extract(page.value, '$.id'), rows.value, columns.value, NULL
-           FROM json_each(?1) page CROSS JOIN rows CROSS JOIN columns`,
-        )
-        .bind(JSON.stringify(pages), version.rows, version.columns),
+        .bind(versionId, pageSize, version.columns, capacity),
     );
   }
   statements.push(
+    db
+      .prepare('DELETE FROM binder_pages WHERE binder_version_id = ?1 AND position >= ?2')
+      .bind(versionId, targetPages),
+    db
+      .prepare(
+        `INSERT INTO binder_pages (id, binder_version_id, position)
+         SELECT json_extract(value, '$.id'), ?1, CAST(json_extract(value, '$.position') AS INTEGER)
+         FROM json_each(?2)`,
+      )
+      .bind(versionId, JSON.stringify(pages)),
+    db
+      .prepare(
+        `WITH RECURSIVE rows(value) AS (
+           SELECT 0 UNION ALL SELECT value + 1 FROM rows WHERE value + 1 < ?2
+         ), columns(value) AS (
+           SELECT 0 UNION ALL SELECT value + 1 FROM columns WHERE value + 1 < ?3
+         )
+         INSERT OR IGNORE INTO binder_slots (binder_page_id, row_index, column_index, card_id)
+         SELECT page.id, rows.value, columns.value, NULL
+         FROM binder_pages page CROSS JOIN rows CROSS JOIN columns
+         WHERE page.binder_version_id = ?1
+           AND page.position * (?2 * ?3) + rows.value * ?3 + columns.value < ?4`,
+      )
+      .bind(versionId, version.rows, version.columns, capacity),
     db.prepare('UPDATE binder_versions SET capacity = ?1 WHERE id = ?2').bind(capacity, versionId),
     ...revisionStatements(db, version, nowSeconds()),
   );
   try {
     await runVersionBatch(db, ownerId, versionId, version.revision, false, statements);
   } catch (error) {
-    if (targetPages < version.page_count) {
+    if (capacity < version.capacity) {
       const occupied = await db
         .prepare(
           `SELECT 1 FROM binder_pages page LEFT JOIN binder_slots slot ON slot.binder_page_id = page.id
-           WHERE page.binder_version_id = ?1 AND page.position >= ?2
-             AND (page.kind = 'reserved' OR slot.entry_kind <> 'empty'
-               OR slot.assigned_card_id IS NOT NULL OR slot.starts_new_page = 1) LIMIT 1`,
+           WHERE page.binder_version_id = ?1 AND (
+             (page.position >= ?2 AND page.kind = 'reserved') OR
+             (page.position * ?3 + slot.row_index * ?4 + slot.column_index >= ?5
+               AND (slot.entry_kind <> 'empty' OR slot.assigned_card_id IS NOT NULL
+                 OR slot.starts_new_page = 1))
+           ) LIMIT 1`,
         )
-        .bind(versionId, targetPages)
+        .bind(versionId, targetPages, pageSize, version.columns, capacity)
         .first();
       if (occupied) throw new BinderDomainError('binder_shrink_occupied');
     }
     throw error;
   }
-  return mutationResult(db, ownerId, versionId, [Math.min(version.page_count, targetPages) - 1]);
+  return mutationResult(db, ownerId, versionId, [targetPages - 1]);
 }

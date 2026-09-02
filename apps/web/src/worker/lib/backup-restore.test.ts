@@ -265,13 +265,13 @@ describe('backup restore', () => {
     ]);
   });
 
-  it('preserves page reservations while repairing every missing pocket', async () => {
+  it('preserves exact capacity and page reservations while repairing missing pockets', async () => {
     const { database, db, art } = setup();
     await seedReferencedArt(art);
     database.exec(`
       INSERT INTO binder_pages (id,binder_version_id,position,kind,label)
       VALUES ('page-2','version-1',1,'reserved','Trades');
-      UPDATE binder_versions SET capacity = 8 WHERE id = 'version-1';
+      UPDATE binder_versions SET capacity = 7 WHERE id = 'version-1';
     `);
     const backupId = 'backup_incomplete_reserved_page';
     await createBackup(db, art, 'owner', { backupId });
@@ -280,7 +280,7 @@ describe('backup restore', () => {
 
     expect(
       database.prepare('SELECT capacity FROM binder_versions WHERE id = ?1').get('version-1'),
-    ).toEqual({ capacity: 8 });
+    ).toEqual({ capacity: 7 });
     expect(
       database.prepare('SELECT kind, label FROM binder_pages WHERE id = ?1').get('page-2'),
     ).toEqual({ kind: 'reserved', label: 'Trades' });
@@ -296,7 +296,7 @@ describe('backup restore', () => {
         .all(),
     ).toEqual([
       { id: 'page-1', slots: 4 },
-      { id: 'page-2', slots: 4 },
+      { id: 'page-2', slots: 3 },
     ]);
     expect(
       database

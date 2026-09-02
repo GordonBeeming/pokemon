@@ -5,11 +5,13 @@ import {
   BinderDomainError,
   activeBinderShortages,
   activateBinderVersion,
+  addBinderPage,
   addCardsToBinderVersion,
   arrangeBinderVersion,
   cloneBinderVersion,
   compactRemoveBinderEntry,
   createBinder,
+  deleteBinderPage,
   getBinderVersion,
   getBinderVersionShortages,
   getBinderAssignmentCandidates,
@@ -20,6 +22,7 @@ import {
   moveBinderEntryByOffset,
   reflowBinderEntries,
   reserveBinderPage,
+  reorderBinderPages,
   resizeBinderCapacity,
   setBinderEntryAssignment,
   setBinderEntryPageBreak,
@@ -158,7 +161,7 @@ describe('binder D1 domain', () => {
     );
     expect(preview.currentCapacity).toBe(18);
     expect(preview.requiredCapacity).toBeGreaterThan(18);
-    expect(preview.additionalPockets % 9).toBe(0);
+    expect(preview.requiredCapacity).toBe(preview.currentCapacity + preview.additionalPockets);
     expect(preview.pageIncrement).toBe(9);
     expect(preview.generatedPadding).toBeGreaterThan(0);
     expect(
@@ -446,6 +449,122 @@ describe('binder D1 domain', () => {
     expect(database.prepare('SELECT COUNT(*) AS count FROM binder_slots').get()).toEqual({
       count: 8,
     });
+  });
+
+  it('uses an exact advertised capacity with a partial final page', async () => {
+    const { database, db } = setup();
+    const created = await createBinder(
+      db,
+      'owner',
+      '480-pocket binder',
+      { kind: '3x3', rows: 3, columns: 3 },
+      480,
+    );
+    expect(created.version).toMatchObject({ capacity: 480, pageCount: 54 });
+    expect(database.prepare('SELECT COUNT(*) AS count FROM binder_slots').get()).toEqual({
+      count: 480,
+    });
+    expect(
+      database
+        .prepare(
+          `SELECT COUNT(*) AS count FROM binder_slots slot JOIN binder_pages page
+           ON page.id = slot.binder_page_id WHERE page.binder_version_id = ?1
+             AND page.position = 53`,
+        )
+        .get(created.version.id),
+    ).toEqual({ count: 3 });
+
+    const inserted = await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 53, row: 0, column: 2 },
+      [{ kind: 'pokemon', pokemonNumber: 1, startsNewPage: false }],
+      created.version.revision,
+    );
+    expect(inserted).toMatchObject({ anchor: { page: 53, row: 0, column: 2 } });
+    await expect(
+      insertBinderEntries(
+        db,
+        'owner',
+        created.version.id,
+        { page: 53, row: 1, column: 0 },
+        [{ kind: 'pokemon', pokemonNumber: 2, startsNewPage: false }],
+        inserted.version.revision,
+      ),
+    ).rejects.toMatchObject({ code: 'binder_slot_out_of_bounds' });
+
+    const grown = await resizeBinderCapacity(
+      db,
+      'owner',
+      created.version.id,
+      481,
+      inserted.version.revision,
+    );
+    expect(grown.version).toMatchObject({ capacity: 481, pageCount: 54 });
+    expect(database.prepare('SELECT COUNT(*) AS count FROM binder_slots').get()).toEqual({
+      count: 481,
+    });
+    const restored = await resizeBinderCapacity(
+      db,
+      'owner',
+      created.version.id,
+      480,
+      grown.version.revision,
+    );
+    expect(restored.version).toMatchObject({ capacity: 480, pageCount: 54 });
+    await expect(
+      resizeBinderCapacity(db, 'owner', created.version.id, 479, restored.version.revision),
+    ).rejects.toMatchObject({ code: 'binder_shrink_occupied' });
+  });
+
+  it('keeps the partial page last when pages are added, reordered, or removed', async () => {
+    const { database, db } = setup();
+    const created = await createBinder(
+      db,
+      'owner',
+      'Partial pages',
+      { kind: '2x2', rows: 2, columns: 2 },
+      10,
+    );
+    const initial = await getBinderVersion(db, 'owner', created.version.id, 0, 4);
+    expect(initial.pages.map((page) => page.slots.length)).toEqual([4, 4, 2]);
+    await expect(
+      reorderBinderPages(
+        db,
+        'owner',
+        created.version.id,
+        [initial.pages[2]!.id, initial.pages[0]!.id, initial.pages[1]!.id],
+        created.version.revision,
+      ),
+    ).rejects.toMatchObject({ code: 'binder_page_order_invalid' });
+
+    const added = await addBinderPage(db, 'owner', created.version.id, created.version.revision);
+    expect(added.version).toMatchObject({ capacity: 14, pageCount: 4 });
+    expect(
+      database
+        .prepare(
+          `SELECT page.position, COUNT(slot.binder_page_id) AS slots
+           FROM binder_pages page LEFT JOIN binder_slots slot ON slot.binder_page_id = page.id
+           WHERE page.binder_version_id = ?1 GROUP BY page.id ORDER BY page.position`,
+        )
+        .all(created.version.id),
+    ).toEqual([
+      { position: 0, slots: 4 },
+      { position: 1, slots: 4 },
+      { position: 2, slots: 4 },
+      { position: 3, slots: 2 },
+    ]);
+
+    const lastPage = await getBinderVersion(db, 'owner', created.version.id, 3, 1);
+    const removed = await deleteBinderPage(
+      db,
+      'owner',
+      created.version.id,
+      lastPage.pages[0]!.id,
+      added.version.revision,
+    );
+    expect(removed.version).toMatchObject({ capacity: 12, pageCount: 3 });
   });
 
   it('reflows insert, physical offset moves, remove, and a reserved middle page', async () => {

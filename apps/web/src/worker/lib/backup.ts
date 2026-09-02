@@ -836,8 +836,12 @@ export async function restoreBackup(
           .bind(restoreRunId, ownerId),
         db
           .prepare(
-            `UPDATE binder_versions SET capacity = rows * columns * (
-              SELECT COUNT(*) FROM binder_pages WHERE binder_version_id = binder_versions.id
+            `UPDATE binder_versions SET capacity = COALESCE(
+              (SELECT json_extract(j.value,'$.capacity') FROM ${jsonRows}
+               AND c.kind='versions' AND json_extract(j.value,'$.id') = binder_versions.id),
+              rows * columns * (
+                SELECT COUNT(*) FROM binder_pages WHERE binder_version_id = binder_versions.id
+              )
              ) WHERE id IN (
               SELECT json_extract(j.value,'$.id') FROM ${jsonRows} AND c.kind='versions'
              )`,
@@ -864,7 +868,32 @@ export async function restoreBackup(
              JOIN binders binder ON binder.id = version.binder_id
              JOIN pocket_indexes row_index ON row_index.value < version.rows
              JOIN pocket_indexes column_index ON column_index.value < version.columns
-             WHERE binder.owner_id = ?1`,
+             WHERE binder.owner_id = ?1
+               AND page.position * (version.rows * version.columns)
+                 + row_index.value * version.columns + column_index.value < version.capacity`,
+          )
+          .bind(ownerId),
+        db
+          .prepare(
+            `SELECT CASE WHEN NOT EXISTS (
+               SELECT 1 FROM binder_versions version
+               JOIN binders binder ON binder.id = version.binder_id
+               WHERE binder.owner_id = ?1 AND (
+                 version.capacity > version.rows * version.columns * (
+                   SELECT COUNT(*) FROM binder_pages page
+                   WHERE page.binder_version_id = version.id
+                 ) OR version.capacity <= version.rows * version.columns * (
+                   SELECT MAX(page.position) FROM binder_pages page
+                   WHERE page.binder_version_id = version.id
+                 ) OR EXISTS (
+                   SELECT 1 FROM binder_slots slot JOIN binder_pages page
+                     ON page.id = slot.binder_page_id
+                   WHERE page.binder_version_id = version.id
+                     AND page.position * (version.rows * version.columns)
+                       + slot.row_index * version.columns + slot.column_index >= version.capacity
+                 )
+               )
+             ) THEN 1 ELSE json_extract('binder_capacity_invalid', '$') END AS valid`,
           )
           .bind(ownerId),
         db
