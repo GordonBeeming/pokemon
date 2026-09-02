@@ -103,17 +103,20 @@ function binderFixture(
     revision?: number;
     capacity?: number;
     columns?: number;
+    rows?: number;
+    pageCount?: number;
   } = {},
 ) {
   const columns = options.columns ?? 3;
+  const rows = options.rows ?? 1;
   const version = {
     id: 'version-1',
     binderId: 'binder-1',
     versionNumber: 1,
     status: options.status ?? ('draft' as const),
-    layout: { kind: 'custom' as const, rows: 1, columns },
+    layout: { kind: 'custom' as const, rows, columns },
     revision: options.revision ?? 1,
-    pageCount: 1,
+    pageCount: options.pageCount ?? 1,
     capacity: options.capacity ?? slots.length,
   };
   const pages = [{ id: 'page-1', position: 0, kind: 'slots' as const, label: null, slots }];
@@ -1168,7 +1171,7 @@ describe('async frontend announcements', () => {
         cardId: null,
         entryKind: 'empty' as const,
       })),
-      { columns: 3, capacity: 9 },
+      { columns: 3, capacity: 480, pageCount: 54 },
     );
     apiMocks.binders.mockResolvedValue([]);
     apiMocks.createBinder.mockResolvedValue(created.result);
@@ -1183,6 +1186,16 @@ describe('async frontend announcements', () => {
       );
       name.dispatchEvent(new Event('input', { bubbles: true }));
     });
+    const capacity = container.querySelector<HTMLInputElement>('input[type="number"]');
+    if (!capacity) throw new Error('Maximum pockets input missing.');
+    await actAndSettle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        capacity,
+        '480',
+      );
+      capacity.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(container.textContent).toContain('54 page faces. The final page has 3 pockets.');
     const submit = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
       (button) => button.textContent === 'Create binder',
     );
@@ -1191,7 +1204,7 @@ describe('async frontend announcements', () => {
     expect(apiMocks.createBinder).toHaveBeenCalledWith(
       'Regional collection',
       { kind: '3x3', rows: 3, columns: 3 },
-      9,
+      480,
     );
   });
 
@@ -1308,6 +1321,52 @@ describe('async frontend announcements', () => {
     await waitFor(() => apiMocks.moveEntry.mock.calls.length === 1);
     expect(container.textContent).toContain('This action needs more capacity');
     expect(capacity.value).toBe('4');
+  });
+
+  it('grows an existing 3x3 binder to an exact 480-pocket maximum', async () => {
+    const slots = Array.from({ length: 9 }, (_value, index) => ({
+      pageId: 'page-1',
+      row: Math.floor(index / 3),
+      column: index % 3,
+      cardId: null,
+      entryKind: 'empty' as const,
+    }));
+    const initial = binderFixture(slots, { rows: 3, columns: 3, capacity: 9 });
+    const grown = binderFixture(slots, {
+      rows: 3,
+      columns: 3,
+      capacity: 480,
+      pageCount: 54,
+      revision: 2,
+    });
+    apiMocks.binders.mockResolvedValue([testBinder]);
+    apiMocks.binder.mockResolvedValueOnce(initial.response).mockResolvedValue(grown.response);
+    apiMocks.resolveCards.mockResolvedValue([]);
+    apiMocks.resizeBinder.mockResolvedValue(grown.result);
+
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await waitFor(() => container.querySelector('#binder-capacity-input') !== null);
+    const capacity = container.querySelector<HTMLInputElement>('#binder-capacity-input');
+    if (!capacity) throw new Error('Maximum pockets input missing.');
+    await actAndSettle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        capacity,
+        '480',
+      );
+      capacity.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(container.textContent).toContain('54 page faces. The final page has 3 pockets.');
+    await actAndSettle(() =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find((button) => button.textContent === 'Grow binder')
+        ?.click(),
+    );
+
+    expect(apiMocks.resizeBinder).toHaveBeenCalledWith('version-1', 480, 1);
   });
 
   it('wires target page breaks and signed moves with current revision and focus recovery', async () => {

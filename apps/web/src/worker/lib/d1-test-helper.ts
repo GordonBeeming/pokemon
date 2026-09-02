@@ -91,6 +91,7 @@ export function applyAllMigrations(database: DatabaseSync): void {
     '009_species_discovery_cache.sql',
     '010_price_source_availability.sql',
     '011_binder_capacity_and_placement.sql',
+    '012_exact_binder_capacity.sql',
   ])
     database.exec(readFileSync(new URL(name, directory), 'utf8'));
 }
