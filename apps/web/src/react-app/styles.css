@@ -2099,6 +2099,10 @@ dd {
   .binder-page-toolbar {
     grid-template-columns: 1fr auto;
   }
+  .page-menu-popover {
+    right: auto;
+    left: 0;
+  }
   .pocket-prompt {
     grid-column: 1 / -1;
     grid-row: 2;
