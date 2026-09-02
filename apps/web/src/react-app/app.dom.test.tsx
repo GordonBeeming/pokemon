@@ -1187,7 +1187,7 @@ describe('async frontend announcements', () => {
       name.dispatchEvent(new Event('input', { bubbles: true }));
     });
     const capacity = container.querySelector<HTMLInputElement>('input[type="number"]');
-    if (!capacity) throw new Error('Maximum pockets input missing.');
+    if (!capacity) throw new Error('Binder capacity input missing.');
     await actAndSettle(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
         capacity,
@@ -1195,7 +1195,7 @@ describe('async frontend announcements', () => {
       );
       capacity.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    expect(container.textContent).toContain('1 maximum pocket across 1 page face.');
+    expect(container.textContent).toContain('1 pocket in this binder across 1 page face.');
     await actAndSettle(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
         capacity,
@@ -1375,7 +1375,7 @@ describe('async frontend announcements', () => {
     );
     await waitFor(() => container.querySelector('#binder-capacity-input') !== null);
     const capacity = container.querySelector<HTMLInputElement>('#binder-capacity-input');
-    if (!capacity) throw new Error('Maximum pockets input missing.');
+    if (!capacity) throw new Error('Binder capacity input missing.');
     await actAndSettle(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
         capacity,

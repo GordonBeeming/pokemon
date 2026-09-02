@@ -54,9 +54,9 @@ function capacityDescription(capacity: number, face: number): string {
   const finalPage = capacity % face || face;
   const pageLabel = pages === 1 ? 'page face' : 'page faces';
   const pocketLabel = finalPage === 1 ? 'pocket' : 'pockets';
-  const maximumLabel = capacity === 1 ? 'pocket' : 'pockets';
+  const capacityLabel = capacity === 1 ? 'pocket' : 'pockets';
   const partial = finalPage < face ? ` The final page has ${finalPage} ${pocketLabel}.` : '';
-  return `${capacity.toLocaleString('en-AU')} maximum ${maximumLabel} across ${pages.toLocaleString('en-AU')} ${pageLabel}.${partial}`;
+  return `${capacity.toLocaleString('en-AU')} ${capacityLabel} in this binder across ${pages.toLocaleString('en-AU')} ${pageLabel}.${partial}`;
 }
 function place(location: BinderSlotLocation): string {
   return `page ${location.page + 1}, row ${location.row + 1}, column ${location.column + 1}`;
@@ -162,7 +162,7 @@ function Create({
           </div>
         ) : null}
         <label>
-          Maximum pockets
+          Binder capacity (pockets)
           <input
             type="number"
             min="1"
@@ -604,7 +604,7 @@ function BinderCapacityControls({
       <hr />
       <h3>Binder capacity</h3>
       <label htmlFor="binder-capacity-input">
-        Maximum pockets
+        Binder capacity (pockets)
         <input
           id="binder-capacity-input"
           type="number"
