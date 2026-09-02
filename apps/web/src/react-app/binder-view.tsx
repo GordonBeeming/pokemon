@@ -52,7 +52,8 @@ function capacityDescription(capacity: number, face: number): string {
   const pages = Math.ceil(capacity / face);
   const finalPage = capacity % face || face;
   const pageLabel = pages === 1 ? 'page face' : 'page faces';
-  const partial = finalPage < face ? ` The final page has ${finalPage} pockets.` : '';
+  const pocketLabel = finalPage === 1 ? 'pocket' : 'pockets';
+  const partial = finalPage < face ? ` The final page has ${finalPage} ${pocketLabel}.` : '';
   return `${capacity.toLocaleString('en-AU')} maximum pockets across ${pages.toLocaleString('en-AU')} ${pageLabel}.${partial}`;
 }
 function place(location: BinderSlotLocation): string {

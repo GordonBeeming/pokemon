@@ -1191,6 +1191,14 @@ describe('async frontend announcements', () => {
     await actAndSettle(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
         capacity,
+        '478',
+      );
+      capacity.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(container.textContent).toContain('The final page has 1 pocket.');
+    await actAndSettle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        capacity,
         '480',
       );
       capacity.dispatchEvent(new Event('input', { bubbles: true }));
