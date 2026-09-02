@@ -1968,6 +1968,7 @@ dd {
 }
 .page-menu {
   position: relative;
+  justify-self: start;
 }
 .page-menu-popover {
   display: grid;

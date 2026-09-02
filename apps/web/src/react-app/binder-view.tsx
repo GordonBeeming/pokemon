@@ -48,13 +48,15 @@ function layoutFor(kind: BinderLayout['kind'], rows: number, columns: number): B
   return { kind: 'top-loader', rows: 2, columns: 2 };
 }
 function capacityDescription(capacity: number, face: number): string {
-  if (!Number.isInteger(capacity) || capacity < 1) return 'Enter at least 1 pocket.';
+  if (!Number.isInteger(capacity)) return 'Enter a whole number of pockets.';
+  if (capacity < 1) return 'Enter at least 1 pocket.';
   const pages = Math.ceil(capacity / face);
   const finalPage = capacity % face || face;
   const pageLabel = pages === 1 ? 'page face' : 'page faces';
   const pocketLabel = finalPage === 1 ? 'pocket' : 'pockets';
+  const maximumLabel = capacity === 1 ? 'pocket' : 'pockets';
   const partial = finalPage < face ? ` The final page has ${finalPage} ${pocketLabel}.` : '';
-  return `${capacity.toLocaleString('en-AU')} maximum pockets across ${pages.toLocaleString('en-AU')} ${pageLabel}.${partial}`;
+  return `${capacity.toLocaleString('en-AU')} maximum ${maximumLabel} across ${pages.toLocaleString('en-AU')} ${pageLabel}.${partial}`;
 }
 function place(location: BinderSlotLocation): string {
   return `page ${location.page + 1}, row ${location.row + 1}, column ${location.column + 1}`;

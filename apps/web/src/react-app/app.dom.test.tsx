@@ -1191,6 +1191,22 @@ describe('async frontend announcements', () => {
     await actAndSettle(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
         capacity,
+        '1',
+      );
+      capacity.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(container.textContent).toContain('1 maximum pocket across 1 page face.');
+    await actAndSettle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        capacity,
+        '1.5',
+      );
+      capacity.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(container.textContent).toContain('Enter a whole number of pockets.');
+    await actAndSettle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        capacity,
         '478',
       );
       capacity.dispatchEvent(new Event('input', { bubbles: true }));
