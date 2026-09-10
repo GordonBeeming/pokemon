@@ -23,7 +23,7 @@
     "@pokedex/shared": "workspace:*",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
-    "hono": "^4.13.4",
+    "hono": "^4.13.5",
     "jose": "^6.1.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
