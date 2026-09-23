@@ -4,7 +4,7 @@ import { ApplicationError } from '../../lib/log';
 import { apiRoutes } from './index';
 
 type SharedRoute = {
-  method: 'GET' | 'PATCH' | 'POST' | 'PUT';
+  method: 'GET' | 'PATCH' | 'POST' | 'PUT' | 'DELETE';
   browser: string;
   desktop: string;
   body?: unknown;
@@ -89,6 +89,12 @@ const sharedRoutes = [
     browser: '/collection/card-1/notes',
     desktop: '/desktop/collection/card-1/notes',
     body: { mutationId, expectedRevision: 0, notes: 'Route probe' },
+  },
+  {
+    method: 'DELETE',
+    browser: '/binders/binder-1',
+    desktop: '/desktop/binders/binder-1',
+    body: { confirmationName: 'My binder' },
   },
   { method: 'GET', browser: '/binders', desktop: '/desktop/binders' },
   {
@@ -232,12 +238,12 @@ describe('browser and desktop route parity', () => {
 
       const wrongBrowserMethod = await apiRoutes.request(
         route.browser,
-        requestInit(route, 'browser', 'DELETE'),
+        requestInit(route, 'browser', route.method === 'DELETE' ? 'PATCH' : 'DELETE'),
         env,
       );
       const wrongDesktopMethod = await apiRoutes.request(
         route.desktop,
-        requestInit(route, 'desktop', 'DELETE'),
+        requestInit(route, 'desktop', route.method === 'DELETE' ? 'PATCH' : 'DELETE'),
         env,
       );
       expect([404, 405]).toContain(wrongBrowserMethod.status);

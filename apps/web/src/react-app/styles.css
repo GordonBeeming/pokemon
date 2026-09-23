@@ -365,21 +365,6 @@ summary:focus-visible {
   .binder-summary {
     gap: 0.45rem 0.7rem;
   }
-  .binder-slot strong,
-  .binder-slot small {
-    overflow: visible;
-    text-overflow: clip;
-    white-space: normal;
-    overflow-wrap: anywhere;
-  }
-  .binder-slot strong {
-    font-size: 0.64rem;
-    line-height: 1.2;
-  }
-  .binder-slot small {
-    font-size: 0.57rem;
-    line-height: 1.2;
-  }
 }
 .shortage-panel {
   position: sticky;
@@ -2035,6 +2020,11 @@ dd {
   .dashboard-grid {
     grid-template-columns: 1fr;
   }
+  .shortage-panel {
+    position: static;
+    max-height: none;
+    overflow: visible;
+  }
   .card-detail {
     position: static;
   }
@@ -2215,6 +2205,46 @@ dd {
     width: min(11rem, 55vw);
   }
 }
+@media (max-width: 520px) {
+  .planner-layout > *,
+  .binder-card-tray,
+  .binder-card-options {
+    min-width: 0;
+  }
+  .binder-page {
+    padding: 0.5rem;
+  }
+  .binder-grid {
+    gap: 0.4rem;
+  }
+  .binder-grid-fit {
+    --binder-slot-min: 0;
+  }
+  .binder-slot {
+    min-width: 0;
+    padding: 0.25rem;
+  }
+  .binder-slot > span:not(.card-art) {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+  .binder-slot strong,
+  .binder-slot small {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .binder-slot strong {
+    font-size: 0.64rem;
+    line-height: 1.2;
+  }
+  .binder-slot small {
+    font-size: 0.57rem;
+    line-height: 1.2;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -2245,4 +2275,56 @@ dd {
   .binder-slot {
     break-inside: avoid;
   }
+}
+
+.pocket-actions {
+  display: grid;
+  gap: 0.6rem;
+  margin-bottom: 0.6rem;
+}
+.pocket-action-group {
+  margin: 0.6rem 0;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  padding: 0.65rem;
+}
+.pocket-action-group summary {
+  min-height: 2.75rem;
+  align-content: center;
+  cursor: pointer;
+  font-weight: 650;
+}
+.pocket-action-group > button {
+  display: block;
+  width: 100%;
+  min-height: 2.75rem;
+  margin-top: 0.6rem;
+}
+.pocket-actions button {
+  min-height: 2.75rem;
+  text-align: left;
+}
+.card-search-status {
+  min-height: 1.5rem;
+  margin: 0;
+}
+#binder-actions-heading {
+  scroll-margin-top: 1rem;
+}
+
+.binder-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.binder-delete-confirmation {
+  margin-bottom: 1rem;
+  padding: 1rem;
+}
+.binder-delete-confirmation .binder-header-actions {
+  margin-top: 0.75rem;
+}
+.danger-button {
+  color: #922c2c;
+  border-color: #ca9292;
 }

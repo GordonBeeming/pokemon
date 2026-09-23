@@ -431,8 +431,6 @@ function BinderGrid({
   editable,
   selected,
   moveSource,
-  candidateState,
-  candidates,
   cards,
   onNotice,
   onSelect,
@@ -448,8 +446,6 @@ function BinderGrid({
   editable: boolean;
   selected: BinderSlotLocation | null;
   moveSource: BinderSlotLocation | null;
-  candidateState: 'idle' | 'loading' | 'loaded';
-  candidates: BinderAssignmentCandidate[];
   cards: Map<string, CatalogueCardView>;
   onNotice: (notice: Notice) => void;
   onSelect: (at: BinderSlotLocation) => void;
@@ -470,8 +466,10 @@ function BinderGrid({
         </p>
       ) : null}
       <div
-        className="binder-grid"
-        style={{ gridTemplateColumns: `repeat(${columns}, minmax(4rem, 1fr))` }}
+        className={`binder-grid${columns <= 4 ? ' binder-grid-fit' : ''}`}
+        style={{
+          gridTemplateColumns: `repeat(${columns}, minmax(var(--binder-slot-min, 4rem), 1fr))`,
+        }}
       >
         {(currentPage?.slots ?? []).map((slot) => {
           const at = { page, row: slot.row, column: slot.column };
@@ -482,11 +480,7 @@ function BinderGrid({
               ? 'reserved'
               : slot.entryKind === 'empty'
                 ? 'empty'
-                : selectedTarget && candidateState === 'loaded'
-                  ? candidates.some((candidate) => candidate.available > 0)
-                    ? 'ready'
-                    : 'missing'
-                  : 'target';
+                : 'target';
           const card = slot.assignedCardId
             ? cards.get(slot.assignedCardId)
             : slot.cardId
@@ -550,15 +544,9 @@ function BinderGrid({
               <small>
                 {slot.assignedCardId
                   ? `Placed: ${card?.name ?? 'owned card'}`
-                  : selectedTarget && candidateState === 'loading'
-                    ? 'Checking owned copies'
-                    : state === 'ready'
-                      ? 'Ready to place'
-                      : state === 'missing'
-                        ? 'No unassigned copy'
-                        : state === 'target'
-                          ? 'Target planned'
-                          : state}
+                  : state === 'target'
+                    ? 'Target planned'
+                    : state}
               </small>
             </button>
           );
@@ -610,7 +598,9 @@ function BinderCapacityControls({
           type="number"
           min="1"
           step="1"
-          value={resize || capacity}
+          value={resize}
+          placeholder={String(capacity)}
+          disabled={pending}
           aria-describedby="binder-capacity-help"
           aria-invalid={resize !== '' && invalid}
           onChange={(event) => onResizeChange(event.target.value)}
@@ -631,6 +621,7 @@ function BinderCapacityControls({
         Page reservation label (optional)
         <input
           value={reservation}
+          disabled={pending}
           maxLength={120}
           onChange={(event) => onReservationChange(event.target.value)}
         />
@@ -674,6 +665,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
   const [number, setNumber] = useState(1);
   const [cardId, setCardId] = useState('');
   const [reservation, setReservation] = useState('');
+  const [pageReservation, setPageReservation] = useState('');
   const [offset, setOffset] = useState('1');
   const [resize, setResize] = useState('');
   const [regionBreaks, setRegionBreaks] = useState(true);
@@ -681,6 +673,9 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
   const [moveSource, setMoveSource] = useState<BinderSlotLocation | null>(null);
   const [summary, setSummary] = useState<BinderPlannerSummary | null>(null);
   const [fullRequirement, setFullRequirement] = useState<BinderFullPokedexPreview | null>(null);
+  const [replacement, setReplacement] = useState<'same' | 'any' | null>(null);
+  const [searchState, setSearchState] = useState<'idle' | 'loading' | 'loaded'>('idle');
+  const searchController = useRef<AbortController | null>(null);
   const [legacyQuery, setLegacyQuery] = useState('');
   const [legacyResults, setLegacyResults] = useState<CatalogueCardView[]>([]);
   const pendingPocketFocus = useRef<BinderSlotLocation | null>(null);
@@ -708,6 +703,10 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
     setBinders(await api.binders());
   }
   async function load(id: string, next: number): Promise<void> {
+    searchController.current?.abort();
+    setReplacement(null);
+    setLegacyResults([]);
+    setSearchState('idle');
     setPending(true);
     try {
       const data = await api.binder(id, next, 1);
@@ -741,7 +740,13 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
       onNotice({ kind: 'error', message: userMessage(error) }),
     );
   }, []);
-  useEffect(() => () => candidateController.current?.abort(), []);
+  useEffect(
+    () => () => {
+      candidateController.current?.abort();
+      searchController.current?.abort();
+    },
+    [],
+  );
   useEffect(() => {
     const at = pendingPocketFocus.current;
     if (!at) return;
@@ -795,8 +800,11 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
     setPending(true);
     try {
       const result = await action();
-      pendingPocketFocus.current = focusAt;
-      await load(result.version.id, binderMutationPage(result, page).position);
+      pendingPocketFocus.current = result.anchor ?? focusAt;
+      await load(
+        result.version.id,
+        binderMutationPage(result, result.anchor?.page ?? page).position,
+      );
       setStatus(message);
       onNotice({ kind: 'success', message });
       return true;
@@ -818,6 +826,11 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
     if (!version) return;
     candidateController.current?.abort();
     const generation = ++candidateGeneration.current;
+    searchController.current?.abort();
+    setReplacement(null);
+    setLegacyQuery('');
+    setLegacyResults([]);
+    setSearchState('idle');
     setSelected(at);
     setCandidates([]);
     setCandidateState('idle');
@@ -830,12 +843,11 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
         const controller = new AbortController();
         candidateController.current = controller;
         setCandidateState('loading');
-        setStatus(`Loading compatible copies for ${place(at)}.`);
+
         const found = await api.assignmentCandidates(version.id, at, controller.signal);
         if (generation === candidateGeneration.current) {
           setCandidates(found);
           setCandidateState('loaded');
-          setStatus(`${found.length} compatible copies loaded.`);
         }
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') return;
@@ -855,26 +867,60 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
       .toLocaleLowerCase('en-AU')
       .includes(cardId.trim().toLocaleLowerCase('en-AU')),
   ).slice(0, 12);
-  async function searchLegacyCards(): Promise<void> {
+  async function searchLegacyCards(mode = replacement, query = legacyQuery): Promise<void> {
+    searchController.current?.abort();
+    const controller = new AbortController();
+    searchController.current = controller;
+    setSearchState('loading');
+    setLegacyResults([]);
     try {
-      const result = await api.search(
-        new URLSearchParams({ q: legacyQuery, limit: '24', offset: '0' }),
-      );
+      const params = new URLSearchParams({ q: query, limit: '24', offset: '0' });
+      if (mode === 'same') {
+        const original = selectedSlot?.cardId ? cards.get(selectedSlot.cardId) : null;
+        const pokemonNumber = selectedSlot?.pokemonNumber ?? original?.pokedexNumber;
+        if (pokemonNumber) params.set('pokedexNumber', String(pokemonNumber));
+        else if (original && original.category !== 'pokemon')
+          params.set('category', original.category);
+        else {
+          setSearchState('idle');
+          onNotice({
+            kind: 'error',
+            message: 'This card has no Pokémon species recorded. Use Replace with any card.',
+          });
+          return;
+        }
+      }
+      const result = await api.search(params, controller.signal);
+      if (controller.signal.aborted) return;
       setLegacyResults(result.cards);
+      setSearchState('loaded');
     } catch (error) {
+      if (controller.signal.aborted) return;
+      setSearchState('idle');
       onNotice({ kind: 'error', message: userMessage(error) });
     }
+  }
+  function startReplacement(mode: 'same' | 'any'): void {
+    setReplacement(mode);
+    setLegacyQuery('');
+    void searchLegacyCards(mode, '');
   }
   async function chooseExactTarget(card: CatalogueCardView): Promise<void> {
     if (!version || !selected) return;
     const placed = await mutate(
       () =>
-        api.insertEntries(
-          version.id,
-          selected,
-          [{ kind: 'exact-card', cardId: card.id, startsNewPage: false }],
-          version.revision,
-        ),
+        replacement
+          ? api.setSlot(version.id, {
+              ...selected,
+              cardId: card.id,
+              expectedRevision: version.revision,
+            })
+          : api.insertEntries(
+              version.id,
+              selected,
+              [{ kind: 'exact-card', cardId: card.id, startsNewPage: false }],
+              version.revision,
+            ),
       `${card.name} is now the exact target for pocket ${selected.row + 1}:${selected.column + 1}.`,
     );
     if (placed) {
@@ -923,9 +969,17 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
     void mutate(
       () => api.insertEntries(version.id, selected, [entry], version.revision),
       'Pocket inserted.',
-    );
+    ).then((inserted) => {
+      if (!inserted) return;
+      setReservation((current) => (current === reservation ? '' : current));
+      setCardId((current) => (current === cardId ? '' : current));
+      setNumber((current) => (current === number ? 1 : current));
+    });
   };
   const dismissPocketEditor = (): void => {
+    searchController.current?.abort();
+    setReplacement(null);
+    setSearchState('idle');
     const anchor = selected
       ? document.querySelector<HTMLButtonElement>(
           `[data-binder-slot="${selected.page}-${selected.row}-${selected.column}"]`,
@@ -961,6 +1015,8 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
     setCardId,
     reservation,
     setReservation,
+    pageReservation,
+    setPageReservation,
     offset,
     setOffset,
     resize,
@@ -975,6 +1031,10 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
     fullRequirement,
     legacyQuery,
     setLegacyQuery,
+    replacement,
+    setReplacement,
+    searchState,
+    startReplacement,
     legacyResults,
     fullPreviewTrigger,
     fullPreviewCancel,
@@ -1026,6 +1086,8 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     setCardId,
     reservation,
     setReservation,
+    pageReservation,
+    setPageReservation,
     offset,
     setOffset,
     resize,
@@ -1040,6 +1102,9 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     fullRequirement,
     legacyQuery,
     setLegacyQuery,
+    replacement,
+    searchState,
+    startReplacement,
     legacyResults,
     fullPreviewTrigger,
     fullPreviewCancel,
@@ -1064,6 +1129,16 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     insert,
     dismissPocketEditor,
   } = useBinderPlanner(onNotice);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteName, setDeleteName] = useState('');
+  const currentBinder = binders.find((item) => item.id === version?.binderId);
+  const actionsHeading = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => {
+    if (selected && window.matchMedia('(max-width: 1100px)').matches) {
+      actionsHeading.current?.scrollIntoView({ block: 'start' });
+      actionsHeading.current?.focus({ preventScroll: true });
+    }
+  }, [selected]);
   if (!binder)
     return (
       <>
@@ -1134,6 +1209,8 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
             onClick={() => {
               setBinder(null);
               setSelected(null);
+              setDeleteOpen(false);
+              setDeleteName('');
             }}
           >
             Back to all binders
@@ -1145,66 +1222,85 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
               : 'This archived binder is read-only.'}
           </p>
         </div>
-        <button className="quiet-button" type="button" onClick={() => window.print()}>
-          Print
-        </button>
+        <div className="binder-header-actions">
+          <button className="quiet-button" type="button" onClick={() => window.print()}>
+            Print
+          </button>
+          <button
+            className="quiet-button danger-button"
+            type="button"
+            disabled={pending || !currentBinder}
+            onClick={() => {
+              setDeleteOpen(true);
+              setDeleteName('');
+            }}
+          >
+            Delete binder
+          </button>
+        </div>
       </header>
-      {editable && selected && !reservedPage && !target && kind === 'exact-card' ? (
-        <section className="slot-picker-panel" aria-labelledby="slot-picker-heading">
-          <div className="slot-picker-heading">
-            <div>
-              <h2 id="slot-picker-heading">
-                Choose a card for pocket {selected.row + 1}:{selected.column + 1}
-              </h2>
-              <p>Search the catalogue to set this sleeve's exact card target.</p>
-            </div>
-            <button
-              className="icon-button"
-              type="button"
-              aria-label="Close pocket editor"
-              onClick={dismissPocketEditor}
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="m7 7 10 10M17 7 7 17" />
-              </svg>
-            </button>
-          </div>
+      {deleteOpen && currentBinder ? (
+        <section
+          className="surface binder-delete-confirmation"
+          aria-label="Delete binder confirmation"
+        >
+          <h2>Delete “{currentBinder.name}”?</h2>
+          <p>
+            This permanently removes this binder and all its pages and versions. Your collection
+            cards and quantities stay saved.
+          </p>
           <form
-            className="card-picker"
-            role="search"
             onSubmit={(event) => {
               event.preventDefault();
-              void searchLegacyCards();
+              if (pending || deleteName !== currentBinder.name) return;
+              setPending(true);
+              void api
+                .deleteBinder(currentBinder.id, deleteName)
+                .then(async () => {
+                  setBinder(null);
+                  setSelected(null);
+                  setDeleteOpen(false);
+                  setDeleteName('');
+                  await loadBinders();
+                  onNotice({
+                    kind: 'success',
+                    message: 'Binder deleted. Your collection cards are unchanged.',
+                  });
+                })
+                .catch((error: unknown) => onNotice({ kind: 'error', message: userMessage(error) }))
+                .finally(() => setPending(false));
             }}
           >
             <label>
-              Search cards
+              Type the binder name to confirm
               <input
-                autoFocus
-                value={legacyQuery}
-                placeholder="Pokémon, set, number, rarity, or artist"
-                onChange={(event) => setLegacyQuery(event.target.value)}
+                value={deleteName}
+                maxLength={120}
+                disabled={pending}
+                onChange={(event) => setDeleteName(event.target.value)}
               />
             </label>
-            <button className="quiet-button" type="submit" disabled={pending}>
-              Find cards
-            </button>
-          </form>
-          {legacyResults.length ? (
-            <div className="binder-card-options" aria-label="Exact card targets">
-              {legacyResults.map((card) => (
-                <CardTile
-                  className="binder-tray-card"
-                  key={card.id}
-                  onClick={() => void chooseExactTarget(card)}
-                  art={<CardArt src={card.imageLowUrl} highSrc={card.imageHighUrl} alt="" />}
-                  title={card.name}
-                  subtitle={`${card.setName} · ${card.number}`}
-                  quantity={card.collection?.quantity ?? 0}
-                />
-              ))}
+            <div className="binder-header-actions">
+              <button
+                className="quiet-button"
+                type="button"
+                disabled={pending}
+                onClick={() => {
+                  setDeleteOpen(false);
+                  setDeleteName('');
+                }}
+              >
+                Cancel deletion
+              </button>
+              <button
+                className="quiet-button danger-button"
+                type="submit"
+                disabled={pending || deleteName !== currentBinder.name}
+              >
+                Permanently delete binder
+              </button>
             </div>
-          ) : null}
+          </form>
         </section>
       ) : null}
       <BinderUsage summary={summary} counts={counts} capacity={capacity} />
@@ -1243,8 +1339,6 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
           editable={editable}
           selected={selected}
           moveSource={moveSource}
-          candidateState={candidateState}
-          candidates={candidates}
           cards={cards}
           onNotice={onNotice}
           onSelect={(at) => void select(at)}
@@ -1264,7 +1358,9 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
           onCancelMove={() => setMoveSource(null)}
         />
         <aside className="surface shortage-panel" aria-labelledby="binder-actions-heading">
-          <h2 id="binder-actions-heading">Pocket editor</h2>
+          <h2 id="binder-actions-heading" ref={actionsHeading} tabIndex={-1}>
+            Pocket editor
+          </h2>
           {reservedPage && editable && version ? (
             <button
               className="quiet-button"
@@ -1279,6 +1375,86 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
             >
               Unreserve this page
             </button>
+          ) : null}
+          {editable &&
+          selected &&
+          !reservedPage &&
+          ((!target && kind === 'exact-card') || replacement !== null) ? (
+            <section className="slot-picker-panel" aria-labelledby="slot-picker-heading">
+              <div className="slot-picker-heading">
+                <div>
+                  <h2 id="slot-picker-heading">
+                    {replacement === 'same'
+                      ? 'Replace with the same type'
+                      : replacement
+                        ? 'Replace with any card'
+                        : `Choose a card for pocket ${selected.row + 1}:${selected.column + 1}`}
+                  </h2>
+                  <p>
+                    {replacement
+                      ? 'Choose a replacement for this sleeve. Other sleeves stay in place.'
+                      : "Search the catalogue to set this sleeve's exact card target."}
+                  </p>
+                </div>
+                <button
+                  className="icon-button"
+                  type="button"
+                  aria-label="Close pocket editor"
+                  onClick={dismissPocketEditor}
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="m7 7 10 10M17 7 7 17" />
+                  </svg>
+                </button>
+              </div>
+              <form
+                className="card-picker"
+                role="search"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void searchLegacyCards();
+                }}
+              >
+                <label>
+                  Search cards
+                  <input
+                    value={legacyQuery}
+                    placeholder="Pokémon, set, number, rarity, or artist"
+                    onChange={(event) => setLegacyQuery(event.target.value)}
+                  />
+                </label>
+                <button
+                  className="quiet-button"
+                  type="submit"
+                  disabled={pending || searchState === 'loading'}
+                >
+                  Find cards
+                </button>
+              </form>
+              <p className="card-search-status" role="status">
+                {searchState === 'loading'
+                  ? 'Loading cards…'
+                  : searchState === 'loaded' && !legacyResults.length
+                    ? 'No matching cards found.'
+                    : ''}
+              </p>
+              {legacyResults.length ? (
+                <div className="binder-card-options" aria-label="Exact card targets">
+                  {legacyResults.map((card) => (
+                    <CardTile
+                      className="binder-tray-card"
+                      key={card.id}
+                      disabled={pending}
+                      onClick={() => void chooseExactTarget(card)}
+                      art={<CardArt src={card.imageLowUrl} highSrc={card.imageHighUrl} alt="" />}
+                      title={card.name}
+                      subtitle={`${card.setName} · ${card.number}`}
+                      quantity={card.collection?.quantity ?? 0}
+                    />
+                  ))}
+                </div>
+              ) : null}
+            </section>
           ) : null}
           {selected ? (
             <>
@@ -1375,114 +1551,169 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
               ) : null}
               {editable && target && version ? (
                 <>
-                  <h3>Physical placement</h3>
-                  <p>
-                    {selectedSlot?.assignedCardId
-                      ? 'This target has an assigned owned card.'
-                      : 'This target is planned but does not have a physical card assigned.'}
-                  </p>
-                  {candidateState === 'loading' ? (
-                    <p role="status" aria-live="polite">
-                      Loading compatible unassigned copies.
+                  <div className="pocket-actions">
+                    <button
+                      className="quiet-button"
+                      type="button"
+                      disabled={pending}
+                      onClick={() => startReplacement('same')}
+                    >
+                      Replace with same type
+                    </button>
+                    <button
+                      className="quiet-button"
+                      type="button"
+                      disabled={pending}
+                      onClick={() => startReplacement('any')}
+                    >
+                      Replace with any card
+                    </button>
+                  </div>
+                  <details className="pocket-action-group">
+                    <summary>Insert a gap / shift sleeves</summary>
+                    <p>
+                      Shift this target and every later target together. Positive numbers leave
+                      empty sleeves here; negative numbers need empty sleeves before this target.
+                      Page breaks stay on page boundaries.
                     </p>
-                  ) : candidates.length ? (
-                    <ul className="binder-candidates">
-                      {candidates.map((candidate) => (
-                        <li key={candidate.cardId}>
-                          <button
-                            type="button"
-                            disabled={pending || candidate.available === 0}
-                            onClick={() =>
-                              void mutate(
-                                () =>
-                                  api.assignEntry(
-                                    version.id,
-                                    selected,
-                                    candidate.cardId,
-                                    version.revision,
-                                  ),
-                                `${candidate.name} assigned.`,
-                              )
-                            }
-                          >
-                            {candidate.name} ({candidate.setName} {candidate.number}) ·{' '}
-                            {candidate.available} compatible cop
-                            {candidate.available === 1 ? 'y' : 'ies'} remaining
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : candidateState === 'loaded' ? (
-                    <p>No compatible unassigned copies are available.</p>
-                  ) : null}
-                  <button
-                    className="quiet-button"
-                    type="button"
-                    disabled={pending || !selectedSlot?.assignedCardId}
-                    onClick={() =>
-                      void mutate(
-                        () => api.assignEntry(version.id, selected, null, version.revision),
-                        'Physical placement removed.',
-                      )
-                    }
-                  >
-                    Remove physical placement
-                  </button>
-                  <label className="checkbox-row">
-                    <input
-                      type="checkbox"
-                      checked={selectedSlot?.startsNewPage === true}
-                      onChange={(event) =>
+                    <label>
+                      Shift by sleeves
+                      <input
+                        type="number"
+                        value={offset}
+                        onChange={(event) => setOffset(event.target.value)}
+                      />
+                    </label>
+                    <button
+                      className="quiet-button"
+                      type="button"
+                      disabled={
+                        pending || !Number.isInteger(Number(offset)) || Number(offset) === 0
+                      }
+                      onClick={() =>
                         void mutate(
                           () =>
-                            api.setPageBreak(
-                              version.id,
-                              selected,
-                              event.target.checked,
-                              version.revision,
-                            ),
-                          event.target.checked
-                            ? 'Target starts a new page.'
-                            : 'Page break removed.',
+                            api.moveEntry(version.id, selected, Number(offset), version.revision),
+                          'Selected and later targets shifted.',
+                        ).then((shifted) => {
+                          if (shifted) setOffset((current) => (current === offset ? '' : current));
+                        })
+                      }
+                    >
+                      Shift targets
+                    </button>
+                  </details>
+                  <details className="pocket-action-group">
+                    <summary>Remove card</summary>
+                    <button
+                      className="quiet-button"
+                      type="button"
+                      disabled={pending}
+                      onClick={() =>
+                        void mutate(
+                          () =>
+                            api.setSlot(version.id, {
+                              ...selected,
+                              cardId: null,
+                              expectedRevision: version.revision,
+                            }),
+                          'Card removed. The sleeve is now empty.',
                         )
                       }
-                    />{' '}
-                    Start this target on a new page
-                  </label>
-                  <label>
-                    Move signed sleeve offset
-                    <input
-                      type="number"
-                      value={offset}
-                      onChange={(event) => setOffset(event.target.value)}
-                    />
-                  </label>
-                  <button
-                    className="quiet-button"
-                    type="button"
-                    disabled={pending || !Number.isInteger(Number(offset)) || Number(offset) === 0}
-                    onClick={() =>
-                      void mutate(
-                        () => api.moveEntry(version.id, selected, Number(offset), version.revision),
-                        'Target moved.',
-                      )
-                    }
-                  >
-                    Move target
-                  </button>
-                  <button
-                    className="quiet-button"
-                    type="button"
-                    disabled={pending}
-                    onClick={() =>
-                      void mutate(
-                        () => api.removeEntry(version.id, selected, version.revision),
-                        'Target removed and later targets closed the gap.',
-                      )
-                    }
-                  >
-                    Remove and close gap
-                  </button>
+                    >
+                      Remove card and leave gap
+                    </button>
+                    <button
+                      className="quiet-button"
+                      type="button"
+                      disabled={pending}
+                      onClick={() =>
+                        void mutate(
+                          () => api.removeEntry(version.id, selected, version.revision),
+                          'Target removed and later targets closed the gap.',
+                        )
+                      }
+                    >
+                      Remove and close gap
+                    </button>
+                  </details>
+                  <details className="pocket-action-group">
+                    <summary>Owned copies and page break</summary>
+                    <h3>Physical placement</h3>
+                    <p>
+                      {selectedSlot?.assignedCardId
+                        ? 'This target has an assigned owned card.'
+                        : 'This target is planned but does not have a physical card assigned.'}
+                    </p>
+                    {candidateState === 'loading' ? (
+                      <p role="status" aria-live="polite">
+                        Loading compatible unassigned copies.
+                      </p>
+                    ) : candidates.length ? (
+                      <ul className="binder-candidates">
+                        {candidates.map((candidate) => (
+                          <li key={candidate.cardId}>
+                            <button
+                              type="button"
+                              disabled={pending || candidate.available === 0}
+                              onClick={() =>
+                                void mutate(
+                                  () =>
+                                    api.assignEntry(
+                                      version.id,
+                                      selected,
+                                      candidate.cardId,
+                                      version.revision,
+                                    ),
+                                  `${candidate.name} assigned.`,
+                                )
+                              }
+                            >
+                              {candidate.name} ({candidate.setName} {candidate.number}) ·{' '}
+                              {candidate.available} compatible cop
+                              {candidate.available === 1 ? 'y' : 'ies'} remaining
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : candidateState === 'loaded' ? (
+                      <p>No compatible unassigned copies are available.</p>
+                    ) : null}
+                    <button
+                      className="quiet-button"
+                      type="button"
+                      disabled={pending || !selectedSlot?.assignedCardId}
+                      onClick={() =>
+                        void mutate(
+                          () => api.assignEntry(version.id, selected, null, version.revision),
+                          'Physical placement removed.',
+                        )
+                      }
+                    >
+                      Remove physical placement
+                    </button>
+                    <label className="checkbox-row">
+                      <input
+                        type="checkbox"
+                        checked={selectedSlot?.startsNewPage === true}
+                        onChange={(event) =>
+                          void mutate(
+                            () =>
+                              api.setPageBreak(
+                                version.id,
+                                selected,
+                                event.target.checked,
+                                version.revision,
+                              ),
+                            event.target.checked
+                              ? 'Target starts a new page.'
+                              : 'Page break removed.',
+                          )
+                        }
+                      />{' '}
+                      Start this target on a new page
+                    </label>
+                  </details>
                 </>
               ) : null}
             </>
@@ -1498,7 +1729,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
               face={face}
               capacity={capacity}
               resize={resize}
-              reservation={reservation}
+              reservation={pageReservation}
               pending={pending}
               canInsertFull={selected !== null}
               fullPreviewTrigger={fullPreviewTrigger}
@@ -1507,14 +1738,19 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
                 void mutate(
                   () => api.resizeBinder(version.id, value, version.revision),
                   'Binder capacity changed deliberately.',
-                )
+                ).then((resized) => {
+                  if (resized) setResize((current) => (current === resize ? '' : current));
+                })
               }
-              onReservationChange={setReservation}
+              onReservationChange={setPageReservation}
               onReservePage={(label) =>
                 void mutate(
                   () => api.reservePage(version.id, page, true, label, version.revision),
                   'Page reserved.',
-                )
+                ).then((reserved) => {
+                  if (reserved)
+                    setPageReservation((current) => (current === pageReservation ? '' : current));
+                })
               }
               onArrange={() =>
                 void mutate(

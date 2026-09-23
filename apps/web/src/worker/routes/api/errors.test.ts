@@ -8,6 +8,7 @@ import { apiFailure, asApplicationError, parsedJson } from './errors';
 
 const binderStatuses = {
   binder_version_not_found: 404,
+  binder_not_found: 404,
   binder_version_not_draft: 409,
   binder_version_archived: 409,
   binder_revision_conflict: 409,
@@ -22,6 +23,8 @@ const binderStatuses = {
   binder_capacity_exceeded: 409,
   binder_capacity_invalid: 400,
   binder_shrink_occupied: 409,
+  binder_shift_occupied: 409,
+  binder_shift_page_break: 409,
   binder_assignment_incompatible: 409,
   binder_assignment_quantity_exceeded: 409,
   binder_reserved_page_not_empty: 409,

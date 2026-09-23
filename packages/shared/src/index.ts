@@ -479,6 +479,7 @@ export const apiErrorDetailsSchema = z.union([
 export type ApiErrorDetails = z.infer<typeof apiErrorDetailsSchema>;
 
 export const catalogueCardViewSchema = catalogueBriefSchema.extend({
+  pokedexNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE).nullable().optional(),
   imageHighUrl: artUrlSchema,
   collection: collectionStateSchema.nullable(),
   price: priceBaselineSchema,
