@@ -8,7 +8,7 @@ import {
   type BinderSlotLocation,
   type CardId,
 } from '@pokedex/shared';
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   api,
   ApiError,
@@ -662,7 +662,7 @@ function BinderCapacityControls({
   );
 }
 
-function useBinderPlanner(onNotice: (notice: Notice) => void) {
+function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () => void) {
   const [binders, setBinders] = useState<BinderView[]>([]);
   const [binder, setBinder] = useState<BinderVersionPages | null>(null);
   const [page, setPage] = useState(0);
@@ -685,6 +685,15 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
   const searchController = useRef<AbortController | null>(null);
   const [legacyQuery, setLegacyQuery] = useState('');
   const [legacyResults, setLegacyResults] = useState<CatalogueCardView[]>([]);
+  const mounted = useRef(false);
+  const navigation = useRef(0);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const loadedVersion = useRef<string | null>(null);
   const pageRequest = useRef<AbortController | null>(null);
   const lastHash = useRef<string | null>(null);
   const scrollRestoredPocket = useRef(false);
@@ -707,8 +716,25 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
       reserved: slots.filter((slot) => slot.entryKind === 'reserved').length,
     };
   }, [currentPage]);
+  function resetBinderDrafts(): void {
+    setMoveSource(null);
+    setReservation('');
+    setPageReservation('');
+    setOffset('1');
+    setResize('');
+    setLegacyQuery('');
+    setLegacyResults([]);
+    setReplacement(null);
+    setMutationError(null);
+  }
+  function captureNavigation(): () => boolean {
+    const current = navigation.current;
+    return () => mounted.current && navigation.current === current;
+  }
   async function loadBinders(): Promise<void> {
-    setBinders(await api.binders());
+    if (!mounted.current) return;
+    const items = await api.binders();
+    if (mounted.current) setBinders(items);
   }
   async function load(
     id: string,
@@ -716,6 +742,13 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
     keepSelection: BinderSlotLocation | null = null,
     historyMode: 'push' | 'replace' | 'none' = 'push',
   ): Promise<void> {
+    if (!mounted.current) return;
+    if (historyMode !== 'replace') {
+      navigation.current += 1;
+      resetPanels();
+      setShowCreate(false);
+    }
+    if (loadedVersion.current !== id) resetBinderDrafts();
     pageRequest.current?.abort();
     const controller = new AbortController();
     pageRequest.current = controller;
@@ -757,7 +790,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
           ? api.assignmentCandidates(id, retained, controller.signal)
           : Promise.resolve([]),
       ]);
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || !mounted.current) return;
       setCards(
         (current) => new Map([...current, ...resolved.map((card) => [card.id, card] as const)]),
       );
@@ -767,6 +800,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
           retained ?? (first ? { page: next, row: first.row, column: first.column } : null);
         scrollRestoredPocket.current = pendingPocketFocus.current !== null;
       }
+      loadedVersion.current = id;
       setBinder(data);
       setSummary(nextSummary);
       setPage(next);
@@ -781,10 +815,16 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
     } catch (error) {
       if (!controller.signal.aborted) onNotice({ kind: 'error', message: userMessage(error) });
     } finally {
-      if (!controller.signal.aborted) setPending(false);
+      if (!controller.signal.aborted && mounted.current) setPending(false);
     }
   }
   function showLibrary(historyMode: 'push' | 'replace' | 'none' = 'push'): void {
+    if (!mounted.current) return;
+    navigation.current += 1;
+    resetPanels();
+    resetBinderDrafts();
+    loadedVersion.current = null;
+    setShowCreate(false);
     pageRequest.current?.abort();
     candidateController.current?.abort();
     searchController.current?.abort();
@@ -808,6 +848,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
     const openLink = () => {
       if (lastHash.current === location.hash) return;
       lastHash.current = location.hash;
+      navigation.current += 1;
       if (location.hash === '#binders') {
         showLibrary('none');
         return;
@@ -863,7 +904,9 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
     message: string,
     focusAt: BinderSlotLocation | null = selected,
   ): Promise<boolean> {
-    if (!version) return false;
+    if (!version || !mounted.current) return false;
+    const startedOn = navigation.current;
+    const stillHere = () => mounted.current && navigation.current === startedOn;
     const editorControl =
       document.activeElement instanceof HTMLElement &&
       document.activeElement.closest('.pocket-editor-popup')
@@ -873,6 +916,10 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
     setMutationError(null);
     try {
       const result = await action();
+      if (!stillHere()) {
+        onNotice({ kind: 'success', message });
+        return true;
+      }
       pendingPocketFocus.current = editorControl ? null : (result.anchor ?? focusAt);
       await load(
         result.version.id,
@@ -880,6 +927,10 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
         result.anchor ?? focusAt,
         'replace',
       );
+      if (!stillHere()) {
+        onNotice({ kind: 'success', message });
+        return true;
+      }
       if (editorControl)
         requestAnimationFrame(() => {
           if (editorControl.isConnected && !editorControl.matches(':disabled'))
@@ -889,6 +940,10 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
       onNotice({ kind: 'success', message });
       return true;
     } catch (error) {
+      if (!stillHere()) {
+        onNotice({ kind: 'error', message: userMessage(error) });
+        return false;
+      }
       pendingPocketFocus.current = null;
       setMutationError(userMessage(error));
       if (error instanceof ApiError && error.code === 'binder_capacity_exceeded') {
@@ -903,7 +958,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
       onNotice({ kind: 'error', message: userMessage(error) });
       return false;
     } finally {
-      setPending(false);
+      if (stillHere()) setPending(false);
     }
   }
   async function select(at: BinderSlotLocation): Promise<void> {
@@ -1093,6 +1148,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
     capacity,
     counts,
     loadBinders,
+    captureNavigation,
     showLibrary,
     load,
     mutate,
@@ -1108,6 +1164,20 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
 }
 
 export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void }): ReactElement {
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteName, setDeleteName] = useState('');
+  const [tool, setTool] = useState<PocketTool | null>(null);
+  const [managementOpen, setManagementOpen] = useState(false);
+  const [insertOpen, setInsertOpen] = useState(false);
+  const [insertAt, setInsertAt] = useState<BinderSlotLocation | null>(null);
+  const resetPanels = useCallback(() => {
+    setTool(null);
+    setManagementOpen(false);
+    setInsertOpen(false);
+    setInsertAt(null);
+    setDeleteOpen(false);
+    setDeleteName('');
+  }, []);
   const {
     binders,
     binder,
@@ -1149,6 +1219,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     capacity,
     counts,
     loadBinders,
+    captureNavigation,
     showLibrary,
     load,
     mutate,
@@ -1160,17 +1231,8 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     moveOrSwap,
     reorderCurrentPage,
     insert,
-  } = useBinderPlanner(onNotice);
-  const [deleteOpen, setDeleteOpen] = useState(false);
-  const [deleteName, setDeleteName] = useState('');
+  } = useBinderPlanner(onNotice, resetPanels);
   const currentBinder = binders.find((item) => item.id === version?.binderId);
-  const [tool, setTool] = useState<PocketTool | null>(null);
-  const [managementOpen, setManagementOpen] = useState(
-    () =>
-      new URLSearchParams((globalThis.location?.hash ?? '').split('?')[1]).get('manage') === '1',
-  );
-  const [insertOpen, setInsertOpen] = useState(false);
-  const [insertAt, setInsertAt] = useState<BinderSlotLocation | null>(null);
   if (!binder)
     return (
       <>
@@ -1216,16 +1278,21 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
           <Create
             pending={pending}
             create={(name, layout, total) => {
+              const stillHere = captureNavigation();
               setPending(true);
               void api
                 .createBinder(name, layout, total)
                 .then(async (created) => {
                   await loadBinders();
-                  await load(created.version.id, 0);
-                  setShowCreate(false);
+                  if (stillHere()) {
+                    setShowCreate(false);
+                    await load(created.version.id, 0);
+                  }
                 })
                 .catch((error: unknown) => onNotice({ kind: 'error', message: userMessage(error) }))
-                .finally(() => setPending(false));
+                .finally(() => {
+                  if (stillHere()) setPending(false);
+                });
             }}
           />
         ) : null}
@@ -1285,13 +1352,12 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
             onSubmit={(event) => {
               event.preventDefault();
               if (pending || deleteName !== currentBinder.name) return;
+              const stillHere = captureNavigation();
               setPending(true);
               void api
                 .deleteBinder(currentBinder.id, deleteName)
                 .then(async () => {
-                  showLibrary('replace');
-                  setDeleteOpen(false);
-                  setDeleteName('');
+                  if (stillHere()) showLibrary('replace');
                   await loadBinders();
                   onNotice({
                     kind: 'success',
@@ -1299,7 +1365,9 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
                   });
                 })
                 .catch((error: unknown) => onNotice({ kind: 'error', message: userMessage(error) }))
-                .finally(() => setPending(false));
+                .finally(() => {
+                  if (stillHere()) setPending(false);
+                });
             }}
           >
             <label>
@@ -1413,6 +1481,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
       ) : null}
       <BinderUsage summary={summary} counts={counts} capacity={capacity} />
       <BinderPageToolbar
+        key={version?.id}
         onInsert={() => {
           setTool(null);
           setManagementOpen(false);
@@ -1472,6 +1541,8 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
           }}
           onTool={(nextTool) => {
             if (nextTool === 'insert') {
+              setTool(null);
+              setManagementOpen(false);
               setInsertAt(selected);
               setInsertOpen(true);
               return;
@@ -1576,6 +1647,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
                       Reservation label (optional)
                       <input
                         value={reservation}
+                        disabled={pending || selectedSlot?.entryKind === 'reserved'}
                         maxLength={120}
                         onChange={(event) => setReservation(event.target.value)}
                       />
@@ -1583,10 +1655,10 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
                     <button
                       className="quiet-button tone-accent"
                       type="button"
-                      disabled={pending}
+                      disabled={pending || selectedSlot?.entryKind === 'reserved'}
                       onClick={insert}
                     >
-                      Reserve sleeve
+                      Reserve this sleeve
                     </button>
                   </>
                 ) : null}

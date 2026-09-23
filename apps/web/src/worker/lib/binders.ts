@@ -533,6 +533,7 @@ export async function getBinderInsertDestinations(
     revision: version.revision,
     capacity: version.capacity,
     requiredCapacity,
+    maxCapacity: MAX_BINDER_PAGES * pageSize,
     matches,
     matchCount,
     appendAt: append ? at(append) : null,

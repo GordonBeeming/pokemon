@@ -630,6 +630,30 @@ describe('binder D1 domain', () => {
     ).rejects.toMatchObject({ code: 'card_not_found' });
   });
 
+  it('reports the binder growth ceiling when its final page is full', async () => {
+    const { db } = setup();
+    const created = await createBinder(
+      db,
+      'owner',
+      'Maximum',
+      { kind: '2x2', rows: 2, columns: 2 },
+      1200,
+    );
+    await setBinderSlot(
+      db,
+      'owner',
+      created.version.id,
+      299,
+      1,
+      1,
+      'bulba',
+      created.version.revision,
+    );
+    expect(await getBinderInsertDestinations(db, 'owner', created.version.id, 'ivy')).toMatchObject(
+      { appendAt: null, capacity: 1200, requiredCapacity: 1201, maxCapacity: 1200 },
+    );
+  });
+
   it('requires trailing capacity even when earlier sleeves are empty, including a reserved partial final page', async () => {
     const { db } = setup();
     const fullTail = await createBinder(

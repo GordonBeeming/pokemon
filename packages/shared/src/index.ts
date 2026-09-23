@@ -332,6 +332,7 @@ export const binderInsertDestinationsSchema = z
     revision: z.number().int().positive(),
     capacity: z.number().int().positive(),
     requiredCapacity: z.number().int().positive(),
+    maxCapacity: z.number().int().positive(),
     matches: z
       .array(
         binderSlotLocationSchema.extend({

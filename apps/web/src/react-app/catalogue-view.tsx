@@ -423,6 +423,11 @@ function DetailPanel({
                         Add at end — page {binderPlacement.appendAt.page + 1}, pocket{' '}
                         {binderPlacement.appendAt.row + 1}:{binderPlacement.appendAt.column + 1}
                       </button>
+                    ) : binderPlacement.requiredCapacity > binderPlacement.maxCapacity ? (
+                      <p>
+                        This binder has reached its {binderPlacement.maxCapacity}-pocket limit.
+                        Choose another binder or an existing empty sleeve.
+                      </p>
                     ) : (
                       <p>
                         No room at the end. Grow the binder to {binderPlacement.requiredCapacity}{' '}

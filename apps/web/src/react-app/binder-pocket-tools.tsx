@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from 'react';
 import type { BinderSlotLocation } from '@pokedex/shared';
 
 export type PocketTool = 'same' | 'any' | 'shift' | 'remove' | 'placement' | 'insert' | 'reserve';
@@ -39,7 +46,7 @@ export function PocketTools({
 }): ReactElement {
   const rail = useRef<HTMLDivElement | null>(null);
   const [left, setLeft] = useState<number | undefined>(undefined);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const update = () => {
       const element = rail.current;
       if (!element || !element.parentElement) return;
@@ -115,7 +122,7 @@ export function PocketPanel({
   useEffect(() => {
     close.current = onClose;
   }, [onClose]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const update = () => {
       const element = panel.current;
       if (!element) return;
@@ -135,7 +142,7 @@ export function PocketPanel({
       const top =
         modal || !rect
           ? Math.min(64, window.innerHeight * 0.08)
-          : Math.max(16, Math.min(rect.top, window.innerHeight - 240));
+          : Math.max(16, Math.min(rect.top, window.innerHeight - 520));
       setPosition((current) =>
         current.left === left && current.top === top && current.modal === modal
           ? current

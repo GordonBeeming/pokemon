@@ -219,6 +219,24 @@ beforeAll(async () => {
 });
 
 describe('browser and desktop route parity', () => {
+  it.each(['browser', 'desktop'] as const)(
+    'reports invalid_query for malformed destination parameters on %s',
+    async (authorization) => {
+      const route: SharedRoute = {
+        method: 'GET',
+        browser: '/binders/versions/version-1/destinations?cardId=',
+        desktop: '/desktop/binders/versions/version-1/destinations?cardId=',
+      };
+      const response = await apiRoutes.request(
+        route[authorization],
+        requestInit(route, authorization),
+        env,
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: 'invalid_query' });
+    },
+  );
+
   it.each(sharedRoutes)(
     'registers $method $browser and $desktop with their expected authorization boundary',
     async (route) => {

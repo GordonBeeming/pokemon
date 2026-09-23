@@ -34,6 +34,7 @@ export function BinderInsertDialog({
   const [resultOffset, setResultOffset] = useState(0);
   const [selected, setSelected] = useState<Map<string, BinderEntry>>(new Map());
   const [destinations, setDestinations] = useState<BinderInsertDestinations | null>(null);
+  const [destinationError, setDestinationError] = useState(false);
   const [pending, setPending] = useState(false);
   const [searched, setSearched] = useState(false);
   const [message, setMessage] = useState('');
@@ -41,13 +42,18 @@ export function BinderInsertDialog({
   useEffect(() => {
     const controller = new AbortController();
     setDestinations(null);
+    setDestinationError(false);
     void api
       .binderDestinations(versionId, undefined, controller.signal)
       .then((result) => {
         if (!controller.signal.aborted) setDestinations(result);
       })
       .catch((error: unknown) => {
-        if (!controller.signal.aborted) onNotice({ kind: 'error', message: userMessage(error) });
+        if (!controller.signal.aborted) {
+          setDestinationError(true);
+          setMessage(userMessage(error));
+          onNotice({ kind: 'error', message: userMessage(error) });
+        }
       });
     return () => controller.abort();
   }, [versionId, revision, onNotice]);
@@ -84,7 +90,7 @@ export function BinderInsertDialog({
       setResultOffset(offset);
       setTotal(first.total);
       setSearched(true);
-      setCards(first.cards);
+      setCards(all ? first.cards.slice(0, 24) : first.cards);
       if (all) {
         if (first.total > 1025) {
           setMessage('Narrow the search to 1,025 cards or fewer before selecting all results.');
@@ -101,8 +107,10 @@ export function BinderInsertDialog({
             !next.cards.length ||
             next.cursor === cursor ||
             found.length + next.cards.length > 1025
-          )
-            throw new Error('Catalogue search changed. Search again.');
+          ) {
+            if (!controller.signal.aborted) setMessage('Catalogue search changed. Search again.');
+            return;
+          }
           found.push(...next.cards);
           cursor = next.cursor;
         }
@@ -117,7 +125,10 @@ export function BinderInsertDialog({
           );
       }
     } catch (error) {
-      if (!controller.signal.aborted) onNotice({ kind: 'error', message: userMessage(error) });
+      if (!controller.signal.aborted) {
+        setMessage(userMessage(error));
+        onNotice({ kind: 'error', message: userMessage(error) });
+      }
     } finally {
       if (!controller.signal.aborted) setPending(false);
     }
@@ -162,8 +173,12 @@ export function BinderInsertDialog({
           : destinations?.appendAt
             ? `Append at page ${destinations.appendAt.page + 1}, pocket ${destinations.appendAt.row + 1}:${destinations.appendAt.column + 1}.`
             : destinations
-              ? `No room at the end. Grow the binder to at least ${destinations.requiredCapacity} pockets in Manage binder.`
-              : 'Finding space at the end of the binder…'}
+              ? destinations.requiredCapacity > destinations.maxCapacity
+                ? `This binder has reached its ${destinations.maxCapacity}-pocket limit. Choose an existing empty sleeve or another binder.`
+                : `No room at the end. Grow the binder to at least ${destinations.requiredCapacity} pockets in Manage binder.`
+              : destinationError
+                ? 'Could not load the insertion position. Close and reopen this tool to retry.'
+                : 'Finding space at the end of the binder…'}
       </p>
       <div className="binder-header-actions" aria-label="Target type">
         {(['pokemon', 'exact-card'] as const).map((value) => (

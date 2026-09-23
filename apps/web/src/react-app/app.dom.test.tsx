@@ -188,6 +188,7 @@ describe('async frontend announcements', () => {
     apiMocks.assignmentCandidates.mockResolvedValue([]);
     apiMocks.binderDestinations.mockResolvedValue({
       versionId: 'version-1',
+      maxCapacity: 3600,
       revision: 1,
       capacity: 9,
       requiredCapacity: 9,
@@ -459,6 +460,7 @@ describe('async frontend announcements', () => {
       apiMocks.binders.mockResolvedValue([testBinder]);
       apiMocks.binderDestinations.mockResolvedValue({
         versionId: 'version-1',
+        maxCapacity: 3600,
         revision: 5,
         capacity: 1440,
         requiredCapacity: 1440,
@@ -710,6 +712,325 @@ describe('async frontend announcements', () => {
       vi.useRealTimers();
     }
   });
+
+  it.each(['management', 'insert', 'delete'] as const)(
+    'resets %s state when browser navigation returns to the library',
+    async (panel) => {
+      const first = binderFixture([
+        { pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'empty' },
+      ]);
+      const second = {
+        ...first.response,
+        version: { ...first.version, id: 'version-2', binderId: 'binder-2' },
+      };
+      apiMocks.binders.mockResolvedValue([
+        testBinder,
+        {
+          ...testBinder,
+          id: 'binder-2',
+          name: 'Second',
+          activeVersionId: 'version-2',
+          latestVersionId: 'version-2',
+        },
+      ]);
+      apiMocks.binder.mockImplementation((id: string) =>
+        Promise.resolve(id === 'version-1' ? first.response : second),
+      );
+      await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+      await waitFor(() => container.querySelector('.binder-library-card') !== null);
+      await actAndSettle(() =>
+        container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+      );
+      await waitFor(() => container.querySelector('.binder-slot') !== null);
+      if (panel === 'management') await manage();
+      else if (panel === 'insert') {
+        await actAndSettle(() =>
+          container.querySelector<HTMLButtonElement>('.binder-slot')?.click(),
+        );
+        await clickButton('Insert targets here');
+      } else await clickButton('Delete binder');
+      await actAndSettle(() => {
+        history.pushState(null, '', '#binders');
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      await waitFor(() => container.querySelectorAll('.binder-library-card').length === 2);
+      await actAndSettle(() =>
+        container.querySelectorAll<HTMLButtonElement>('.binder-library-card')[1]?.click(),
+      );
+      await waitFor(() => container.querySelector('.binder-slot') !== null);
+      expect(container.querySelector('[role=dialog]')).toBeNull();
+      expect(container.querySelector('.binder-delete-confirmation')).toBeNull();
+    },
+  );
+
+  it('keeps exact-card search pages at 24 results after selecting all matches', async () => {
+    const fixture = binderFixture([
+      { pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'empty' },
+    ]);
+    const cards = Array.from({ length: 120 }, (_, index) => ({
+      id: `card-${index}`,
+      name: `Result ${index}`,
+      language: 'en',
+      category: 'pokemon',
+      setId: 'qa',
+      setName: 'QA',
+      number: String(index),
+      imageLowUrl: null,
+      imageHighUrl: null,
+      collection: null,
+      price: {
+        amountAud: null,
+        nativeAmount: null,
+        nativeCurrency: null,
+        source: null,
+        sourceCapturedAt: null,
+        fxDate: null,
+      },
+    }));
+    apiMocks.binders.mockResolvedValue([testBinder]);
+    apiMocks.binder.mockResolvedValue(fixture.response);
+    apiMocks.search
+      .mockResolvedValueOnce({ cards: cards.slice(0, 24), total: 120, cursor: '24' })
+      .mockResolvedValueOnce({ cards: cards.slice(0, 100), total: 120, cursor: '100' })
+      .mockResolvedValueOnce({ cards: cards.slice(100), total: 120, cursor: null })
+      .mockResolvedValueOnce({ cards: cards.slice(24, 48), total: 120, cursor: '48' });
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await waitFor(() => container.querySelector('.binder-slot') !== null);
+    await clickButton('Insert targets');
+    await clickButton('Exact cards');
+    await clickButton('Search cards');
+    await clickButton('Select all 120 matches');
+    expect(container.querySelectorAll('.binder-insert-results button')).toHaveLength(24);
+    expect(container.textContent).toContain('120 targets selected.');
+    await clickButton('Next results');
+    expect(container.querySelector('.binder-insert-results button')?.textContent).toContain(
+      'Result 24',
+    );
+    expect(container.querySelectorAll('.binder-insert-results button')).toHaveLength(24);
+  });
+
+  it('opens only the insert dialog when switching from a sleeve tool', async () => {
+    const fixture = binderFixture([
+      { pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'empty' },
+    ]);
+    apiMocks.binders.mockResolvedValue([testBinder]);
+    apiMocks.binder.mockResolvedValue(fixture.response);
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await waitFor(() => container.querySelector('.binder-slot') !== null);
+    await actAndSettle(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
+    await clickButton('Reserve sleeve');
+    expect(container.querySelectorAll('[role=dialog]')).toHaveLength(1);
+    await clickButton('Insert targets here');
+    expect(container.querySelectorAll('[role=dialog]')).toHaveLength(1);
+    expect(container.querySelector('[role=dialog]')?.getAttribute('aria-label')).toBe(
+      'Insert targets',
+    );
+  });
+
+  it('resets an unsubmitted page-number draft on a direct link to another binder', async () => {
+    const first = binderFixture(
+      [{ pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'empty' }],
+      { pageCount: 120, capacity: 1440 },
+    );
+    const second = {
+      ...first.response,
+      version: { ...first.version, id: 'version-2', binderId: 'binder-2' },
+    };
+    apiMocks.binders.mockResolvedValue([
+      testBinder,
+      { ...testBinder, id: 'binder-2', name: 'Second', activeVersionId: 'version-2' },
+    ]);
+    apiMocks.binder.mockImplementation((id: string) =>
+      Promise.resolve(id === 'version-1' ? first.response : second),
+    );
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await waitFor(() => container.querySelector('.binder-slot') !== null);
+    const input = container.querySelector<HTMLInputElement>('[aria-label="Go to page"]');
+    if (!input) throw new Error('Missing page field');
+    await actAndSettle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '45');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await actAndSettle(() => {
+      history.pushState(null, '', '#binders?version=version-2&page=1');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await waitFor(() => container.querySelector('h1')?.textContent === 'Second');
+    expect(container.querySelector<HTMLInputElement>('[aria-label="Go to page"]')?.value).toBe('1');
+  });
+
+  it('does not carry a picked-up card into a different binder', async () => {
+    const first = binderFixture([
+      { pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'pokemon', pokemonNumber: 1 },
+    ]);
+    const second = {
+      ...first.response,
+      version: { ...first.version, id: 'version-2', binderId: 'binder-2' },
+      pages: [
+        {
+          ...first.pages[0],
+          slots: [
+            {
+              pageId: 'page-1',
+              row: 0,
+              column: 0,
+              cardId: null,
+              entryKind: 'pokemon',
+              pokemonNumber: 2,
+            },
+            {
+              pageId: 'page-1',
+              row: 0,
+              column: 1,
+              cardId: null,
+              entryKind: 'pokemon',
+              pokemonNumber: 3,
+            },
+          ],
+        },
+      ],
+    };
+    apiMocks.binders.mockResolvedValue([
+      testBinder,
+      { ...testBinder, id: 'binder-2', name: 'Second', activeVersionId: 'version-2' },
+    ]);
+    apiMocks.binder.mockImplementation((id: string) =>
+      Promise.resolve(id === 'version-1' ? first.response : second),
+    );
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await waitFor(() => container.querySelector('.binder-slot') !== null);
+    await actAndSettle(() =>
+      container
+        .querySelector('.binder-slot')
+        ?.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true })),
+    );
+    await actAndSettle(() => {
+      history.pushState(null, '', '#binders');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await waitFor(() => container.querySelectorAll('.binder-library-card').length === 2);
+    await actAndSettle(() =>
+      container.querySelectorAll<HTMLButtonElement>('.binder-library-card')[1]?.click(),
+    );
+    await waitFor(() => container.querySelectorAll('.binder-slot').length === 2);
+    await actAndSettle(() =>
+      container.querySelectorAll<HTMLButtonElement>('.binder-slot')[1]?.click(),
+    );
+    expect(apiMocks.swapSlots).not.toHaveBeenCalled();
+    expect(container.querySelectorAll('.binder-slot')[1]?.getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+  });
+
+  it.each(['create', 'delete'] as const)(
+    'does not rewrite the URL after a slow %s finishes on another route',
+    async (operation) => {
+      const fixture = binderFixture([
+        { pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'empty' },
+      ]);
+      const created = deferred<typeof fixture.result>();
+      const deleted = deferred<void>();
+      apiMocks.binders.mockResolvedValue([testBinder]);
+      apiMocks.binder.mockResolvedValue(fixture.response);
+      apiMocks.createBinder.mockReturnValue(created.promise);
+      apiMocks.deleteBinder.mockReturnValue(deleted.promise);
+      await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+      await waitFor(() => container.querySelector('.binder-library-card') !== null);
+      if (operation === 'create') await clickButton('New binder');
+      else {
+        await actAndSettle(() =>
+          container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+        );
+        await waitFor(() => container.querySelector('.binder-slot') !== null);
+        await clickButton('Delete binder');
+      }
+      const input = container.querySelector<HTMLInputElement>(
+        operation === 'create' ? 'input[required]' : '.binder-delete-confirmation input',
+      );
+      if (!input) throw new Error('Missing confirmation input');
+      await actAndSettle(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+          input,
+          operation === 'create' ? 'New binder' : testBinder.name,
+        );
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await clickButton(operation === 'create' ? 'Create binder' : 'Permanently delete binder');
+      await actAndSettle(() => {
+        history.pushState(null, '', '#catalogue');
+        root.render(<p>Another route</p>);
+      });
+      await actAndSettle(() => {
+        if (operation === 'create') created.resolve(fixture.result);
+        else deleted.resolve();
+      });
+      expect(location.hash).toBe('#catalogue');
+      expect(apiMocks.binder).toHaveBeenCalledTimes(operation === 'create' ? 0 : 1);
+    },
+  );
+
+  it.each(['library', 'another route'] as const)(
+    'does not reopen a binder when a slow save finishes after leaving for %s',
+    async (destination) => {
+      const fixture = binderFixture(
+        [
+          {
+            pageId: 'page-1',
+            row: 0,
+            column: 0,
+            cardId: null,
+            entryKind: 'pokemon',
+            pokemonNumber: 7,
+          },
+        ],
+        { capacity: 2 },
+      );
+      const save = deferred<typeof fixture.result>();
+      apiMocks.binders.mockResolvedValue([testBinder]);
+      apiMocks.binder.mockResolvedValue(fixture.response);
+      apiMocks.moveEntry.mockReturnValue(save.promise);
+      await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+      await waitFor(() => container.querySelector('.binder-library-card') !== null);
+      await actAndSettle(() =>
+        container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+      );
+      await waitFor(() => container.querySelector('.binder-slot') !== null);
+      await actAndSettle(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
+      await clickButton('Insert a gap or shift sleeves');
+      await clickButton('Shift targets');
+      if (destination === 'library')
+        await actAndSettle(() => container.querySelector<HTMLButtonElement>('.back-link')?.click());
+      else
+        await actAndSettle(() => {
+          history.pushState(null, '', '#catalogue');
+          root.render(<p>Another route</p>);
+        });
+      await actAndSettle(() => save.resolve(fixture.result));
+      expect(location.hash).toBe(destination === 'library' ? '#binders' : '#catalogue');
+      if (destination === 'library')
+        expect(container.querySelector<HTMLButtonElement>('.binder-library-card')?.disabled).toBe(
+          false,
+        );
+      expect(apiMocks.binder).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('.binder-slot')).toBeNull();
+    },
+  );
 
   it('restores page 45 and the selected pocket from a direct URL under StrictMode', async () => {
     location.hash = '#binders?version=version-1&page=45&row=1&column=1';
@@ -1303,6 +1624,7 @@ describe('async frontend announcements', () => {
     apiMocks.binder.mockResolvedValue(initial.response);
     apiMocks.binderDestinations.mockResolvedValue({
       versionId: 'version-1',
+      maxCapacity: 3600,
       revision: 1,
       capacity: 9,
       requiredCapacity: 10,

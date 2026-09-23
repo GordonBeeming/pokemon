@@ -1048,7 +1048,7 @@ browserApiRoutes.delete('/binders/:id', async (c) => {
 browserApiRoutes.get('/binders/versions/:id/destinations', async (c) => {
   try {
     const parsed = binderDestinationsQuerySchema.safeParse({ cardId: c.req.query('cardId') });
-    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_query' }, 400);
     const destinations = await ownerOperations(c.env, sessionOwner(c)).binderInsertDestinations(
       c.req.param('id'),
       parsed.data.cardId,
