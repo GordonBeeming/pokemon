@@ -800,8 +800,11 @@ function useBinderPlanner(onNotice: (notice: Notice) => void) {
     setPending(true);
     try {
       const result = await action();
-      pendingPocketFocus.current = focusAt;
-      await load(result.version.id, binderMutationPage(result, page).position);
+      pendingPocketFocus.current = result.anchor ?? focusAt;
+      await load(
+        result.version.id,
+        binderMutationPage(result, result.anchor?.page ?? page).position,
+      );
       setStatus(message);
       onNotice({ kind: 'success', message });
       return true;

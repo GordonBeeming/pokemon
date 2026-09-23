@@ -1,6 +1,7 @@
 import {
   cardIdSchema,
   languageSchema,
+  NATIONAL_POKEDEX_SIZE,
   type CatalogueBrief,
   type CatalogueCardView,
   type CatalogueDetailView,
@@ -1061,7 +1062,17 @@ export async function resolveCatalogueCards(
     .all<CardRow>();
   return result.results.map((row) => ({
     ...view(row),
-    ...(includePokemonNumber ? { pokedexNumber: row.pokedex_number } : {}),
+    ...(includePokemonNumber
+      ? {
+          pokedexNumber:
+            row.pokedex_number !== null &&
+            Number.isInteger(row.pokedex_number) &&
+            row.pokedex_number >= 1 &&
+            row.pokedex_number <= NATIONAL_POKEDEX_SIZE
+              ? row.pokedex_number
+              : null,
+        }
+      : {}),
   }));
 }
 

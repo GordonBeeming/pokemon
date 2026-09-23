@@ -28,6 +28,7 @@ import {
   resizeBinderCapacity,
   setBinderEntryAssignment,
   setBinderEntryPageBreak,
+  setBinderSlot,
   swapBinderSlots,
 } from './binders';
 import { setCollectionState } from './collection';
@@ -567,6 +568,110 @@ describe('binder D1 domain', () => {
       added.version.revision,
     );
     expect(removed.version).toMatchObject({ capacity: 12, pageCount: 3 });
+  });
+
+  it('preserves the page break when replacing a target and clears it when leaving a gap', async () => {
+    const { db } = setup();
+    const created = await createBinder(
+      db,
+      'owner',
+      'Replace',
+      { kind: '2x2', rows: 2, columns: 2 },
+      8,
+    );
+    const inserted = await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      [
+        { kind: 'exact-card', cardId: cardIdSchema.parse('bulba'), startsNewPage: true },
+        { kind: 'pokemon', pokemonNumber: 2, startsNewPage: false },
+      ],
+      created.version.revision,
+    );
+    const assigned = await setBinderEntryAssignment(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      'bulba',
+      inserted.version.revision,
+    );
+    const retained = await setBinderSlot(
+      db,
+      'owner',
+      created.version.id,
+      0,
+      0,
+      0,
+      'bulba',
+      assigned.version.revision,
+    );
+    expect(retained.pages[0]?.slots[0]).toMatchObject({
+      cardId: 'bulba',
+      assignedCardId: 'bulba',
+      startsNewPage: true,
+    });
+    const replaced = await setBinderSlot(
+      db,
+      'owner',
+      created.version.id,
+      0,
+      0,
+      0,
+      'ivy',
+      retained.version.revision,
+    );
+    expect(replaced.pages[0]?.slots[0]).toMatchObject({ cardId: 'ivy', startsNewPage: true });
+    expect(replaced.pages[0]?.slots[1]).toMatchObject({ pokemonNumber: 2 });
+    const removed = await setBinderSlot(
+      db,
+      'owner',
+      created.version.id,
+      0,
+      0,
+      0,
+      null,
+      replaced.version.revision,
+    );
+    expect(removed.pages[0]?.slots[0]).toMatchObject({ entryKind: 'empty', startsNewPage: false });
+    expect(removed.pages[0]?.slots[1]).toMatchObject({ pokemonNumber: 2 });
+  });
+
+  it('explains when a backward shift is cancelled by a page break without saving changes', async () => {
+    const { db } = setup();
+    const created = await createBinder(
+      db,
+      'owner',
+      'Break',
+      { kind: '2x2', rows: 2, columns: 2 },
+      8,
+    );
+    const inserted = await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 1, row: 0, column: 0 },
+      [
+        { kind: 'pokemon', pokemonNumber: 1, startsNewPage: true },
+        { kind: 'pokemon', pokemonNumber: 2, startsNewPage: false },
+      ],
+      created.version.revision,
+    );
+    await expect(
+      moveBinderEntryByOffset(
+        db,
+        'owner',
+        created.version.id,
+        { page: 1, row: 0, column: 0 },
+        -1,
+        inserted.version.revision,
+      ),
+    ).rejects.toMatchObject({ code: 'binder_shift_page_break' });
+    expect((await getBinderVersion(db, 'owner', created.version.id)).version.revision).toBe(
+      inserted.version.revision,
+    );
   });
 
   it('deletes only the confirmed owner binder and preserves collection cards and other binders', async () => {

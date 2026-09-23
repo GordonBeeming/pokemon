@@ -33,6 +33,15 @@ describe('catalogue cloud invariants', () => {
     expect(legacy[0]).not.toHaveProperty('pokedexNumber');
     const current = await resolveCatalogueCards(db, 'owner', ['bulba'], true);
     expect(current[0]).toMatchObject({ id: 'bulba', pokedexNumber: 1 });
+    for (const invalid of [0, 1026, 1.5, null]) {
+      database
+        .prepare('UPDATE catalogue_cards SET pokedex_number = ? WHERE id = ?')
+        .run(invalid, 'bulba');
+      expect((await resolveCatalogueCards(db, 'owner', ['bulba'], true))[0]).toMatchObject({
+        id: 'bulba',
+        pokedexNumber: null,
+      });
+    }
   });
 
   it('defaults scheduled catalogue refreshes to the English collection', () => {

@@ -41,6 +41,8 @@ function NavIcon({ route }: { route: Route }): ReactElement {
 }
 
 const errorMessages: Record<string, string> = {
+  binder_shift_page_break:
+    'The page break keeps these targets in place. Remove the page break or shift by a whole page.',
   binder_not_found:
     'This binder is no longer available or its name changed. Reopen the binder and try again.',
   binder_shift_occupied: 'The sleeves before this target must be empty to shift backward.',

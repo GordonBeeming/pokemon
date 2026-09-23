@@ -145,6 +145,7 @@ export type BinderErrorCode =
   | 'binder_capacity_invalid'
   | 'binder_shrink_occupied'
   | 'binder_shift_occupied'
+  | 'binder_shift_page_break'
   | 'binder_assignment_incompatible'
   | 'binder_assignment_quantity_exceeded'
   | 'binder_reserved_page_not_empty'
@@ -1144,7 +1145,8 @@ export async function setBinderSlot(
       .prepare(
         `UPDATE binder_slots SET card_id = ?1,
           entry_kind = CASE WHEN ?1 IS NULL THEN 'empty' ELSE 'exact-card' END,
-          label = NULL, pokemon_number = NULL, assigned_card_id = NULL, starts_new_page = 0
+          label = NULL, pokemon_number = NULL,
+          assigned_card_id = CASE WHEN assigned_card_id = ?1 THEN assigned_card_id ELSE NULL END, starts_new_page = CASE WHEN ?1 IS NULL THEN 0 ELSE starts_new_page END
          WHERE binder_page_id = ?2 AND row_index = ?3 AND column_index = ?4`,
       )
       .bind(cardId, page.id, row, column),
@@ -1762,6 +1764,8 @@ export async function moveBinderEntryByOffset(
       pageIncrement: pageSize,
     });
   }
+  if (shifted.every((item, index) => item === physical[index]))
+    domainError('binder_shift_page_break');
   await runVersionBatch(db, ownerId, versionId, version.revision, false, [
     ...rewriteSlotsStatements(db, slots, shifted),
     ...revisionStatements(db, version, nowSeconds()),

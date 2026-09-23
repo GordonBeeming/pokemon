@@ -42,6 +42,7 @@ const apiMocks = vi.hoisted(() => ({
   deletePage: vi.fn(),
   arrangeBinder: vi.fn(),
   createBinder: vi.fn(),
+  deleteBinder: vi.fn(),
   setCollection: vi.fn(),
   patchCollectionNotes: vi.fn(),
   startCatalogueSync: vi.fn(),
@@ -939,6 +940,55 @@ describe('async frontend announcements', () => {
     },
   );
 
+  it('guards binder deletion, preserves a failed confirmation, and refreshes the library after success', async () => {
+    const initial = binderFixture([
+      { pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'empty' },
+    ]);
+    apiMocks.binders.mockResolvedValueOnce([testBinder]).mockResolvedValue([]);
+    apiMocks.binder.mockResolvedValue(initial.response);
+    apiMocks.deleteBinder
+      .mockRejectedValueOnce(new ApiError('internal_error', 'Failed', 500, null, null))
+      .mockResolvedValueOnce(undefined);
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await waitFor(() => container.querySelector('.binder-slot') !== null);
+    const button = (text: string) =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+        (item) => item.textContent === text,
+      );
+    await actAndSettle(() => button('Delete binder')?.click());
+    expect(button('Permanently delete binder')?.disabled).toBe(true);
+    await actAndSettle(() => button('Cancel deletion')?.click());
+    expect(apiMocks.deleteBinder).not.toHaveBeenCalled();
+    await actAndSettle(() => button('Delete binder')?.click());
+    const confirmation = container.querySelector<HTMLInputElement>(
+      '.binder-delete-confirmation input',
+    );
+    if (!confirmation) throw new Error('Missing delete confirmation');
+    const fill = async (value: string) =>
+      actAndSettle(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+          confirmation,
+          value,
+        );
+        confirmation.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    await fill('Wrong name');
+    expect(button('Permanently delete binder')?.disabled).toBe(true);
+    await fill(testBinder.name);
+    await actAndSettle(() => button('Permanently delete binder')?.click());
+    expect(confirmation.value).toBe(testBinder.name);
+    expect(container.querySelector('.binder-delete-confirmation')).not.toBeNull();
+    await actAndSettle(() => button('Permanently delete binder')?.click());
+    await waitFor(() => container.textContent?.includes('Your binders.') === true);
+    expect(apiMocks.deleteBinder).toHaveBeenLastCalledWith(testBinder.id, testBinder.name);
+    expect(apiMocks.binders).toHaveBeenCalledTimes(2);
+    expect(container.querySelector('.binder-library-card')).toBeNull();
+  });
+
   it('preserves a failed reservation label then clears it after a successful retry', async () => {
     const initial = binderFixture([
       { pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'empty' },
@@ -1616,6 +1666,49 @@ describe('async frontend announcements', () => {
       -1,
       2,
     );
+  });
+
+  it('loads and focuses the shifted target on its destination page', async () => {
+    const target = {
+      pageId: 'page-1',
+      row: 0,
+      column: 0,
+      cardId: null,
+      entryKind: 'pokemon' as const,
+      pokemonNumber: 1,
+    };
+    const initial = binderFixture([target], { columns: 1, capacity: 2, pageCount: 2 });
+    const version = { ...initial.version, revision: 2 };
+    const destination = {
+      ...initial.pages[0],
+      id: 'page-2',
+      position: 1,
+      slots: [{ ...target, pageId: 'page-2' }],
+    };
+    apiMocks.binders.mockResolvedValue([testBinder]);
+    apiMocks.binder
+      .mockResolvedValueOnce(initial.response)
+      .mockResolvedValue({ version, pages: [destination], nextPage: null });
+    apiMocks.assignmentCandidates.mockResolvedValue([]);
+    apiMocks.moveEntry.mockResolvedValue({
+      version,
+      pages: [destination],
+      anchor: { page: 1, row: 0, column: 0 },
+    });
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await waitFor(() => container.querySelector('.binder-slot') !== null);
+    await actAndSettle(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
+    await actAndSettle(() =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find((button) => button.textContent === 'Shift targets')
+        ?.click(),
+    );
+    await waitFor(() => document.activeElement?.getAttribute('data-binder-slot') === '1-0-0');
+    expect(apiMocks.binder).toHaveBeenLastCalledWith('version-1', 1, 1);
   });
 
   it('wires page reorder, arrangement, reservation, unreservation, and deletion', async () => {

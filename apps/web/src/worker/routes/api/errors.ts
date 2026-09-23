@@ -26,6 +26,7 @@ const binderStatuses = {
   binder_capacity_invalid: 400,
   binder_shrink_occupied: 409,
   binder_shift_occupied: 409,
+  binder_shift_page_break: 409,
   binder_assignment_incompatible: 409,
   binder_assignment_quantity_exceeded: 409,
   binder_reserved_page_not_empty: 409,
