@@ -1032,6 +1032,121 @@ describe('async frontend announcements', () => {
     },
   );
 
+  it('preserves a new shift draft when an earlier page save finishes', async () => {
+    const fixture = binderFixture(
+      [
+        {
+          pageId: 'page-1',
+          row: 0,
+          column: 0,
+          cardId: null,
+          entryKind: 'pokemon',
+          pokemonNumber: 7,
+        },
+      ],
+      { capacity: 12, pageCount: 2 },
+    );
+    const save = deferred<typeof fixture.result>();
+    apiMocks.binders.mockResolvedValue([testBinder]);
+    apiMocks.binder.mockImplementation((_id: string, page: number) =>
+      Promise.resolve({
+        ...fixture.response,
+        pages: [{ ...fixture.pages[0], position: page }],
+      }),
+    );
+    apiMocks.moveEntry.mockReturnValue(save.promise);
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await waitFor(() => container.querySelector('.binder-slot') !== null);
+    await actAndSettle(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
+    await clickButton('Insert a gap or shift sleeves');
+    await clickButton('Shift targets');
+    await actAndSettle(() => {
+      history.pushState(null, '', '#binders?version=version-1&page=2');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    await waitFor(() => container.querySelector('[data-binder-slot="1-0-0"]') !== null);
+    await actAndSettle(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
+    await clickButton('Insert a gap or shift sleeves');
+    const input = container.querySelector<HTMLInputElement>(
+      '.pocket-action-group:not([hidden]) input[type="number"]',
+    );
+    if (!input) throw new Error('Missing shift input');
+    await actAndSettle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, '5');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await actAndSettle(() => save.resolve(fixture.result));
+    expect(input.value).toBe('5');
+    expect(location.hash).toContain('page=2');
+  });
+
+  it.each(['same binder', 'different binder'] as const)(
+    'handles a completed deletion after navigating within %s',
+    async (destination) => {
+      const fixture = binderFixture(
+        [{ pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'empty' }],
+        { capacity: 12, pageCount: 2 },
+      );
+      const deleted = deferred<void>();
+      const second = {
+        ...testBinder,
+        id: 'binder-2',
+        name: 'Second',
+        activeVersionId: 'version-2',
+        latestVersionId: 'version-2',
+      };
+      apiMocks.binders.mockResolvedValue([testBinder, second]);
+      apiMocks.binder.mockImplementation((id: string, page: number) =>
+        Promise.resolve({
+          ...fixture.response,
+          version: {
+            ...fixture.version,
+            id,
+            binderId: id === 'version-2' ? 'binder-2' : 'binder-1',
+          },
+          pages: [{ ...fixture.pages[0], position: page }],
+        }),
+      );
+      apiMocks.deleteBinder.mockReturnValue(deleted.promise);
+      await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+      await waitFor(() => container.querySelector('.binder-library-card') !== null);
+      await actAndSettle(() =>
+        container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+      );
+      await waitFor(() => container.querySelector('.binder-slot') !== null);
+      await clickButton('Delete binder');
+      const input = container.querySelector<HTMLInputElement>('.binder-delete-confirmation input');
+      if (!input) throw new Error('Missing confirmation input');
+      await actAndSettle(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+          input,
+          testBinder.name,
+        );
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await clickButton('Permanently delete binder');
+      const hash =
+        destination === 'same binder'
+          ? '#binders?version=version-1&page=2'
+          : '#binders?version=version-2&page=2';
+      await actAndSettle(() => {
+        history.pushState(null, '', hash);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      await waitFor(() => container.querySelector('[data-binder-slot="1-0-0"]') !== null);
+      apiMocks.binders.mockResolvedValue([second]);
+      await actAndSettle(() => deleted.resolve());
+      expect(location.hash).toBe(destination === 'same binder' ? '#binders' : hash);
+      expect(container.querySelector('.binder-slot') !== null).toBe(
+        destination === 'different binder',
+      );
+    },
+  );
+
   it('restores page 45 and the selected pocket from a direct URL under StrictMode', async () => {
     location.hash = '#binders?version=version-1&page=45&row=1&column=1';
     const fixture = binderFixture(

@@ -694,6 +694,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
     };
   }, []);
   const loadedVersion = useRef<string | null>(null);
+  const loadedBinder = useRef<string | null>(null);
   const pageRequest = useRef<AbortController | null>(null);
   const lastHash = useRef<string | null>(null);
   const scrollRestoredPocket = useRef(false);
@@ -801,6 +802,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
         scrollRestoredPocket.current = pendingPocketFocus.current !== null;
       }
       loadedVersion.current = id;
+      loadedBinder.current = data.version.binderId;
       setBinder(data);
       setSummary(nextSummary);
       setPage(next);
@@ -818,12 +820,22 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
       if (!controller.signal.aborted && mounted.current) setPending(false);
     }
   }
+  function dismissDeletedBinder(id: string): void {
+    const route = parseBinderHash(location.hash);
+    if (
+      mounted.current &&
+      loadedBinder.current === id &&
+      route?.versionId === loadedVersion.current
+    )
+      showLibrary('replace');
+  }
   function showLibrary(historyMode: 'push' | 'replace' | 'none' = 'push'): void {
     if (!mounted.current) return;
     navigation.current += 1;
     resetPanels();
     resetBinderDrafts();
     loadedVersion.current = null;
+    loadedBinder.current = null;
     setShowCreate(false);
     pageRequest.current?.abort();
     candidateController.current?.abort();
@@ -918,7 +930,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
       const result = await action();
       if (!stillHere()) {
         onNotice({ kind: 'success', message });
-        return true;
+        return false;
       }
       pendingPocketFocus.current = editorControl ? null : (result.anchor ?? focusAt);
       await load(
@@ -929,7 +941,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
       );
       if (!stillHere()) {
         onNotice({ kind: 'success', message });
-        return true;
+        return false;
       }
       if (editorControl)
         requestAnimationFrame(() => {
@@ -1149,6 +1161,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
     counts,
     loadBinders,
     captureNavigation,
+    dismissDeletedBinder,
     showLibrary,
     load,
     mutate,
@@ -1220,6 +1233,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     counts,
     loadBinders,
     captureNavigation,
+    dismissDeletedBinder,
     showLibrary,
     load,
     mutate,
@@ -1357,7 +1371,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
               void api
                 .deleteBinder(currentBinder.id, deleteName)
                 .then(async () => {
-                  if (stillHere()) showLibrary('replace');
+                  dismissDeletedBinder(currentBinder.id);
                   await loadBinders();
                   onNotice({
                     kind: 'success',
