@@ -351,7 +351,7 @@ export const api = {
     request(`/api/catalogue/search?${params}`, searchSchema, { signal }),
   resolveCards: (cardIds: string[], signal?: AbortSignal): Promise<CatalogueCardView[]> =>
     request(
-      '/api/catalogue/cards/resolve',
+      '/api/catalogue/cards/resolve?includePokemonNumber=true',
       successSchema.extend({ cards: z.array(catalogueCardViewSchema) }),
       {
         method: 'POST',
@@ -448,6 +448,11 @@ export const api = {
       binderPlannerSummaryEnvelopeSchema,
       { signal },
     ).then((body) => body.summary),
+  deleteBinder: (id: string, confirmationName: string): Promise<void> =>
+    request(`/api/binders/${encoded(id)}`, successSchema, {
+      method: 'DELETE',
+      body: json({ confirmationName }),
+    }).then(() => undefined),
   createBinder: (
     name: string,
     layout: BinderLayout,

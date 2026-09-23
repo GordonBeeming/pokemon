@@ -1,3 +1,4 @@
+import { deleteBinderBody } from './contracts';
 import { Hono } from 'hono';
 import type {
   BinderPokemonShortage,
@@ -544,6 +545,20 @@ desktopApiRoutes.post('/desktop/binders/versions/:id/full-pokedex/preview', asyn
         parsed.data.expectedRevision,
       ),
     });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+desktopApiRoutes.delete('/desktop/binders/:id', async (c) => {
+  try {
+    const parsed = deleteBinderBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    await ownerOperations(c.env, await desktopOwner(c, 'binders:write')).deleteBinder(
+      c.req.param('id'),
+      parsed.data.confirmationName,
+    );
+    return c.json({ ok: true });
   } catch (error) {
     return apiFailure(c, error);
   }

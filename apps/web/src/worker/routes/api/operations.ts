@@ -9,6 +9,7 @@ import { cardCategorySchema, languageSchema } from '@pokedex/shared';
 import { getArtResponse, listArtManifest } from '../../lib/art';
 import {
   createBinder,
+  deleteBinder,
   addCardsToBinderVersion,
   cloneBinderVersion,
   activateBinderVersion,
@@ -102,6 +103,8 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       return patchCollectionNotes(env.DB, ownerId, { ...input, cardId });
     },
     listBinders: () => listBinders(env.DB, ownerId),
+    deleteBinder: (binderId: string, confirmationName: string) =>
+      deleteBinder(env.DB, ownerId, binderId, confirmationName),
     binderVersion: (versionId: string, page = 0, limit = 1) =>
       getBinderVersion(env.DB, ownerId, versionId, page, limit),
     binderShortages: (versionId: string, offset = 0, limit = 100) =>

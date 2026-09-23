@@ -129,6 +129,7 @@ export type ArrangementMode = 'set-number' | 'release-date' | 'pokedex-number' |
 
 export type BinderErrorCode =
   | 'binder_version_not_found'
+  | 'binder_not_found'
   | 'binder_version_not_draft'
   | 'binder_version_archived'
   | 'binder_revision_conflict'
@@ -143,6 +144,7 @@ export type BinderErrorCode =
   | 'binder_capacity_exceeded'
   | 'binder_capacity_invalid'
   | 'binder_shrink_occupied'
+  | 'binder_shift_occupied'
   | 'binder_assignment_incompatible'
   | 'binder_assignment_quantity_exceeded'
   | 'binder_reserved_page_not_empty'
@@ -446,6 +448,21 @@ export async function listBinders(db: D1Database, ownerId: string): Promise<Bind
     .bind(ownerId)
     .all<BinderRow>();
   return result.results.map(toBinder);
+}
+
+export async function deleteBinder(
+  db: D1Database,
+  ownerId: string,
+  binderId: string,
+  confirmationName: string,
+): Promise<void> {
+  // Cascades remove only this binder's versions, pages, and slots. Catalogue
+  // cards and collection quantities are independent and must remain intact.
+  const deleted = await db
+    .prepare('DELETE FROM binders WHERE id = ?1 AND owner_id = ?2 AND name = ?3 RETURNING id')
+    .bind(binderId, ownerId, confirmationName)
+    .first<{ id: string }>();
+  if (!deleted) domainError('binder_not_found');
 }
 
 export async function activeBinderShortages(
@@ -1703,43 +1720,53 @@ export async function moveBinderEntryByOffset(
   if (sourceSlot.page_kind === 'reserved') domainError('binder_reserved_page_not_empty');
   const available = slots.filter((slot) => slot.page_kind !== 'reserved');
   const sourceIndex = available.indexOf(sourceSlot);
+  if (!Number.isSafeInteger(offset) || offset === 0 || Math.abs(offset) > 120_000)
+    domainError('binder_slot_out_of_bounds');
   const targetIndex = sourceIndex + offset;
-  if (targetIndex < 0 || targetIndex >= available.length) domainError('binder_slot_out_of_bounds');
+  if (targetIndex < 0) domainError('binder_slot_out_of_bounds');
   const physical = available.map((slot, originalIndex): ReflowEntry | null => {
     const entry = slotEntry(slot);
     return entry ? { entry, assignedCardId: slot.assigned_card_id ?? null, originalIndex } : null;
   });
   const moved = physical[sourceIndex];
   if (!moved) domainError('binder_slot_not_found');
-  physical.splice(sourceIndex, 1);
-  physical.splice(targetIndex, 0, moved);
+  if (offset < 0 && physical.slice(targetIndex, sourceIndex).some((item) => item !== null))
+    domainError('binder_shift_occupied');
+
   const pageSize = version.rows * version.columns;
-  for (let index = 0; index < physical.length; index += 1) {
+  const shifted: Array<ReflowEntry | null> = physical.map((item, index) =>
+    index < Math.min(sourceIndex, targetIndex) ? item : null,
+  );
+  // Keep existing gaps and order. A page break adds padding for the entire
+  // remaining sequence, so following targets cannot jump ahead of it.
+  let padding = 0;
+  let requiredLength = available.length;
+  for (let index = sourceIndex; index < physical.length; index += 1) {
     const item = physical[index];
-    if (
-      !item ||
-      (item.entry.kind !== 'exact-card' && item.entry.kind !== 'pokemon') ||
-      !item.entry.startsNewPage ||
-      index % pageSize === 0
-    )
-      continue;
-    const pageStart = index + (pageSize - (index % pageSize));
-    if (pageStart >= physical.length)
-      throw new BinderDomainError('binder_capacity_exceeded', {
-        currentCapacity: version.capacity,
-        requiredCapacity: version.capacity + 1,
-        additionalPockets: 1,
-        pageIncrement: pageSize,
-      });
-    physical.splice(index, 1);
-    physical.splice(pageStart, 0, item);
-    index -= 1;
+    if (!item) continue;
+    let destination = index + offset + padding;
+    if ('startsNewPage' in item.entry && item.entry.startsNewPage && destination % pageSize !== 0) {
+      const extra = pageSize - (destination % pageSize);
+      padding += extra;
+      destination += extra;
+    }
+    requiredLength = Math.max(requiredLength, destination + 1);
+    if (destination < shifted.length) shifted[destination] = item;
+  }
+  if (requiredLength > available.length) {
+    const additionalPockets = requiredLength - available.length;
+    throw new BinderDomainError('binder_capacity_exceeded', {
+      currentCapacity: version.capacity,
+      requiredCapacity: version.capacity + additionalPockets,
+      additionalPockets,
+      pageIncrement: pageSize,
+    });
   }
   await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-    ...rewriteSlotsStatements(db, slots, physical),
+    ...rewriteSlotsStatements(db, slots, shifted),
     ...revisionStatements(db, version, nowSeconds()),
   ]);
-  const finalIndex = physical.indexOf(moved);
+  const finalIndex = shifted.indexOf(moved);
   const targetSlot = available[finalIndex];
   if (!targetSlot) domainError('binder_slot_not_found');
   const anchor = {

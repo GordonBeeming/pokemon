@@ -170,3 +170,5 @@ export async function desktopOwner(
   if (!bearer) throw new ApplicationError('desktop_token_invalid', 401);
   return requireDesktopToken(c.env.DB, bearer, scope);
 }
+
+export const deleteBinderBody = z.object({ confirmationName: z.string().min(1).max(120) }).strict();

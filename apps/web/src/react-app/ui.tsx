@@ -41,6 +41,9 @@ function NavIcon({ route }: { route: Route }): ReactElement {
 }
 
 const errorMessages: Record<string, string> = {
+  binder_not_found:
+    'This binder is no longer available or its name changed. Reopen the binder and try again.',
+  binder_shift_occupied: 'The sleeves before this target must be empty to shift backward.',
   invalid_body: 'Check the highlighted values and try again.',
   invalid_filter: 'One of the selected filters is not valid.',
   unauthorized: 'Your session has ended. Sign in again.',

@@ -12,6 +12,7 @@ import { escapedFtsQuery, isoFromSeconds, newId, nowSeconds, scalarCount } from 
 import { ApplicationError } from './log';
 
 interface CardRow {
+  pokedex_number: number | null;
   id: string;
   name: string;
   language: LanguageCode;
@@ -1018,7 +1019,7 @@ function view(row: CardRow): CatalogueCardView {
 }
 
 const cardSelect = `
-  SELECT c.id, c.name, c.language, c.category, c.set_id, c.set_name, c.number, c.number_sort,
+  SELECT c.pokedex_number, c.id, c.name, c.language, c.category, c.set_id, c.set_name, c.number, c.number_sort,
     c.supertype, c.subtype, c.species, c.rarity, c.artist, c.is_active, c.is_custom, c.updated_at,
     s.provider AS source_provider, s.source_id, s.source_updated_at,
     cc.notes, cc.quantity, cc.updated_at AS collection_updated_at,
@@ -1044,6 +1045,7 @@ export async function resolveCatalogueCards(
   db: D1Database,
   ownerId: string,
   cardIds: string[],
+  includePokemonNumber = false,
 ): Promise<CatalogueCardView[]> {
   if (cardIds.length === 0) return [];
   if (cardIds.length > 200 || new Set(cardIds).size !== cardIds.length)
@@ -1057,7 +1059,10 @@ export async function resolveCatalogueCards(
     )
     .bind(ownerId, JSON.stringify(cardIds))
     .all<CardRow>();
-  return result.results.map(view);
+  return result.results.map((row) => ({
+    ...view(row),
+    ...(includePokemonNumber ? { pokedexNumber: row.pokedex_number } : {}),
+  }));
 }
 
 export async function searchCards(

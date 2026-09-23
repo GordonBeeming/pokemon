@@ -8,6 +8,7 @@ import {
   catalogueSyncLanguage,
   latestFullEnglishCatalogueSync,
   resolveStagedCardId,
+  resolveCatalogueCards,
   stageCatalogueCards,
   transformTcgdexCard,
 } from './catalogue';
@@ -20,6 +21,20 @@ afterEach(() => {
 });
 
 describe('catalogue cloud invariants', () => {
+  it('returns Pokémon metadata only when requested by a newer binder client', async () => {
+    const database = new DatabaseSync(':memory:');
+    databases.push(database);
+    applyAllMigrations(database);
+    database.exec(`INSERT INTO users (id, label, created_at) VALUES ('owner', 'Owner', 1);
+      INSERT INTO catalogue_cards (id, name, language, category, set_id, set_name, number, pokedex_number, created_at, updated_at)
+      VALUES ('bulba', 'Bulbasaur', 'en', 'pokemon', 'base', 'Base', '1', 1, 1, 1);`);
+    const db = sqliteD1(database);
+    const legacy = await resolveCatalogueCards(db, 'owner', ['bulba']);
+    expect(legacy[0]).not.toHaveProperty('pokedexNumber');
+    const current = await resolveCatalogueCards(db, 'owner', ['bulba'], true);
+    expect(current[0]).toMatchObject({ id: 'bulba', pokedexNumber: 1 });
+  });
+
   it('defaults scheduled catalogue refreshes to the English collection', () => {
     expect(catalogueSyncLanguage(undefined)).toBe('en');
     expect(catalogueSyncLanguage('ja')).toBe('ja');

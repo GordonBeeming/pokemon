@@ -846,7 +846,7 @@ describe('async frontend announcements', () => {
 
     await actAndSettle(() => slot?.click());
     expect(slot?.classList).toContain('target');
-    expect(slot?.textContent).toContain('Checking owned copies');
+    expect(slot?.textContent).toContain('Target planned');
     expect(container.textContent).not.toContain('No compatible unassigned copies are available.');
     await act(async () => {
       candidates.resolve([
@@ -862,13 +862,118 @@ describe('async frontend announcements', () => {
       ]);
       await candidates.promise;
     });
-    await waitFor(() => slot?.classList.contains('ready') === true);
+    await waitFor(() => container.textContent?.includes('compatible copy remaining') === true);
+    expect(slot?.textContent).toContain('Target planned');
     const assign = Array.from(container.querySelectorAll('button')).find((button) =>
       button.textContent?.includes('compatible copy remaining'),
     );
     await actAndSettle(() => assign?.click());
     await waitFor(() => apiMocks.assignEntry.mock.calls.length === 1);
     await waitFor(() => document.activeElement?.getAttribute('data-binder-slot') === '0-0-0');
+  });
+
+  it.each(['same', 'any'] as const)(
+    'replaces a selected target with %s type without inserting or shifting',
+    async (mode) => {
+      const initial = binderFixture([
+        { pageId: 'page-1', row: 0, column: 0, cardId: 'card-1', entryKind: 'exact-card' },
+      ]);
+      const card = {
+        id: 'card-1',
+        name: 'Ponyta',
+        language: 'en',
+        category: 'pokemon' as const,
+        setId: 'set-1',
+        setName: 'Base Set',
+        number: '60',
+        imageLowUrl: null,
+        imageHighUrl: null,
+        collection: null,
+        price: {
+          amountAud: null,
+          nativeAmount: null,
+          nativeCurrency: null,
+          source: null,
+          sourceCapturedAt: null,
+          fxDate: null,
+        },
+      };
+      const replacement = { ...card, id: 'replacement', name: 'Replacement', pokedexNumber: 1 };
+      apiMocks.binders.mockResolvedValue([testBinder]);
+      apiMocks.binder.mockResolvedValue(initial.response);
+      apiMocks.resolveCards.mockResolvedValue([{ ...card, id: 'card-1', pokedexNumber: 1 }]);
+      apiMocks.assignmentCandidates.mockResolvedValue([]);
+      apiMocks.search.mockResolvedValue({ ok: true, cards: [replacement], total: 1, cursor: null });
+      apiMocks.setSlot.mockResolvedValue(initial.result);
+      await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+      await waitFor(() => container.querySelector('.binder-library-card') !== null);
+      await actAndSettle(() =>
+        container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+      );
+      await waitFor(() => container.querySelector('.binder-slot') !== null);
+      await actAndSettle(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
+      await actAndSettle(() =>
+        Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+          .find(
+            (button) =>
+              button.textContent ===
+              (mode === 'same' ? 'Replace with same type' : 'Replace with any card'),
+          )
+          ?.click(),
+      );
+      await waitFor(() => container.querySelector('.binder-tray-card') !== null);
+      const params = apiMocks.search.mock.calls[0]?.[0] as URLSearchParams;
+      expect(params.get('pokedexNumber')).toBe(mode === 'same' ? '1' : null);
+      await actAndSettle(() =>
+        container.querySelector<HTMLButtonElement>('.binder-tray-card')?.click(),
+      );
+      expect(apiMocks.setSlot).toHaveBeenCalledWith('version-1', {
+        page: 0,
+        row: 0,
+        column: 0,
+        cardId: 'replacement',
+        expectedRevision: 1,
+      });
+      expect(apiMocks.insertEntries).not.toHaveBeenCalled();
+      expect(apiMocks.moveEntry).not.toHaveBeenCalled();
+    },
+  );
+
+  it('preserves a failed reservation label then clears it after a successful retry', async () => {
+    const initial = binderFixture([
+      { pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'empty' },
+    ]);
+    apiMocks.binders.mockResolvedValue([testBinder]);
+    apiMocks.binder.mockResolvedValue(initial.response);
+    apiMocks.reservePage
+      .mockRejectedValueOnce(new ApiError('internal_error', 'Failed', 500, null, null))
+      .mockResolvedValue(initial.result);
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await waitFor(() => container.querySelector('.binder-slot') !== null);
+    const label = Array.from(container.querySelectorAll<HTMLInputElement>('input')).find((input) =>
+      input.parentElement?.textContent?.includes('Page reservation label'),
+    );
+    if (!label) throw new Error('Missing reservation label');
+    await actAndSettle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        label,
+        'Energy',
+      );
+      label.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const reserve = () =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+        .find((button) => button.textContent === 'Reserve this page')
+        ?.click();
+    await actAndSettle(reserve);
+    expect(label.value).toBe('Energy');
+    await actAndSettle(reserve);
+    await waitFor(() => label.value === '');
+    expect(apiMocks.reservePage).toHaveBeenLastCalledWith('version-1', 0, true, 'Energy', 1);
   });
 
   it('uses Delete only to remove a physical assignment and restores the pocket anchor', async () => {
@@ -1018,7 +1123,7 @@ describe('async frontend announcements', () => {
     );
     await waitFor(() => container.querySelectorAll('.binder-slot').length === 20);
     expect(container.querySelector<HTMLElement>('.binder-grid')?.style.gridTemplateColumns).toBe(
-      'repeat(20, minmax(4rem, 1fr))',
+      'repeat(20, minmax(var(--binder-slot-min, 4rem), 1fr))',
     );
   });
 
@@ -1339,7 +1444,7 @@ describe('async frontend announcements', () => {
     });
     await actAndSettle(() =>
       Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
-        .find((button) => button.textContent === 'Move target')
+        .find((button) => button.textContent === 'Shift targets')
         ?.click(),
     );
     await waitFor(() => apiMocks.moveEntry.mock.calls.length === 1);
@@ -1432,7 +1537,7 @@ describe('async frontend announcements', () => {
     });
     await actAndSettle(() =>
       Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
-        .find((button) => button.textContent === 'Move target')
+        .find((button) => button.textContent === 'Shift targets')
         ?.click(),
     );
     await waitFor(() => apiMocks.moveEntry.mock.calls.length === 1);
@@ -1441,7 +1546,7 @@ describe('async frontend announcements', () => {
     expect(container.textContent).toContain('The final page has 1 pocket.');
   });
 
-  it('wires target page breaks and signed moves with current revision and focus recovery', async () => {
+  it('wires target page breaks and signed shifts with current revision and focus recovery', async () => {
     const target = {
       pageId: 'page-1',
       row: 0,
@@ -1501,7 +1606,7 @@ describe('async frontend announcements', () => {
     });
     await actAndSettle(() =>
       Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
-        .find((button) => button.textContent === 'Move target')
+        .find((button) => button.textContent === 'Shift targets')
         ?.click(),
     );
     await waitFor(() => apiMocks.moveEntry.mock.calls.length === 1);

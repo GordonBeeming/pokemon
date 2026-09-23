@@ -1,3 +1,4 @@
+import { deleteBinderBody } from './contracts';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { languageSchema } from '@pokedex/shared';
@@ -164,7 +165,12 @@ browserApiRoutes.post('/catalogue/cards/resolve', async (c) => {
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json({
       ok: true,
-      cards: await resolveCatalogueCards(c.env.DB, sessionOwner(c), parsed.data.cardIds),
+      cards: await resolveCatalogueCards(
+        c.env.DB,
+        sessionOwner(c),
+        parsed.data.cardIds,
+        c.req.query('includePokemonNumber') === 'true',
+      ),
     });
   } catch (error) {
     return apiFailure(c, error);
@@ -1019,6 +1025,20 @@ browserApiRoutes.get('/art/:cardId/:variant', async (c) => {
       return c.json({ ok: false, error: 'invalid_variant' }, 400);
     const response = await operations.art(c.req.param('cardId'), variant, c.req.raw);
     return response ?? c.json({ ok: false, error: 'art_not_found' }, 404);
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.delete('/binders/:id', async (c) => {
+  try {
+    const parsed = deleteBinderBody.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    await ownerOperations(c.env, sessionOwner(c)).deleteBinder(
+      c.req.param('id'),
+      parsed.data.confirmationName,
+    );
+    return c.json({ ok: true });
   } catch (error) {
     return apiFailure(c, error);
   }
