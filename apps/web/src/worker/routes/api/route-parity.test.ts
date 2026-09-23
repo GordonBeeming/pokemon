@@ -96,6 +96,11 @@ const sharedRoutes = [
     desktop: '/desktop/binders/binder-1',
     body: { confirmationName: 'My binder' },
   },
+  {
+    method: 'GET',
+    browser: '/binders/versions/version-1/destinations?cardId=card-1',
+    desktop: '/desktop/binders/versions/version-1/destinations?cardId=card-1',
+  },
   { method: 'GET', browser: '/binders', desktop: '/desktop/binders' },
   {
     method: 'POST',

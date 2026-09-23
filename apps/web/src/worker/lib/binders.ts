@@ -10,6 +10,7 @@ import {
   type BinderCapacityError,
   type BinderAssignmentCandidate,
   type BinderEntry,
+  type BinderInsertDestinations,
   type BinderLayout,
   type BinderMutationResult,
   type BinderPage,
@@ -449,6 +450,93 @@ export async function listBinders(db: D1Database, ownerId: string): Promise<Bind
     .bind(ownerId)
     .all<BinderRow>();
   return result.results.map(toBinder);
+}
+
+export async function getBinderInsertDestinations(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  cardId?: string,
+): Promise<BinderInsertDestinations> {
+  const version = await readVersion(db, ownerId, versionId);
+  requireEditable(version);
+  const card = cardId
+    ? await db
+        .prepare('SELECT id, category, pokedex_number FROM catalogue_cards WHERE id = ?1')
+        .bind(cardId)
+        .first<{ id: string; category: string; pokedex_number: number | null }>()
+    : null;
+  if (cardId && !card) domainError('card_not_found');
+  const slots = await materializedSlots(db, versionId);
+  let lastUsed = -1;
+  slots.forEach((slot, index) => {
+    if (slot.page_kind === 'reserved' || slotEntry(slot) !== null) lastUsed = index;
+  });
+  const append = slots.slice(lastUsed + 1).find((slot) => slot.page_kind !== 'reserved');
+  const at = (slot: MaterializedSlot): BinderSlotLocation => ({
+    page: slot.page_position,
+    row: slot.row_index,
+    column: slot.column_index,
+  });
+  const matches: BinderInsertDestinations['matches'] = [];
+  let matchCount = 0;
+  if (card) {
+    const pokemonNumber =
+      card.category === 'pokemon' &&
+      card.pokedex_number !== null &&
+      Number.isInteger(card.pokedex_number) &&
+      card.pokedex_number >= 1 &&
+      card.pokedex_number <= NATIONAL_POKEDEX.length
+        ? card.pokedex_number
+        : null;
+    const rows = await db
+      .prepare(
+        `SELECT s.card_id, s.pokemon_number, s.assigned_card_id, p.position AS page_position, s.row_index, s.column_index,
+        COUNT(*) OVER () AS match_count
+      FROM binder_slots s JOIN binder_pages p ON p.id = s.binder_page_id
+      LEFT JOIN catalogue_cards existing ON existing.id = s.card_id
+      WHERE p.binder_version_id = ?1 AND p.kind <> 'reserved'
+        AND (s.card_id = ?2 OR (?3 IS NOT NULL AND ((s.entry_kind = 'pokemon' AND s.pokemon_number = ?3)
+          OR (s.entry_kind = 'exact-card' AND existing.category = 'pokemon' AND existing.pokedex_number = ?3))))
+      ORDER BY p.position,s.row_index,s.column_index LIMIT 100`,
+      )
+      .bind(versionId, card.id, pokemonNumber)
+      .all<{
+        card_id: string | null;
+        pokemon_number: number | null;
+        assigned_card_id: string | null;
+        page_position: number;
+        row_index: number;
+        column_index: number;
+        match_count: number;
+      }>();
+    matchCount = rows.results[0]?.match_count ?? 0;
+    for (const row of rows.results)
+      matches.push({
+        page: row.page_position,
+        row: row.row_index,
+        column: row.column_index,
+        cardId: row.card_id === null ? null : cardIdSchema.parse(row.card_id),
+        pokemonNumber: row.pokemon_number,
+        assignedCardId:
+          row.assigned_card_id === null ? null : cardIdSchema.parse(row.assigned_card_id),
+      });
+  }
+  const pageSize = version.rows * version.columns;
+  const requiredCapacity = append
+    ? version.capacity
+    : slots.at(-1)?.page_kind === 'reserved'
+      ? Math.ceil(version.capacity / pageSize) * pageSize + 1
+      : version.capacity + 1;
+  return {
+    versionId,
+    revision: version.revision,
+    capacity: version.capacity,
+    requiredCapacity,
+    matches,
+    matchCount,
+    appendAt: append ? at(append) : null,
+  };
 }
 
 export async function deleteBinder(

@@ -2328,3 +2328,304 @@ dd {
   color: #922c2c;
   border-color: #ca9292;
 }
+
+.binder-workspace {
+  min-width: 0;
+}
+.binder-workspace > .binder-page {
+  max-width: 64rem;
+  margin-inline: auto;
+  overflow: visible;
+}
+.binder-slot-wrap {
+  position: relative;
+  min-width: 0;
+  display: grid;
+}
+.binder-slot-wrap.selected {
+  z-index: 3;
+}
+.binder-slot-wrap .binder-slot {
+  width: 100%;
+}
+.binder-pocket-tools {
+  position: absolute;
+  right: -0.6rem;
+  top: 50%;
+  transform: translate(50%, -50%);
+  z-index: 5;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.25rem;
+  background: white;
+  border: 1px solid #829990;
+  border-radius: 0.7rem;
+  box-shadow: 0 6px 22px #17373835;
+}
+.binder-pocket-tools .icon-button {
+  width: 2.5rem;
+  height: 2.5rem;
+  background: white;
+  color: #173738;
+}
+.pocket-panel-backdrop {
+  position: fixed;
+  inset: 0;
+  background: #17373855;
+  z-index: 59;
+}
+.pocket-editor-popup {
+  position: fixed;
+  z-index: 60;
+  width: min(360px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 1rem;
+  box-shadow: 0 12px 44px #17373844;
+}
+.pocket-editor-popup.wide {
+  width: min(640px, calc(100vw - 32px));
+}
+.pocket-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.pocket-panel-heading h2 {
+  margin: 0;
+}
+.pocket-panel-close {
+  flex-shrink: 0;
+  font-size: 1.6rem;
+}
+.pocket-action-group[hidden] {
+  display: none;
+}
+.pocket-editor-popup .pocket-action-group {
+  border: 0;
+  padding: 0;
+}
+.pocket-editor-popup .slot-picker-panel {
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+.binder-management {
+  margin-block: 1rem;
+  padding: 1rem;
+}
+.binder-management > .binder-header-actions {
+  justify-content: space-between;
+  align-items: center;
+}
+.binder-management input {
+  max-width: 30rem;
+}
+.binder-page-stepper {
+  flex-wrap: wrap;
+}
+.binder-page-jump {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.binder-page-jump label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.binder-insert-results {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.binder-insert-results button {
+  min-width: 0;
+  text-align: left;
+  display: grid;
+  gap: 0.25rem;
+}
+.binder-insert-results small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.binder-insert-results .card-art {
+  max-width: 5rem;
+}
+.binder-insert-results [aria-pressed='true'] {
+  background: #e0f1e7;
+  outline: 2px solid #176b63;
+}
+@media (max-width: 820px) {
+  .binder-page-toolbar {
+    grid-template-columns: 1fr;
+  }
+  .binder-page-toolbar > [role='status'] {
+    margin: 0;
+  }
+  .binder-pocket-tools {
+    right: auto;
+    left: 0;
+    top: 100%;
+    transform: none;
+    display: flex;
+    max-width: calc(100vw - 2rem);
+  }
+  .binder-pocket-tools.align-end {
+    left: auto;
+    right: 0;
+  }
+  .binder-pocket-tools .icon-button {
+    width: 2.5rem;
+    height: 2.75rem;
+  }
+  .binder-page-stepper {
+    gap: 0.35rem;
+    justify-content: center;
+  }
+  .binder-page-jump {
+    order: -1;
+    flex-basis: 100%;
+    justify-content: center;
+  }
+  .binder-header-actions > button {
+    min-height: 2.75rem;
+  }
+}
+
+.binder-page-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.binder-placement-options {
+  display: grid;
+  gap: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  padding: 0.75rem;
+  margin-top: 0.75rem;
+}
+.binder-placement-options button {
+  text-align: left;
+}
+.binder-placement-options small {
+  display: block;
+  margin-top: 0.3rem;
+}
+.binder-page-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  background: #f7f8f2;
+  padding: 0.65rem 0;
+}
+.binder-workspace-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.binder-workspace > .binder-page.binder-page-wide {
+  overflow-x: auto;
+}
+.binder-slot strong {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-overflow: clip;
+  line-height: 1.25;
+}
+@media (max-width: 820px) {
+  .binder-page-toolbar {
+    justify-content: center;
+  }
+}
+
+.binder-active-heading {
+  margin-bottom: 1.5rem;
+}
+.binder-pocket-tools .icon-button {
+  flex-shrink: 0;
+}
+@media print {
+  .binder-page-toolbar,
+  .pocket-editor-popup,
+  .pocket-panel-backdrop,
+  .binder-pocket-tools {
+    display: none !important;
+  }
+  .binder-workspace > .binder-page {
+    width: 100% !important;
+    max-width: none;
+  }
+}
+
+.binder-page-stepper button,
+.pocket-panel-close {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}
+@media (max-width: 820px) {
+  .binder-pocket-tools .icon-button {
+    width: 2.75rem;
+  }
+}
+.card-lightbox-panel {
+  min-width: 0;
+}
+.binder-choice-list button {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+@media (max-width: 820px) {
+  .card-lightbox {
+    display: block;
+  }
+  .card-lightbox-panel {
+    display: block;
+    width: 100%;
+    max-height: calc(100dvh - 1.5rem);
+  }
+  .lightbox-visual {
+    overflow: hidden;
+  }
+  .card-lightbox .detail-copy {
+    overflow: visible;
+  }
+}
+
+.pocket-editor-popup {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.pocket-panel-heading {
+  flex-shrink: 0;
+  margin-bottom: 0.5rem;
+}
+.pocket-panel-body {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.pocket-panel-footer {
+  flex-shrink: 0;
+  background: white;
+  border-top: 1px solid var(--line);
+  padding-top: 0.6rem;
+}
+.pocket-panel-footer > button {
+  width: 100%;
+  min-height: 2.75rem;
+}
+.pocket-panel-footer > p {
+  margin: 0 0 0.5rem;
+}

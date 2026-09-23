@@ -1,3 +1,4 @@
+import type { BinderInsertDestinations, BinderSlotLocation } from '@pokedex/shared';
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import {
   api,
@@ -68,6 +69,11 @@ function DetailPanel({
   binderPending,
   chooseBinder,
   addToBinder,
+  binderPlacement,
+  binderError,
+  binderAdded,
+  choosePlacement,
+  cancelPlacement,
 }: {
   card: CatalogueDetailView;
   pending: boolean;
@@ -86,6 +92,11 @@ function DetailPanel({
   binderPending: boolean;
   chooseBinder: (id: string) => void;
   addToBinder: () => void;
+  binderPlacement: BinderInsertDestinations | null;
+  binderError: string | null;
+  binderAdded: { href: string; label: string } | null;
+  choosePlacement: (at: BinderSlotLocation) => void;
+  cancelPlacement: () => void;
 }): ReactElement {
   const [quantity, setQuantity] = useState(card.collection?.quantity ?? 0);
   const [notes, setNotes] = useState(card.collection?.notes ?? '');
@@ -352,6 +363,7 @@ function DetailPanel({
                       className="quiet-button"
                       type="button"
                       aria-pressed={binderId === binder.id}
+                      disabled={binderPending}
                       onClick={() => chooseBinder(binder.id)}
                     >
                       {binder.name}
@@ -364,8 +376,85 @@ function DetailPanel({
                   disabled={!binderId || binderPending}
                   onClick={addToBinder}
                 >
-                  {binderPending ? 'Adding…' : 'Add to selected binder'}
+                  {binderPending
+                    ? binderPlacement
+                      ? 'Adding…'
+                      : 'Finding slots…'
+                    : 'Add to selected binder'}
                 </button>
+                {binderError ? <p role="alert">{binderError}</p> : null}
+                {binderPlacement ? (
+                  <section className="binder-placement-options" aria-label="Choose binder position">
+                    <h4>Where should this card go?</h4>
+                    <p>
+                      {binderPlacement.matchCount
+                        ? `${binderPlacement.matchCount} matching targets found. Choose one to replace, or add at the end.`
+                        : 'No matching planned slot was found.'}
+                    </p>
+                    {binderPlacement.matches.map((at) => (
+                      <button
+                        key={`${at.page}-${at.row}-${at.column}`}
+                        type="button"
+                        className="quiet-button"
+                        disabled={binderPending}
+                        onClick={() => choosePlacement(at)}
+                      >
+                        Replace target — page {at.page + 1}, pocket {at.row + 1}:{at.column + 1}
+                        {at.assignedCardId && at.assignedCardId !== card.id ? (
+                          <small>
+                            The current physical assignment will be removed; your collection is
+                            unchanged.
+                          </small>
+                        ) : null}
+                      </button>
+                    ))}
+                    {binderPlacement.matchCount > binderPlacement.matches.length ? (
+                      <p>Showing the first {binderPlacement.matches.length} matching slots.</p>
+                    ) : null}
+                    {binderPlacement.appendAt ? (
+                      <button
+                        className="quiet-button tone-accent"
+                        type="button"
+                        disabled={binderPending}
+                        onClick={() => {
+                          if (binderPlacement.appendAt) choosePlacement(binderPlacement.appendAt);
+                        }}
+                      >
+                        Add at end — page {binderPlacement.appendAt.page + 1}, pocket{' '}
+                        {binderPlacement.appendAt.row + 1}:{binderPlacement.appendAt.column + 1}
+                      </button>
+                    ) : (
+                      <p>
+                        No room at the end. Grow the binder to {binderPlacement.requiredCapacity}{' '}
+                        pockets in Manage binder.
+                      </p>
+                    )}
+                    <button
+                      className="text-button"
+                      type="button"
+                      disabled={binderPending}
+                      onClick={cancelPlacement}
+                    >
+                      Cancel placement
+                    </button>
+                  </section>
+                ) : null}
+                {binderAdded ? (
+                  <p role="status">
+                    {binderAdded.label}{' '}
+                    <a
+                      href={binderAdded.href}
+                      onClick={(event) => {
+                        event.preventDefault();
+                        leave(() => {
+                          location.hash = binderAdded.href;
+                        });
+                      }}
+                    >
+                      View this card in the binder
+                    </a>
+                  </p>
+                ) : null}
               </>
             ) : (
               <p>Create a binder in Binder Plans first.</p>
@@ -427,6 +516,20 @@ export function CatalogueView({
   const [binderChoices, setBinderChoices] = useState<BinderView[]>([]);
   const [binderTarget, setBinderTarget] = useState('');
   const [binderAdding, setBinderAdding] = useState(false);
+  const [binderError, setBinderError] = useState<string | null>(null);
+  const [binderPlacement, setBinderPlacement] = useState<BinderInsertDestinations | null>(null);
+  const [binderAdded, setBinderAdded] = useState<{ href: string; label: string } | null>(null);
+  const placementGeneration = useRef(0);
+  const placementRequest = useRef<AbortController | null>(null);
+  useEffect(() => {
+    placementRequest.current?.abort();
+    placementGeneration.current += 1;
+    setBinderPlacement(null);
+    setBinderAdded(null);
+    setBinderError(null);
+    setBinderAdding(false);
+    return () => placementRequest.current?.abort();
+  }, [binderTarget, detail?.id]);
   const [bulkAdding, setBulkAdding] = useState(false);
   const [completedRefresh, setCompletedRefresh] = useState(refreshKey);
   const searchGeneration = useRef(0);
@@ -558,19 +661,64 @@ export function CatalogueView({
     const target = binderChoices.find((binder) => binder.id === binderTarget);
     const versionId = target?.activeVersionId ?? target?.latestVersionId;
     if (!versionId) return;
+    placementRequest.current?.abort();
+    const controller = new AbortController();
+    placementRequest.current = controller;
+    setBinderError(null);
+    setBinderAdding(true);
+    setBinderPlacement(null);
+    setBinderAdded(null);
+    try {
+      const choices = await api.binderDestinations(versionId, detail.id, controller.signal);
+      if (!controller.signal.aborted) setBinderPlacement(choices);
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setBinderError(userMessage(error));
+        onNotice({ kind: 'error', message: userMessage(error) });
+      }
+    } finally {
+      if (!controller.signal.aborted) setBinderAdding(false);
+    }
+  }
+  async function chooseBinderPlacement(at: BinderSlotLocation): Promise<void> {
+    if (!detail || !binderPlacement || binderAdding) return;
+    const card = detail;
+    const choices = binderPlacement;
+    const generation = placementGeneration.current;
+    setBinderError(null);
     setBinderAdding(true);
     try {
-      const current = await api.binder(versionId);
-      await api.addCardsToBinder(current.version.id, [detail.id], current.version.revision);
-      onNotice({
-        kind: 'success',
-        message: `${detail.name} was added to ${target?.name ?? 'the binder'}.`,
+      await api.setSlot(choices.versionId, {
+        page: at.page,
+        row: at.row,
+        column: at.column,
+        cardId: card.id,
+        expectedRevision: choices.revision,
       });
+      const params = new URLSearchParams({
+        version: choices.versionId,
+        page: String(at.page + 1),
+        row: String(at.row + 1),
+        column: String(at.column + 1),
+      });
+      const label = `${card.name} added on page ${at.page + 1}, pocket ${at.row + 1}:${at.column + 1}.`;
+      if (generation === placementGeneration.current) {
+        setBinderAdded({ href: `#binders?${params}`, label });
+        setBinderPlacement(null);
+      }
+      onNotice({ kind: 'success', message: label });
     } catch (error) {
-      const message = userMessage(error);
-      if (message) onNotice({ kind: 'error', message });
+      const stale = error instanceof ApiError && error.code === 'binder_revision_conflict';
+      const message = stale
+        ? 'This binder changed. Click Add to selected binder to refresh the available slots.'
+        : userMessage(error);
+      if (generation === placementGeneration.current) {
+        setBinderError(message);
+        if (stale) setBinderPlacement(null);
+      }
+      onNotice({ kind: 'error', message });
     } finally {
-      setBinderAdding(false);
+      if (generation === placementGeneration.current) setBinderAdding(false);
     }
   }
 
@@ -949,6 +1097,11 @@ export function CatalogueView({
           binderPending={binderAdding}
           chooseBinder={setBinderTarget}
           addToBinder={() => void addDetailToBinder()}
+          binderPlacement={binderPlacement}
+          binderError={binderError}
+          binderAdded={binderAdded}
+          choosePlacement={(at) => void chooseBinderPlacement(at)}
+          cancelPlacement={() => setBinderPlacement(null)}
         />
       ) : null}
     </>

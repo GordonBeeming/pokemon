@@ -17,6 +17,7 @@ import {
   arrangeBinderVersion,
   deleteBinderPage,
   getBinderVersion,
+  getBinderInsertDestinations,
   getBinderVersionShortages,
   getBinderAssignmentCandidates,
   getBinderPlannerSummary,
@@ -103,6 +104,8 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       return patchCollectionNotes(env.DB, ownerId, { ...input, cardId });
     },
     listBinders: () => listBinders(env.DB, ownerId),
+    binderInsertDestinations: (versionId: string, cardId?: string) =>
+      getBinderInsertDestinations(env.DB, ownerId, versionId, cardId),
     deleteBinder: (binderId: string, confirmationName: string) =>
       deleteBinder(env.DB, ownerId, binderId, confirmationName),
     binderVersion: (versionId: string, page = 0, limit = 1) =>

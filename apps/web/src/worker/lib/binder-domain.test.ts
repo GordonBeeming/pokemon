@@ -15,6 +15,7 @@ import {
   listBinders,
   deleteBinderPage,
   getBinderVersion,
+  getBinderInsertDestinations,
   getBinderVersionShortages,
   getBinderAssignmentCandidates,
   getBinderPlannerSummary,
@@ -568,6 +569,110 @@ describe('binder D1 domain', () => {
       added.version.revision,
     );
     expect(removed.version).toMatchObject({ capacity: 12, pageCount: 3 });
+  });
+
+  it('finds matching targets across pages and appends after the last used sleeve, leaving earlier gaps intact', async () => {
+    const { db, database } = setup();
+    database.exec(
+      "INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,pokedex_number,created_at,updated_at) VALUES ('bulba-alt','Bulbasaur alternate','en','pokemon','base','Base','10',1,1,1)",
+    );
+    const created = await createBinder(
+      db,
+      'owner',
+      'Destinations',
+      { kind: '2x2', rows: 2, columns: 2 },
+      16,
+    );
+    const first = await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      [
+        { kind: 'pokemon', pokemonNumber: 1, startsNewPage: false },
+        { kind: 'exact-card', cardId: cardIdSchema.parse('bulba'), startsNewPage: false },
+      ],
+      created.version.revision,
+    );
+    const later = await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 2, row: 0, column: 1 },
+      [
+        { kind: 'pokemon', pokemonNumber: 1, startsNewPage: false },
+        { kind: 'reserved', label: 'Keep this gap' },
+      ],
+      first.version.revision,
+    );
+    const result = await getBinderInsertDestinations(db, 'owner', created.version.id, 'bulba-alt');
+    expect(result).toMatchObject({
+      revision: later.version.revision,
+      matchCount: 3,
+      capacity: 16,
+      requiredCapacity: 16,
+      appendAt: { page: 2, row: 1, column: 1 },
+    });
+    expect(result.matches.map(({ page, row, column }) => ({ page, row, column }))).toEqual([
+      { page: 0, row: 0, column: 0 },
+      { page: 0, row: 0, column: 1 },
+      { page: 2, row: 0, column: 1 },
+    ]);
+    await setBinderSlot(db, 'owner', created.version.id, 0, 1, 0, 'ivy', later.version.revision);
+    await expect(
+      setBinderSlot(db, 'owner', created.version.id, 2, 1, 1, 'bulba-alt', result.revision),
+    ).rejects.toMatchObject({ code: 'binder_revision_conflict' });
+    await expect(
+      getBinderInsertDestinations(db, 'other', created.version.id, 'bulba'),
+    ).rejects.toMatchObject({ code: 'binder_version_not_found' });
+    await expect(
+      getBinderInsertDestinations(db, 'owner', created.version.id, 'missing'),
+    ).rejects.toMatchObject({ code: 'card_not_found' });
+  });
+
+  it('requires trailing capacity even when earlier sleeves are empty, including a reserved partial final page', async () => {
+    const { db } = setup();
+    const fullTail = await createBinder(
+      db,
+      'owner',
+      'Tail',
+      { kind: '2x2', rows: 2, columns: 2 },
+      8,
+    );
+    await setBinderSlot(
+      db,
+      'owner',
+      fullTail.version.id,
+      1,
+      1,
+      1,
+      'bulba',
+      fullTail.version.revision,
+    );
+    expect(
+      await getBinderInsertDestinations(db, 'owner', fullTail.version.id, 'bulba'),
+    ).toMatchObject({ appendAt: null, requiredCapacity: 9, matchCount: 1 });
+    const reservedTail = await createBinder(
+      db,
+      'owner',
+      'Reserved tail',
+      { kind: '2x2', rows: 2, columns: 2 },
+      6,
+    );
+    await reserveBinderPage(
+      db,
+      'owner',
+      reservedTail.version.id,
+      1,
+      true,
+      'Trades',
+      reservedTail.version.revision,
+    );
+    expect(await getBinderInsertDestinations(db, 'owner', reservedTail.version.id)).toMatchObject({
+      appendAt: null,
+      requiredCapacity: 9,
+      matches: [],
+    });
   });
 
   it('preserves the page break when replacing a target and clears it when leaving a gap', async () => {

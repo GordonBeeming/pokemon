@@ -1,3 +1,4 @@
+import { binderDestinationsQuerySchema } from './contracts';
 import { deleteBinderBody } from './contracts';
 import { Hono } from 'hono';
 import type {
@@ -559,6 +560,20 @@ desktopApiRoutes.delete('/desktop/binders/:id', async (c) => {
       parsed.data.confirmationName,
     );
     return c.json({ ok: true });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+desktopApiRoutes.get('/desktop/binders/versions/:id/destinations', async (c) => {
+  try {
+    const parsed = binderDestinationsQuerySchema.safeParse({ cardId: c.req.query('cardId') });
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const destinations = await ownerOperations(
+      c.env,
+      await desktopOwner(c, 'binders:write'),
+    ).binderInsertDestinations(c.req.param('id'), parsed.data.cardId);
+    return c.json({ ok: true, destinations });
   } catch (error) {
     return apiFailure(c, error);
   }

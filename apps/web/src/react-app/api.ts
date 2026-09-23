@@ -3,6 +3,7 @@ import {
   apiErrorSchema,
   artUrlSchema,
   binderLayoutSchema,
+  binderInsertDestinationsSchema,
   binderAssignmentCandidatesSchema,
   binderFullPokedexPreviewSchema,
   binderFullPokedexRequestSchema,
@@ -448,6 +449,12 @@ export const api = {
       binderPlannerSummaryEnvelopeSchema,
       { signal },
     ).then((body) => body.summary),
+  binderDestinations: (id: string, cardId?: string, signal?: AbortSignal) =>
+    request(
+      `/api/binders/versions/${encoded(id)}/destinations${cardId ? `?cardId=${encoded(cardId)}` : ''}`,
+      successSchema.extend({ destinations: binderInsertDestinationsSchema }),
+      { signal },
+    ).then((body) => body.destinations),
   deleteBinder: (id: string, confirmationName: string): Promise<void> =>
     request(`/api/binders/${encoded(id)}`, successSchema, {
       method: 'DELETE',

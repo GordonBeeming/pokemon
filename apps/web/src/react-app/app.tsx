@@ -159,7 +159,11 @@ export function App(): ReactElement {
       if (next === 'catalogue') setCatalogueParams(hashParams());
     };
     addEventListener('hashchange', update);
-    return () => removeEventListener('hashchange', update);
+    addEventListener('popstate', update);
+    return () => {
+      removeEventListener('hashchange', update);
+      removeEventListener('popstate', update);
+    };
   }, []);
 
   useEffect(() => {
