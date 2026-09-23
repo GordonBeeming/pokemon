@@ -326,6 +326,28 @@ export const binderSlotLocationSchema = z
   .strict();
 export type BinderSlotLocation = z.infer<typeof binderSlotLocationSchema>;
 
+export const binderInsertDestinationsSchema = z
+  .object({
+    versionId: z.string(),
+    revision: z.number().int().positive(),
+    capacity: z.number().int().positive(),
+    requiredCapacity: z.number().int().positive(),
+    maxCapacity: z.number().int().positive(),
+    matches: z
+      .array(
+        binderSlotLocationSchema.extend({
+          cardId: cardIdSchema.nullable(),
+          pokemonNumber: z.number().int().nullable(),
+          assignedCardId: cardIdSchema.nullable(),
+        }),
+      )
+      .max(100),
+    matchCount: z.number().int().nonnegative(),
+    appendAt: binderSlotLocationSchema.nullable(),
+  })
+  .strict();
+export type BinderInsertDestinations = z.infer<typeof binderInsertDestinationsSchema>;
+
 export const binderSlotSetRequestSchema = binderSlotLocationSchema
   .extend({
     expectedRevision: z.number().int().positive(),

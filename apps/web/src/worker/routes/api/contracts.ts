@@ -13,6 +13,7 @@ import {
   binderCapacityRequestSchema,
   binderFullPokedexRequestSchema,
   cardCategorySchema,
+  cardIdSchema,
   collectionIncrementRequestSchema,
   collectionNotesPatchRequestSchema,
   collectionSetRequestSchema,
@@ -172,3 +173,5 @@ export async function desktopOwner(
 }
 
 export const deleteBinderBody = z.object({ confirmationName: z.string().min(1).max(120) }).strict();
+
+export const binderDestinationsQuerySchema = z.object({ cardId: cardIdSchema.optional() }).strict();
