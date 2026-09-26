@@ -98,6 +98,39 @@ describe('binder bookmarks', () => {
       removeBinderBookmark(db, 'owner', binder.version.id, marks[0]!.id),
     ).rejects.toMatchObject({ code: 'binder_bookmark_reserved_page' });
   });
+  it('uses only the automatic bookmark while a page is reserved', async () => {
+    const { db, binder } = await setup();
+    const input = { pageId: binder.pages[0]!.id, row: 0, column: 0, name: 'Pocket' };
+    await setBinderBookmark(db, 'owner', binder.version.id, input);
+    const reserved = await reserveBinderPage(
+      db,
+      'owner',
+      binder.version.id,
+      0,
+      true,
+      'Art',
+      binder.version.revision,
+    );
+    await expect(setBinderBookmark(db, 'owner', binder.version.id, input)).rejects.toMatchObject({
+      code: 'binder_bookmark_reserved_page',
+    });
+    expect(
+      (await getBinderBookmarks(db, 'owner', binder.version.id)).map((mark) => mark.kind),
+    ).toEqual(['reserved-page']);
+    await reserveBinderPage(
+      db,
+      'owner',
+      binder.version.id,
+      0,
+      false,
+      null,
+      reserved.version.revision,
+    );
+    expect(
+      (await getBinderBookmarks(db, 'owner', binder.version.id)).map((mark) => mark.name),
+    ).toEqual(['Pocket']);
+  });
+
   it('keeps pocket anchors on reordered pages and clones them to new page identities', async () => {
     const { db, binder } = await setup();
     const pages = (await getBinderVersion(db, 'owner', binder.version.id, 0, 2)).pages;

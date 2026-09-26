@@ -2254,17 +2254,19 @@ export async function getBinderBookmarks(
     )
     .bind(versionId)
     .all<BookmarkRow>();
-  const pocketBookmarks = rows.results.map((row) => {
-    const page = byPageId.get(row.binder_page_id);
-    if (!page) domainError('binder_page_not_found');
-    return binderBookmarkSchema.parse({
-      id: row.id,
-      kind: 'pocket',
-      name: row.name,
-      pageId: row.binder_page_id,
-      at: { page: page.position, row: row.row_index, column: row.column_index },
+  const pocketBookmarks = rows.results
+    .filter((row) => byPageId.get(row.binder_page_id)?.kind !== 'reserved')
+    .map((row) => {
+      const page = byPageId.get(row.binder_page_id);
+      if (!page) domainError('binder_page_not_found');
+      return binderBookmarkSchema.parse({
+        id: row.id,
+        kind: 'pocket',
+        name: row.name,
+        pageId: row.binder_page_id,
+        at: { page: page.position, row: row.row_index, column: row.column_index },
+      });
     });
-  });
   const reservedBookmarks = pages
     .filter((page) => page.kind === 'reserved')
     .map((page) =>
@@ -2289,10 +2291,11 @@ export async function setBinderBookmark(
 ): Promise<BinderBookmark> {
   const version = await readVersion(db, ownerId, versionId);
   const page = await db
-    .prepare('SELECT id, position FROM binder_pages WHERE id = ?1 AND binder_version_id = ?2')
+    .prepare('SELECT id, position, kind FROM binder_pages WHERE id = ?1 AND binder_version_id = ?2')
     .bind(input.pageId, versionId)
     .first<PageRow>();
   if (!page) domainError('binder_page_not_found');
+  if (page.kind === 'reserved') domainError('binder_bookmark_reserved_page');
   validateLocation(version, { page: page.position, row: input.row, column: input.column });
   const id = newId('bookmark');
   const now = nowSeconds();
@@ -2300,6 +2303,13 @@ export async function setBinderBookmark(
     // The slot-existence guard and the write happen in one batch so a concurrent
     // capacity shrink that removes this exact pocket cannot race the insert.
     await db.batch([
+      db
+        .prepare(
+          `SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM binder_pages WHERE id = ?1 AND kind = 'reserved'
+      ) THEN 1 ELSE json_extract('binder_bookmark_reserved_page', '$') END AS valid`,
+        )
+        .bind(page.id),
       db
         .prepare(
           `SELECT CASE WHEN EXISTS (
@@ -2318,6 +2328,8 @@ export async function setBinderBookmark(
     ]);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('binder_bookmark_reserved_page'))
+      domainError('binder_bookmark_reserved_page');
     if (message.includes('binder_slot_not_found')) domainError('binder_slot_not_found');
     throw error;
   }
