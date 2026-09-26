@@ -2299,39 +2299,33 @@ export async function setBinderBookmark(
   validateLocation(version, { page: page.position, row: input.row, column: input.column });
   const id = newId('bookmark');
   const now = nowSeconds();
-  try {
-    // The slot-existence guard and the write happen in one batch so a concurrent
-    // capacity shrink that removes this exact pocket cannot race the insert.
-    await db.batch([
-      db
-        .prepare(
-          `SELECT CASE WHEN NOT EXISTS (
-        SELECT 1 FROM binder_pages WHERE id = ?1 AND kind = 'reserved'
-      ) THEN 1 ELSE json_extract('binder_bookmark_reserved_page', '$') END AS valid`,
-        )
-        .bind(page.id),
-      db
-        .prepare(
-          `SELECT CASE WHEN EXISTS (
-             SELECT 1 FROM binder_slots
-             WHERE binder_page_id = ?1 AND row_index = ?2 AND column_index = ?3
-           ) THEN 1 ELSE json_extract('binder_slot_not_found', '$') END AS valid`,
-        )
-        .bind(page.id, input.row, input.column),
-      db
-        .prepare(
-          `INSERT INTO binder_bookmarks (id, binder_page_id, row_index, column_index, name, created_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-           ON CONFLICT (binder_page_id, row_index, column_index) DO UPDATE SET name = excluded.name`,
-        )
-        .bind(id, page.id, input.row, input.column, input.name, now),
-    ]);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes('binder_bookmark_reserved_page'))
-      domainError('binder_bookmark_reserved_page');
-    if (message.includes('binder_slot_not_found')) domainError('binder_slot_not_found');
-    throw error;
+  // Resolve ownership, page state and the exact pocket in the write itself. A concurrent
+  // reservation or capacity shrink makes this a no-op rather than a generic SQL error.
+  const saved = await db
+    .prepare(
+      `
+    INSERT INTO binder_bookmarks (id, binder_page_id, row_index, column_index, name, created_at)
+    SELECT ?1, page.id, slot.row_index, slot.column_index, ?5, ?6
+    FROM binder_pages page
+    JOIN binder_versions version ON version.id = page.binder_version_id
+    JOIN binders binder ON binder.id = version.binder_id
+    JOIN binder_slots slot ON slot.binder_page_id = page.id
+    WHERE page.id = ?2 AND page.binder_version_id = ?7 AND binder.owner_id = ?8
+      AND page.kind <> 'reserved' AND slot.row_index = ?3 AND slot.column_index = ?4
+      AND page.position * (version.rows * version.columns)
+        + slot.row_index * version.columns + slot.column_index < version.capacity
+    ON CONFLICT (binder_page_id, row_index, column_index) DO UPDATE SET name = excluded.name
+  `,
+    )
+    .bind(id, page.id, input.row, input.column, input.name, now, versionId, ownerId)
+    .run();
+  if (!saved.meta.changes) {
+    const current = await db
+      .prepare('SELECT kind FROM binder_pages WHERE id = ?1 AND binder_version_id = ?2')
+      .bind(page.id, versionId)
+      .first<{ kind: string }>();
+    if (current?.kind === 'reserved') domainError('binder_bookmark_reserved_page');
+    domainError('binder_slot_not_found');
   }
   const row = await db
     .prepare(
