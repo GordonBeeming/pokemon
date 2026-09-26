@@ -1,3 +1,4 @@
+import { NavigationLink } from './navigation-link';
 import { cardRegion } from './card-region';
 import { BinderCopyPrompt } from './binder-copy-prompt';
 import type { BinderCopyChoice } from '@pokedex/shared';
@@ -939,18 +940,30 @@ export function CatalogueView({
       <header className="page-heading catalogue-heading">
         <div>
           {pokedexNumber ? (
-            <button className="text-button back-link" type="button" onClick={onBackToNational}>
+            <NavigationLink
+              className="text-button back-link"
+              href="#species"
+              onNavigate={onBackToNational}
+            >
               Back to National Pokédex
-            </button>
+            </NavigationLink>
           ) : setId ? (
-            <button className="text-button back-link" type="button" onClick={onBackToSets}>
+            <NavigationLink
+              className="text-button back-link"
+              href="#sets"
+              onNavigate={onBackToSets}
+            >
               Back to Set checklists
-            </button>
+            </NavigationLink>
           ) : null}
           {contextualCatalogue ? (
-            <button className="text-button back-link" type="button" onClick={onShowAll}>
+            <NavigationLink
+              className="text-button back-link"
+              href="#catalogue"
+              onNavigate={onShowAll}
+            >
               Show full catalogue
-            </button>
+            </NavigationLink>
           ) : null}
           <h1>
             {speciesName

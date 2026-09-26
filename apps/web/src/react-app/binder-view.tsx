@@ -1,3 +1,4 @@
+import { NavigationLink } from './navigation-link';
 import { BookmarkEditor, BookmarkJump, PageReservationEditor } from './binder-bookmarks';
 import type { BinderBookmark } from '@pokedex/shared';
 import { cardRegion } from './card-region';
@@ -1426,10 +1427,10 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     <>
       <header className="page-heading binder-active-heading">
         <div>
-          <button
+          <NavigationLink
             className="text-button back-link"
-            type="button"
-            onClick={() => {
+            href="#binders"
+            onNavigate={() => {
               showLibrary();
               setTool(null);
               setDeleteOpen(false);
@@ -1437,7 +1438,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
             }}
           >
             Back to all binders
-          </button>
+          </NavigationLink>
           <h1>{binders.find((item) => item.id === version?.binderId)?.name ?? 'Binder plan'}</h1>
           <p>
             {editable
