@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   addCardsToBinderVersion,
   createBinder,
@@ -87,6 +87,22 @@ describe('bulk binder placement', () => {
 });
 
 describe('binder copy choices', () => {
+  it('preserves unrelated batch errors when the requested new copy would satisfy the budget', async () => {
+    const { database, db } = setup();
+    const created = await createBinder(db, 'owner', 'Binder', { kind: '2x2', rows: 2, columns: 2 });
+    const failure = new Error('Temporary database failure');
+    vi.spyOn(db, 'batch').mockRejectedValueOnce(failure);
+    await expect(
+      setBinderSlot(db, 'owner', created.version.id, 0, 0, 0, 'card-1', 1, {
+        action: 'add',
+        expectedCollectionRevision: 0,
+      }),
+    ).rejects.toBe(failure);
+    expect(database.prepare('SELECT COUNT(*) AS count FROM collection_cards').get()).toEqual({
+      count: 0,
+    });
+  });
+
   it('adds and places one copy atomically and rejects replay without adding a second', async () => {
     const { database, db } = setup();
     const created = await createBinder(db, 'owner', 'Binder', { kind: '2x2', rows: 2, columns: 2 });

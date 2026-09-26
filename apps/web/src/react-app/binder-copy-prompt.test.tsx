@@ -108,7 +108,9 @@ describe('binder copy prompt', () => {
     await render(1);
     expect(container.querySelector('[role=alert]')).not.toBeNull();
     expect(container.textContent).not.toContain('Add a new copy');
+    button('Refresh owned count').focus();
     await interact(() => button('Refresh owned count').click());
+    expect(document.activeElement).toBe(button('Refresh owned count'));
     expect(container.textContent).toContain('You own 1 copy');
   });
 });

@@ -391,6 +391,7 @@ function DetailPanel({
                   <section className="binder-placement-options" aria-label="Choose binder position">
                     {copyAt ? (
                       <BinderCopyPrompt
+                        headingLevel={4}
                         card={card}
                         pending={binderPending || pending || dirty}
                         onChoose={(choice) => choosePlacement(copyAt, choice)}
@@ -732,12 +733,13 @@ export function CatalogueView({
       }
       onNotice({ kind: 'success', message: label });
       if (copyChoice.action === 'add') {
-        void api
-          .card(card.id)
-          .then((updated) => {
-            if (updated.collection) applyState(updated.collection);
-          })
-          .catch((reason: unknown) => onNotice({ kind: 'error', message: userMessage(reason) }));
+        try {
+          const updated = await api.card(card.id);
+          if (generation === placementGeneration.current && updated.collection)
+            applyState(updated.collection);
+        } catch (reason) {
+          onNotice({ kind: 'error', message: userMessage(reason) });
+        }
       }
     } catch (error) {
       const stale = error instanceof ApiError && error.code === 'binder_revision_conflict';
@@ -796,10 +798,14 @@ export function CatalogueView({
 
   function applyState(state: CollectionState): void {
     setCards((current) =>
-      current.map((card) => (card.id === state.cardId ? { ...card, collection: state } : card)),
+      current.map((card) =>
+        card.id === state.cardId && (card.collection?.revision ?? 0) <= state.revision
+          ? { ...card, collection: state }
+          : card,
+      ),
     );
     setDetail((current) =>
-      current?.id === state.cardId
+      current?.id === state.cardId && (current.collection?.revision ?? 0) <= state.revision
         ? { ...current, collection: state, notes: state.notes }
         : current,
     );
@@ -1113,7 +1119,7 @@ export function CatalogueView({
       {detail ? (
         <DetailPanel
           card={detail}
-          pending={saving}
+          pending={saving || binderAdding}
           pokedexNumber={pokedexNumber}
           representativePending={representativePending}
           save={save}

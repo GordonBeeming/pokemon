@@ -1221,6 +1221,7 @@ function assignmentQuantityAssertion(
   pageId: string,
   at: BinderSlotLocation,
   cardId: string | null,
+  options: { additionalCopies?: number; assert?: boolean } = {},
 ): D1PreparedStatement {
   return db
     .prepare(
@@ -1234,8 +1235,8 @@ function assignmentQuantityAssertion(
              AND NOT (?7 = 'draft' AND assigned_version.binder_id = ?8)))
            AND assigned.assigned_card_id = ?1
            AND NOT (assigned.binder_page_id = ?3 AND assigned.row_index = ?4 AND assigned.column_index = ?5))
-        < COALESCE((SELECT quantity FROM collection_cards WHERE owner_id = ?2 AND card_id = ?1), 0)
-      ) THEN 1 ELSE json_extract('binder_assignment_quantity_exceeded', '$') END AS valid`,
+        < COALESCE((SELECT quantity FROM collection_cards WHERE owner_id = ?2 AND card_id = ?1), 0) + ?9
+      ) THEN 1 ELSE ${options.assert === false ? '0' : "json_extract('binder_assignment_quantity_exceeded', '$')"} END AS valid`,
     )
     .bind(
       cardId,
@@ -1246,6 +1247,7 @@ function assignmentQuantityAssertion(
       version.id,
       version.status,
       version.binder_id,
+      options.additionalCopies ?? 0,
     );
 }
 
@@ -1332,11 +1334,17 @@ export async function setBinderSlot(
         throw new CollectionDomainError('collection_revision_conflict');
     }
     if (placeCopy) {
-      try {
-        await quantityAssertion.first();
-      } catch {
-        throw new BinderDomainError('binder_assignment_quantity_exceeded');
-      }
+      // The batch rolled back, so include the requested copy when checking its budget.
+      const budget = await assignmentQuantityAssertion(
+        db,
+        ownerId,
+        version,
+        page.id,
+        { page: pagePosition, row, column },
+        cardId,
+        { additionalCopies: copyChoice?.action === 'add' ? 1 : 0, assert: false },
+      ).first<{ valid: number }>();
+      if (budget?.valid === 0) throw new BinderDomainError('binder_assignment_quantity_exceeded');
     }
     throw error;
   }

@@ -9,8 +9,10 @@ export function BinderCopyPrompt({
   pending,
   onChoose,
   onCancel,
+  headingLevel = 3,
 }: {
   card: CatalogueCardView;
+  headingLevel?: 3 | 4;
   pending: boolean;
   onChoose: (choice: BinderCopyChoice) => void;
   onCancel: () => void;
@@ -21,6 +23,8 @@ export function BinderCopyPrompt({
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     heading.current?.focus();
+  }, [card.id]);
+  useEffect(() => {
     const controller = new AbortController();
     setCurrent(null);
     setError(null);
@@ -34,12 +38,13 @@ export function BinderCopyPrompt({
       });
     return () => controller.abort();
   }, [card.id, attempt]);
+  const Heading = headingLevel === 4 ? 'h4' : 'h3';
   const quantity = current?.collection?.quantity ?? 0;
   return (
     <section className="binder-copy-prompt" aria-label="Choose a collection copy">
-      <h3 ref={heading} tabIndex={-1}>
+      <Heading ref={heading} tabIndex={-1}>
         Which copy are you placing?
-      </h3>
+      </Heading>
       <CardArt src={card.imageLowUrl} highSrc={card.imageHighUrl} alt="" />
       <p>
         <strong>{card.name}</strong> · {card.setName} · {card.number} ·{' '}
