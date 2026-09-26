@@ -131,6 +131,55 @@ describe('binder bookmarks', () => {
     ).toEqual(['Pocket']);
   });
 
+  it.each(['reserve', 'trim'] as const)(
+    'rejects a concurrent %s without a generic SQL error',
+    async (change) => {
+      const { database, db, binder } = await setup();
+      const pageId = binder.pages[0]!.id;
+      const racingDb = {
+        ...db,
+        prepare(query: string) {
+          const statement = db.prepare(query);
+          if (!query.startsWith('SELECT id, position, kind FROM binder_pages')) return statement;
+          return {
+            bind(...values: unknown[]) {
+              const bound = statement.bind(...values);
+              return {
+                async first<T>() {
+                  const row = await bound.first<T>();
+                  if (change === 'reserve')
+                    database
+                      .prepare("UPDATE binder_pages SET kind='reserved' WHERE id=?")
+                      .run(pageId);
+                  else
+                    database
+                      .prepare(
+                        'DELETE FROM binder_slots WHERE binder_page_id=? AND row_index=0 AND column_index=0',
+                      )
+                      .run(pageId);
+                  return row;
+                },
+              } as D1PreparedStatement;
+            },
+          } as D1PreparedStatement;
+        },
+      } as D1Database;
+      await expect(
+        setBinderBookmark(racingDb, 'owner', binder.version.id, {
+          pageId,
+          row: 0,
+          column: 0,
+          name: 'Racing',
+        }),
+      ).rejects.toMatchObject({
+        code: change === 'reserve' ? 'binder_bookmark_reserved_page' : 'binder_slot_not_found',
+      });
+      expect(database.prepare('SELECT COUNT(*) AS count FROM binder_bookmarks').get()).toEqual({
+        count: 0,
+      });
+    },
+  );
+
   it('keeps pocket anchors on reordered pages and clones them to new page identities', async () => {
     const { db, binder } = await setup();
     const pages = (await getBinderVersion(db, 'owner', binder.version.id, 0, 2)).pages;
