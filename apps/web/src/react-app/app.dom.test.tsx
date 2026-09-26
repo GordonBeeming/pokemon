@@ -1461,6 +1461,16 @@ describe('async frontend announcements', () => {
         ...card,
         id: `option-${index}`,
         name: `Option ${index}`,
+        collection:
+          index === 0
+            ? {
+                cardId: `option-${index}`,
+                quantity: 2,
+                revision: 1,
+                notes: null,
+                updatedAt: '2026-09-26T00:00:00Z',
+              }
+            : null,
       }));
       const nextPage = [
         ...Array.from({ length: 5 }, (_, index) => ({ ...card, id: `later-${index}` })),
@@ -1510,7 +1520,17 @@ describe('async frontend announcements', () => {
       expect(container.querySelectorAll('.binder-tray-card')).toHaveLength(24);
       await clickButton('Load more');
       expect(container.querySelectorAll('.binder-tray-card')).toHaveLength(30);
-      expect(container.querySelector('.binder-tray-card .ownership-mark')).toBeNull();
+      expect(
+        container.querySelector('.binder-tray-card .ownership-mark')?.getAttribute('aria-label'),
+      ).toBe('2 copies owned');
+      expect(container.querySelectorAll('.binder-tray-card .ownership-mark')).toHaveLength(30);
+      expect(
+        container
+          .querySelectorAll('.binder-tray-card')[1]
+          ?.querySelector('.ownership-mark')
+          ?.getAttribute('aria-label'),
+      ).toBe('Missing from collection');
+      expect(container.querySelector('.binder-tray-card button')).toBeNull();
       const nextParams = apiMocks.search.mock.calls[3]?.[0] as URLSearchParams;
       expect(nextParams.get('cursor')).toBe('next-page');
       expect(nextParams.get('pokedexNumber')).toBe(mode === 'same' ? '1' : null);

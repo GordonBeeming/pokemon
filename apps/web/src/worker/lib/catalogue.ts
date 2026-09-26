@@ -1121,7 +1121,12 @@ export async function searchCards(
   if (filters.owned !== undefined) {
     where.push(filters.owned ? 'COALESCE(cc.quantity, 0) > 0' : 'COALESCE(cc.quantity, 0) = 0');
   }
-  const ownedFirst = !filters.setId;
+  const ownedFirst =
+    !filters.setId ||
+    fts !== null ||
+    cardNumber !== null ||
+    Boolean(filters.species) ||
+    filters.pokedexNumber !== undefined;
   const ownershipOrder = 'CASE WHEN COALESCE(cc.quantity, 0) > 0 THEN 0 ELSE 1 END';
   const predicate = where.join(' AND ');
   const cursor = decodeCatalogueCursor(filters.cursor);

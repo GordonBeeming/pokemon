@@ -96,8 +96,8 @@ describe('exact collector-number search', () => {
       cursor: first.cursor,
     });
     expect(first.total).toBe(3);
-    expect(first.cards.map((card) => card.number)).toEqual(['23']);
-    expect(second.cards.map((card) => card.number)).toEqual(['023']);
+    expect(first.cards.map((card) => card.number)).toEqual(['023/132']);
+    expect(second.cards.map((card) => card.number)).toEqual(['23']);
     await expect(
       searchCards(db, 'owner', { ...filters, query: '111', cursor: first.cursor }),
     ).rejects.toMatchObject({ code: 'invalid_catalogue_cursor' });
