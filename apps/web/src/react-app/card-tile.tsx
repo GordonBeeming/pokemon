@@ -6,6 +6,7 @@ export function CardTile({
   title,
   subtitle,
   quantity,
+  showOwnership = true,
   className = '',
   ...button
 }: {
@@ -13,6 +14,7 @@ export function CardTile({
   title: string;
   subtitle: string;
   quantity: number;
+  showOwnership?: boolean;
   className?: string;
 } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children' | 'title'>): ReactElement {
   return (
@@ -22,7 +24,7 @@ export function CardTile({
         <strong title={title}>{title}</strong>
         <small>{subtitle}</small>
       </span>
-      <OwnershipMark quantity={quantity} />
+      {showOwnership ? <OwnershipMark quantity={quantity} /> : null}
     </button>
   );
 }

@@ -1,3 +1,5 @@
+import { BinderCopyPrompt } from './binder-copy-prompt';
+import type { BinderCopyChoice } from '@pokedex/shared';
 import {
   binderCapacityErrorSchema,
   binderSlotLocationSchema,
@@ -683,7 +685,10 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
   const [replacement, setReplacement] = useState<'same' | 'any' | null>(null);
   const [searchState, setSearchState] = useState<'idle' | 'loading' | 'loaded'>('idle');
   const searchController = useRef<AbortController | null>(null);
+  const searchParams = useRef<URLSearchParams | null>(null);
+  const [searchCursor, setSearchCursor] = useState<string | null>(null);
   const [legacyQuery, setLegacyQuery] = useState('');
+  const [copyCard, setCopyCard] = useState<CatalogueCardView | null>(null);
   const [legacyResults, setLegacyResults] = useState<CatalogueCardView[]>([]);
   const mounted = useRef(false);
   const navigation = useRef(0);
@@ -725,6 +730,8 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
     setResize('');
     setLegacyQuery('');
     setLegacyResults([]);
+    setCopyCard(null);
+    setSearchCursor(null);
     setReplacement(null);
     setMutationError(null);
   }
@@ -760,6 +767,8 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
       setMutationError(null);
       setReplacement(null);
       setLegacyResults([]);
+      setCopyCard(null);
+      setSearchCursor(null);
       setSearchState('idle');
     }
     setPending(true);
@@ -981,6 +990,8 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
     setReplacement(null);
     setLegacyQuery('');
     setLegacyResults([]);
+    setCopyCard(null);
+    setSearchCursor(null);
     setSearchState('idle');
     setSelected(at);
     setMutationError(null);
@@ -1017,15 +1028,27 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
       ) ?? null)
     : null;
   const target = selectedSlot?.entryKind === 'exact-card' || selectedSlot?.entryKind === 'pokemon';
-  async function searchLegacyCards(mode = replacement, query = legacyQuery): Promise<void> {
+  async function searchLegacyCards(
+    mode = replacement,
+    query = legacyQuery,
+    more = false,
+  ): Promise<void> {
+    if (more && (!searchCursor || !searchParams.current || searchState === 'loading')) return;
     searchController.current?.abort();
     const controller = new AbortController();
     searchController.current = controller;
     setSearchState('loading');
-    setLegacyResults([]);
+    if (!more) {
+      setLegacyResults([]);
+      setCopyCard(null);
+      setSearchCursor(null);
+    }
     try {
-      const params = new URLSearchParams({ q: query, limit: '24', offset: '0' });
-      if (mode === 'same') {
+      const params = more
+        ? new URLSearchParams(searchParams.current ?? undefined)
+        : new URLSearchParams({ q: query, limit: '24' });
+      if (more && searchCursor) params.set('cursor', searchCursor);
+      if (!more && mode === 'same') {
         const original = selectedSlot?.cardId ? cards.get(selectedSlot.cardId) : null;
         const pokemonNumber = selectedSlot?.pokemonNumber ?? original?.pokedexNumber;
         if (pokemonNumber) params.set('pokedexNumber', String(pokemonNumber));
@@ -1040,9 +1063,17 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
           return;
         }
       }
+      if (!more) searchParams.current = new URLSearchParams(params);
       const result = await api.search(params, controller.signal);
       if (controller.signal.aborted) return;
-      setLegacyResults(result.cards);
+      setLegacyResults((current) => {
+        if (!more) return result.cards;
+        const existing = new Set(current.map((card) => card.id));
+        return [...current, ...result.cards.filter((card) => !existing.has(card.id))];
+      });
+      setSearchCursor(
+        result.cards.length && (!more || result.cursor !== searchCursor) ? result.cursor : null,
+      );
       setSearchState('loaded');
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -1055,26 +1086,25 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
     setLegacyQuery('');
     void searchLegacyCards(mode, '');
   }
-  async function chooseExactTarget(card: CatalogueCardView): Promise<void> {
+  async function chooseExactTarget(
+    card: CatalogueCardView,
+    copyChoice: BinderCopyChoice,
+  ): Promise<void> {
     if (!version || !selected) return;
     const placed = await mutate(
       () =>
-        replacement
-          ? api.setSlot(version.id, {
-              ...selected,
-              cardId: card.id,
-              expectedRevision: version.revision,
-            })
-          : api.insertEntries(
-              version.id,
-              selected,
-              [{ kind: 'exact-card', cardId: card.id, startsNewPage: false }],
-              version.revision,
-            ),
+        api.setSlot(version.id, {
+          ...selected,
+          cardId: card.id,
+          expectedRevision: version.revision,
+          copyChoice,
+        }),
       `${card.name} is now the exact target for pocket ${selected.row + 1}:${selected.column + 1}.`,
     );
     if (placed) {
       setLegacyResults([]);
+      setCopyCard(null);
+      setSearchCursor(null);
       setLegacyQuery('');
     }
   }
@@ -1150,8 +1180,11 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
     replacement,
     setReplacement,
     searchState,
+    searchCursor,
     startReplacement,
     legacyResults,
+    copyCard,
+    setCopyCard,
     version,
     currentPage,
     reservedPage,
@@ -1222,8 +1255,11 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     replacement,
     setReplacement,
     searchState,
+    searchCursor,
     startReplacement,
     legacyResults,
+    copyCard,
+    setCopyCard,
     version,
     currentPage,
     reservedPage,
@@ -1601,53 +1637,77 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
                     </p>
                   </div>
                 </div>
-                <form
-                  className="card-picker"
-                  role="search"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    void searchLegacyCards();
-                  }}
-                >
-                  <label>
-                    Search cards
-                    <input
-                      value={legacyQuery}
-                      placeholder="Pokémon, set, number, rarity, or artist"
-                      onChange={(event) => setLegacyQuery(event.target.value)}
-                    />
-                  </label>
-                  <button
-                    className="quiet-button"
-                    type="submit"
-                    disabled={pending || searchState === 'loading'}
-                  >
-                    Find cards
-                  </button>
-                </form>
-                <p className="card-search-status" role="status">
-                  {searchState === 'loading'
-                    ? 'Loading cards…'
-                    : searchState === 'loaded' && !legacyResults.length
-                      ? 'No matching cards found.'
-                      : ''}
-                </p>
-                {legacyResults.length ? (
-                  <div className="binder-card-options" aria-label="Exact card targets">
-                    {legacyResults.map((card) => (
-                      <CardTile
-                        className="binder-tray-card"
-                        key={card.id}
-                        disabled={pending}
-                        onClick={() => void chooseExactTarget(card)}
-                        art={<CardArt src={card.imageLowUrl} highSrc={card.imageHighUrl} alt="" />}
-                        title={card.name}
-                        subtitle={`${card.setName} · ${card.number}`}
-                        quantity={card.collection?.quantity ?? 0}
-                      />
-                    ))}
-                  </div>
-                ) : null}
+                {copyCard ? (
+                  <BinderCopyPrompt
+                    card={copyCard}
+                    pending={pending}
+                    onChoose={(choice) => void chooseExactTarget(copyCard, choice)}
+                    onCancel={() => setCopyCard(null)}
+                  />
+                ) : (
+                  <>
+                    <form
+                      className="card-picker"
+                      role="search"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void searchLegacyCards();
+                      }}
+                    >
+                      <label>
+                        Search cards
+                        <input
+                          value={legacyQuery}
+                          placeholder="Pokémon, set, number, rarity, or artist"
+                          onChange={(event) => setLegacyQuery(event.target.value)}
+                        />
+                      </label>
+                      <button
+                        className="quiet-button"
+                        type="submit"
+                        disabled={pending || searchState === 'loading'}
+                      >
+                        Find cards
+                      </button>
+                    </form>
+                    <p className="card-search-status" role="status">
+                      {searchState === 'loading'
+                        ? 'Loading cards…'
+                        : searchState === 'loaded' && !legacyResults.length
+                          ? 'No matching cards found.'
+                          : ''}
+                    </p>
+                    {legacyResults.length ? (
+                      <div className="binder-card-options" aria-label="Exact card targets">
+                        {legacyResults.map((card) => (
+                          <CardTile
+                            className="binder-tray-card"
+                            showOwnership={false}
+                            key={card.id}
+                            disabled={pending}
+                            onClick={() => setCopyCard(card)}
+                            art={
+                              <CardArt src={card.imageLowUrl} highSrc={card.imageHighUrl} alt="" />
+                            }
+                            title={card.name}
+                            subtitle={`${card.setName} · ${card.number}`}
+                            quantity={card.collection?.quantity ?? 0}
+                          />
+                        ))}
+                      </div>
+                    ) : null}
+                    {searchCursor ? (
+                      <button
+                        className="quiet-button"
+                        type="button"
+                        disabled={pending || searchState === 'loading'}
+                        onClick={() => void searchLegacyCards(replacement, legacyQuery, true)}
+                      >
+                        {searchState === 'loading' ? 'Loading more…' : 'Load more'}
+                      </button>
+                    ) : null}
+                  </>
+                )}
               </section>
             ) : null}
             {selected ? (

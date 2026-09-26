@@ -338,6 +338,7 @@ desktopApiRoutes.put('/desktop/binders/versions/:id/slot', async (c) => {
   try {
     const parsed = binderSlotSetRequestSchema.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    if (parsed.data.copyChoice?.action === 'add') await desktopOwner(c, 'collection:write');
     return c.json({
       ok: true,
       binder: await ownerOperations(c.env, await desktopOwner(c, 'binders:write')).setBinderSlot(
@@ -345,6 +346,7 @@ desktopApiRoutes.put('/desktop/binders/versions/:id/slot', async (c) => {
         parsed.data,
         parsed.data.cardId,
         parsed.data.expectedRevision,
+        parsed.data.copyChoice,
       ),
     });
   } catch (error) {
