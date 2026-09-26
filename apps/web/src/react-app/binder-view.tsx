@@ -1544,7 +1544,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
               onArrange={() =>
                 void mutate(
                   () => api.arrangeBinder(version.id, 'pokedex-number', version.revision),
-                  'Targets arranged with reservations anchored.',
+                  'Targets arranged with gaps and section dividers preserved.',
                 )
               }
             />
@@ -1638,7 +1638,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
           if (version)
             void mutate(
               () => api.arrangeBinder(version.id, 'pokedex-number', version.revision),
-              'Targets arranged with reservations anchored.',
+              'Targets arranged with gaps and section dividers preserved.',
             );
         }}
         onRemove={() => {
@@ -1839,9 +1839,9 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
                     <section className="pocket-action-group" hidden={tool !== 'shift'}>
                       <h3>Insert a gap / shift sleeves</h3>
                       <p>
-                        Shift this target and every later target together. Positive numbers leave
-                        empty sleeves here; negative numbers need empty sleeves before this target.
-                        Page breaks stay on page boundaries.
+                        Shift targets within this section. Positive numbers add empty sleeves;
+                        negative numbers close an empty gap. The next reserved page moves forward by
+                        whole pages only when this section needs more room.
                       </p>
                       <label>
                         Shift by sleeves

@@ -315,7 +315,7 @@ describe('binder D1 domain', () => {
     const pages = await getBinderVersion(db, 'owner', created.version.id, 0, 2);
     expect(pages.pages[0]?.slots[0]).toMatchObject({ entryKind: 'empty' });
     expect(pages.pages[0]?.slots[3]).toMatchObject({ entryKind: 'empty' });
-    expect(pages.pages[1]?.slots[1]).toMatchObject({ cardId: 'bulba' });
+    expect(pages.pages[1]?.slots[0]).toMatchObject({ cardId: 'bulba' });
     await expect(
       compactRemoveBinderEntry(
         db,
@@ -1440,6 +1440,273 @@ describe('binder D1 domain', () => {
     ).rejects.toMatchObject({ code: 'binder_page_contains_targets' });
     expect(await getBinderVersion(db, 'owner', created.version.id, 0, 2)).toEqual(before);
   });
+
+  it('fills a selected manual gap without inserting a second sleeve', async () => {
+    const { database, db } = setup();
+    const created = await createBinder(
+      db,
+      'owner',
+      'Fill gap',
+      { kind: '2x2', rows: 2, columns: 2 },
+      8,
+    );
+    let result = await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      [1, 2].map((pokemonNumber) => ({ kind: 'pokemon', pokemonNumber, startsNewPage: false })),
+      created.version.revision,
+    );
+    result = await moveBinderEntryByOffset(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 1 },
+      1,
+      result.version.revision,
+    );
+    await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 1 },
+      [{ kind: 'reserved', label: 'Future card' }],
+      result.version.revision,
+    );
+    const slots = (await getBinderVersion(db, 'owner', created.version.id)).pages[0]!.slots;
+    expect(slots[0]).toMatchObject({ pokemonNumber: 1 });
+    expect(slots[1]).toMatchObject({ entryKind: 'reserved', label: 'Future card' });
+    expect(slots[2]).toMatchObject({ pokemonNumber: 2 });
+    expect(
+      database
+        .prepare(
+          'SELECT is_manual_gap FROM binder_slots WHERE binder_page_id=? AND row_index=0 AND column_index=1',
+        )
+        .get(created.pages[0]!.id),
+    ).toEqual({ is_manual_gap: 0 });
+  });
+
+  it('does not turn old automatic padding into a manual gap after removing a page break', async () => {
+    const { db } = setup();
+    const created = await createBinder(
+      db,
+      'owner',
+      'Padding',
+      { kind: '2x2', rows: 2, columns: 2 },
+      12,
+    );
+    let result = await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      [1, 2, 3, 4].map((pokemonNumber) => ({
+        kind: 'pokemon',
+        pokemonNumber,
+        startsNewPage: pokemonNumber === 4,
+      })),
+      created.version.revision,
+    );
+    result = await setBinderEntryPageBreak(
+      db,
+      'owner',
+      created.version.id,
+      { page: 1, row: 0, column: 0 },
+      false,
+      result.version.revision,
+    );
+    await moveBinderEntryByOffset(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      1,
+      result.version.revision,
+    );
+    const pages = (await getBinderVersion(db, 'owner', created.version.id, 0, 3)).pages;
+    expect(pages[0]?.slots.map((slot) => slot.pokemonNumber)).toEqual([null, 1, 2, 3]);
+    expect(pages[1]?.slots[0]).toMatchObject({ pokemonNumber: 4, startsNewPage: false });
+  });
+
+  it('remembers a deliberate gap directly before a page break through sort, shift, and clone', async () => {
+    const { database, db } = setup();
+    const created = await createBinder(
+      db,
+      'owner',
+      'Gap provenance',
+      { kind: '2x2', rows: 2, columns: 2 },
+      16,
+    );
+    let result = await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      [1, 2, 3, 4].map((pokemonNumber) => ({
+        kind: 'pokemon',
+        pokemonNumber,
+        startsNewPage: pokemonNumber === 4,
+      })),
+      created.version.revision,
+    );
+    result = await moveBinderEntryByOffset(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 1, column: 0 },
+      1,
+      result.version.revision,
+    );
+    result = await swapBinderSlots(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 1, column: 1 },
+      { page: 0, row: 1, column: 0 },
+      result.version.revision,
+    );
+    const pageId = created.pages[0]!.id;
+    const manual = () =>
+      database
+        .prepare(
+          'SELECT is_manual_gap FROM binder_slots WHERE binder_page_id=? AND row_index=1 AND column_index=1',
+        )
+        .get(pageId);
+    expect(manual()).toEqual({ is_manual_gap: 1 });
+    result = await arrangeBinderVersion(
+      db,
+      'owner',
+      created.version.id,
+      'pokedex-number',
+      result.version.revision,
+    );
+    expect(manual()).toEqual({ is_manual_gap: 1 });
+    const cloned = await cloneBinderVersion(
+      db,
+      'owner',
+      created.version.id,
+      result.version.revision,
+    );
+    expect(
+      database
+        .prepare(
+          'SELECT is_manual_gap FROM binder_slots WHERE binder_page_id=? AND row_index=1 AND column_index=1',
+        )
+        .get(cloned.pages[0]!.id),
+    ).toEqual({ is_manual_gap: 1 });
+    result = await moveBinderEntryByOffset(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      1,
+      result.version.revision,
+    );
+    let pages = (await getBinderVersion(db, 'owner', created.version.id, 0, 4)).pages;
+    expect(pages[2]?.slots[0]).toMatchObject({ pokemonNumber: 4 });
+    expect(
+      database
+        .prepare(
+          'SELECT is_manual_gap FROM binder_slots WHERE binder_page_id=? AND row_index=0 AND column_index=0',
+        )
+        .get(pages[1]!.id),
+    ).toEqual({ is_manual_gap: 1 });
+    result = await moveBinderEntryByOffset(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 1 },
+      1,
+      result.version.revision,
+    );
+    pages = (await getBinderVersion(db, 'owner', created.version.id, 0, 4)).pages;
+    expect(pages[2]?.slots[0]).toMatchObject({ pokemonNumber: 4 });
+  });
+
+  it.each(['occupied', 'reserved'] as const)(
+    'includes completion of a %s partial tail in the capacity needed before a divider',
+    async (kind) => {
+      const { db } = setup();
+      const created = await createBinder(
+        db,
+        'owner',
+        'Partial tail',
+        { kind: '2x2', rows: 2, columns: 2 },
+        14,
+      );
+      let result = await reserveBinderPage(
+        db,
+        'owner',
+        created.version.id,
+        1,
+        true,
+        'Divider',
+        created.version.revision,
+      );
+      result = await insertBinderEntries(
+        db,
+        'owner',
+        created.version.id,
+        { page: 0, row: 0, column: 0 },
+        [1, 2, 3, 4].map((pokemonNumber) => ({
+          kind: 'pokemon',
+          pokemonNumber,
+          startsNewPage: false,
+        })),
+        result.version.revision,
+      );
+      result =
+        kind === 'occupied'
+          ? await insertBinderEntries(
+              db,
+              'owner',
+              created.version.id,
+              { page: 3, row: 0, column: 0 },
+              [{ kind: 'pokemon', pokemonNumber: 152, startsNewPage: true }],
+              result.version.revision,
+            )
+          : await reserveBinderPage(
+              db,
+              'owner',
+              created.version.id,
+              3,
+              true,
+              'Last',
+              result.version.revision,
+            );
+      await expect(
+        moveBinderEntryByOffset(
+          db,
+          'owner',
+          created.version.id,
+          { page: 0, row: 0, column: 0 },
+          1,
+          result.version.revision,
+        ),
+      ).rejects.toMatchObject({
+        code: 'binder_capacity_exceeded',
+        details: { currentCapacity: 14, requiredCapacity: 20, additionalPockets: 6 },
+      });
+      result = await resizeBinderCapacity(
+        db,
+        'owner',
+        created.version.id,
+        20,
+        result.version.revision,
+      );
+      await expect(
+        moveBinderEntryByOffset(
+          db,
+          'owner',
+          created.version.id,
+          { page: 0, row: 0, column: 0 },
+          1,
+          result.version.revision,
+        ),
+      ).resolves.toMatchObject({ version: { capacity: 20 } });
+    },
+  );
 
   it('requires enough capacity for a full page before moving a divider', async () => {
     const { db } = setup();
