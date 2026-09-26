@@ -1,3 +1,5 @@
+import { BinderCopyPrompt } from './binder-copy-prompt';
+import type { BinderCopyChoice } from '@pokedex/shared';
 import type { BinderInsertDestinations, BinderSlotLocation } from '@pokedex/shared';
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import {
@@ -95,9 +97,11 @@ function DetailPanel({
   binderPlacement: BinderInsertDestinations | null;
   binderError: string | null;
   binderAdded: { href: string; label: string } | null;
-  choosePlacement: (at: BinderSlotLocation) => void;
+  choosePlacement: (at: BinderSlotLocation, choice: BinderCopyChoice) => void;
   cancelPlacement: () => void;
 }): ReactElement {
+  const [copyAt, setCopyAt] = useState<BinderSlotLocation | null>(null);
+  useEffect(() => setCopyAt(null), [binderPlacement]);
   const [quantity, setQuantity] = useState(card.collection?.quantity ?? 0);
   const [notes, setNotes] = useState(card.collection?.notes ?? '');
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -385,63 +389,75 @@ function DetailPanel({
                 {binderError ? <p role="alert">{binderError}</p> : null}
                 {binderPlacement ? (
                   <section className="binder-placement-options" aria-label="Choose binder position">
-                    <h4>Where should this card go?</h4>
-                    <p>
-                      {binderPlacement.matchCount
-                        ? `${binderPlacement.matchCount} matching targets found. Choose one to replace, or add at the end.`
-                        : 'No matching planned slot was found.'}
-                    </p>
-                    {binderPlacement.matches.map((at) => (
-                      <button
-                        key={`${at.page}-${at.row}-${at.column}`}
-                        type="button"
-                        className="quiet-button"
-                        disabled={binderPending}
-                        onClick={() => choosePlacement(at)}
-                      >
-                        Replace target — page {at.page + 1}, pocket {at.row + 1}:{at.column + 1}
-                        {at.assignedCardId && at.assignedCardId !== card.id ? (
-                          <small>
-                            The current physical assignment will be removed; your collection is
-                            unchanged.
-                          </small>
-                        ) : null}
-                      </button>
-                    ))}
-                    {binderPlacement.matchCount > binderPlacement.matches.length ? (
-                      <p>Showing the first {binderPlacement.matches.length} matching slots.</p>
-                    ) : null}
-                    {binderPlacement.appendAt ? (
-                      <button
-                        className="quiet-button tone-accent"
-                        type="button"
-                        disabled={binderPending}
-                        onClick={() => {
-                          if (binderPlacement.appendAt) choosePlacement(binderPlacement.appendAt);
-                        }}
-                      >
-                        Add at end — page {binderPlacement.appendAt.page + 1}, pocket{' '}
-                        {binderPlacement.appendAt.row + 1}:{binderPlacement.appendAt.column + 1}
-                      </button>
-                    ) : binderPlacement.requiredCapacity > binderPlacement.maxCapacity ? (
-                      <p>
-                        This binder has reached its {binderPlacement.maxCapacity}-pocket limit.
-                        Choose another binder or an existing empty sleeve.
-                      </p>
+                    {copyAt ? (
+                      <BinderCopyPrompt
+                        headingLevel={4}
+                        card={card}
+                        pending={binderPending || pending || dirty}
+                        onChoose={(choice) => choosePlacement(copyAt, choice)}
+                        onCancel={() => setCopyAt(null)}
+                      />
                     ) : (
-                      <p>
-                        No room at the end. Grow the binder to {binderPlacement.requiredCapacity}{' '}
-                        pockets in Manage binder.
-                      </p>
+                      <>
+                        <h4>Where should this card go?</h4>
+                        <p>
+                          {binderPlacement.matchCount
+                            ? `${binderPlacement.matchCount} matching targets found. Choose one to replace, or add at the end.`
+                            : 'No matching planned slot was found.'}
+                        </p>
+                        {binderPlacement.matches.map((at) => (
+                          <button
+                            key={`${at.page}-${at.row}-${at.column}`}
+                            type="button"
+                            className="quiet-button"
+                            disabled={binderPending}
+                            onClick={() => setCopyAt(at)}
+                          >
+                            Replace target — page {at.page + 1}, pocket {at.row + 1}:{at.column + 1}
+                            {at.assignedCardId && at.assignedCardId !== card.id ? (
+                              <small>
+                                The current physical assignment will be removed; your collection is
+                                unchanged.
+                              </small>
+                            ) : null}
+                          </button>
+                        ))}
+                        {binderPlacement.matchCount > binderPlacement.matches.length ? (
+                          <p>Showing the first {binderPlacement.matches.length} matching slots.</p>
+                        ) : null}
+                        {binderPlacement.appendAt ? (
+                          <button
+                            className="quiet-button tone-accent"
+                            type="button"
+                            disabled={binderPending}
+                            onClick={() => {
+                              if (binderPlacement.appendAt) setCopyAt(binderPlacement.appendAt);
+                            }}
+                          >
+                            Add at end — page {binderPlacement.appendAt.page + 1}, pocket{' '}
+                            {binderPlacement.appendAt.row + 1}:{binderPlacement.appendAt.column + 1}
+                          </button>
+                        ) : binderPlacement.requiredCapacity > binderPlacement.maxCapacity ? (
+                          <p>
+                            This binder has reached its {binderPlacement.maxCapacity}-pocket limit.
+                            Choose another binder or an existing empty sleeve.
+                          </p>
+                        ) : (
+                          <p>
+                            No room at the end. Grow the binder to{' '}
+                            {binderPlacement.requiredCapacity} pockets in Manage binder.
+                          </p>
+                        )}
+                        <button
+                          className="text-button"
+                          type="button"
+                          disabled={binderPending}
+                          onClick={cancelPlacement}
+                        >
+                          Cancel placement
+                        </button>
+                      </>
                     )}
-                    <button
-                      className="text-button"
-                      type="button"
-                      disabled={binderPending}
-                      onClick={cancelPlacement}
-                    >
-                      Cancel placement
-                    </button>
                   </section>
                 ) : null}
                 {binderAdded ? (
@@ -685,7 +701,10 @@ export function CatalogueView({
       if (!controller.signal.aborted) setBinderAdding(false);
     }
   }
-  async function chooseBinderPlacement(at: BinderSlotLocation): Promise<void> {
+  async function chooseBinderPlacement(
+    at: BinderSlotLocation,
+    copyChoice: BinderCopyChoice,
+  ): Promise<void> {
     if (!detail || !binderPlacement || binderAdding) return;
     const card = detail;
     const choices = binderPlacement;
@@ -699,6 +718,7 @@ export function CatalogueView({
         column: at.column,
         cardId: card.id,
         expectedRevision: choices.revision,
+        copyChoice,
       });
       const params = new URLSearchParams({
         version: choices.versionId,
@@ -712,6 +732,15 @@ export function CatalogueView({
         setBinderPlacement(null);
       }
       onNotice({ kind: 'success', message: label });
+      if (copyChoice.action === 'add') {
+        try {
+          const updated = await api.card(card.id);
+          if (generation === placementGeneration.current && updated.collection)
+            applyState(updated.collection);
+        } catch (reason) {
+          onNotice({ kind: 'error', message: userMessage(reason) });
+        }
+      }
     } catch (error) {
       const stale = error instanceof ApiError && error.code === 'binder_revision_conflict';
       const message = stale
@@ -769,10 +798,14 @@ export function CatalogueView({
 
   function applyState(state: CollectionState): void {
     setCards((current) =>
-      current.map((card) => (card.id === state.cardId ? { ...card, collection: state } : card)),
+      current.map((card) =>
+        card.id === state.cardId && (card.collection?.revision ?? 0) <= state.revision
+          ? { ...card, collection: state }
+          : card,
+      ),
     );
     setDetail((current) =>
-      current?.id === state.cardId
+      current?.id === state.cardId && (current.collection?.revision ?? 0) <= state.revision
         ? { ...current, collection: state, notes: state.notes }
         : current,
     );
@@ -1086,7 +1119,7 @@ export function CatalogueView({
       {detail ? (
         <DetailPanel
           card={detail}
-          pending={saving}
+          pending={saving || binderAdding}
           pokedexNumber={pokedexNumber}
           representativePending={representativePending}
           save={save}
@@ -1105,7 +1138,7 @@ export function CatalogueView({
           binderPlacement={binderPlacement}
           binderError={binderError}
           binderAdded={binderAdded}
-          choosePlacement={(at) => void chooseBinderPlacement(at)}
+          choosePlacement={(at, choice) => void chooseBinderPlacement(at, choice)}
           cancelPlacement={() => setBinderPlacement(null)}
         />
       ) : null}

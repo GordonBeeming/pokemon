@@ -67,6 +67,7 @@ export interface CatalogueFilters {
 
 const catalogueCursorSchema = z
   .object({
+    ownershipRank: z.union([z.literal(0), z.literal(1)]),
     setName: z.string(),
     numberSortMissing: z.union([z.literal(0), z.literal(1)]),
     numberSort: z.number().int(),
@@ -83,6 +84,7 @@ function encodeCatalogueCursor(row: CardRow, filterKey: string, total: number): 
   return base64UrlEncode(
     new TextEncoder().encode(
       JSON.stringify({
+        ownershipRank: (row.quantity ?? 0) > 0 ? 0 : 1,
         setName: row.set_name,
         numberSortMissing: row.number_sort === null ? 1 : 0,
         numberSort: row.number_sort ?? 0,
@@ -1111,6 +1113,8 @@ export async function searchCards(
   if (filters.owned !== undefined) {
     where.push(filters.owned ? 'COALESCE(cc.quantity, 0) > 0' : 'COALESCE(cc.quantity, 0) = 0');
   }
+  const ownedFirst = !filters.setId;
+  const ownershipOrder = 'CASE WHEN COALESCE(cc.quantity, 0) > 0 THEN 0 ELSE 1 END';
   const predicate = where.join(' AND ');
   const cursor = decodeCatalogueCursor(filters.cursor);
   if (cursor && filters.offset !== 0) throw new ApplicationError('invalid_catalogue_cursor', 400);
@@ -1122,6 +1126,7 @@ export async function searchCards(
     species: filters.species ?? null,
     pokedexNumber: filters.pokedexNumber ?? null,
     owned: filters.owned ?? null,
+    ownedFirst,
   });
   if (cursor && cursor.filterKey !== filterKey)
     throw new ApplicationError('invalid_catalogue_cursor', 400);
@@ -1136,10 +1141,12 @@ export async function searchCards(
       );
   const pageWhere = [...where];
   if (cursor) {
+    const ownershipIndex = values.length + 1;
+    if (ownedFirst) values.push(cursor.ownershipRank);
     const cursorIndex = values.length + 1;
     pageWhere.push(
-      `(c.set_name, c.number_sort IS NULL, COALESCE(c.number_sort, 0), c.number, c.name, c.id) >
-       (?${cursorIndex}, ?${cursorIndex + 1}, ?${cursorIndex + 2}, ?${cursorIndex + 3}, ?${cursorIndex + 4}, ?${cursorIndex + 5})`,
+      `(${ownedFirst ? `${ownershipOrder}, ` : ''}c.set_name, c.number_sort IS NULL, COALESCE(c.number_sort, 0), c.number, c.name, c.id) >
+       (${ownedFirst ? `?${ownershipIndex}, ` : ''}?${cursorIndex}, ?${cursorIndex + 1}, ?${cursorIndex + 2}, ?${cursorIndex + 3}, ?${cursorIndex + 4}, ?${cursorIndex + 5})`,
     );
     values.push(
       cursor.setName,
@@ -1155,7 +1162,7 @@ export async function searchCards(
   const result = await db
     .prepare(
       `${cardSelect} WHERE ${pageWhere.join(' AND ')}
-       ORDER BY c.set_name, c.number_sort IS NULL, COALESCE(c.number_sort, 0), c.number, c.name, c.id
+       ORDER BY ${ownedFirst ? `${ownershipOrder}, ` : ''}c.set_name, c.number_sort IS NULL, COALESCE(c.number_sort, 0), c.number, c.name, c.id
        LIMIT ?${limitIndex} OFFSET ?${offsetIndex}`,
     )
     .bind(...values, filters.limit + 1, cursor ? 0 : filters.offset)

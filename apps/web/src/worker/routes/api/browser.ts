@@ -661,6 +661,7 @@ browserApiRoutes.put('/binders/versions/:id/slot', async (c) => {
         parsed.data,
         parsed.data.cardId,
         parsed.data.expectedRevision,
+        parsed.data.copyChoice,
       ),
     });
   } catch (error) {

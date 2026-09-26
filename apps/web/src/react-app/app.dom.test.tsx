@@ -500,12 +500,15 @@ describe('async frontend announcements', () => {
           ? 'Replace target — page 45, pocket 1:1'
           : 'Add at end — page 45, pocket 1:2',
       );
+      expect(apiMocks.setSlot).not.toHaveBeenCalled();
+      await clickButton('Don’t add a copy');
       expect(apiMocks.setSlot).toHaveBeenCalledWith('version-1', {
         page: 44,
         row: 0,
         column: mode === 'replace' ? 0 : 1,
         cardId: 'card-1',
         expectedRevision: 5,
+        copyChoice: { action: 'none' },
       });
       expect(
         container.querySelector<HTMLAnchorElement>('.detail-binder a')?.getAttribute('href'),
@@ -1423,7 +1426,7 @@ describe('async frontend announcements', () => {
   });
 
   it.each(['same', 'any'] as const)(
-    'replaces a selected target with %s type without inserting or shifting',
+    'loads more %s replacements and chooses a card beyond the first page without shifting',
     async (mode) => {
       const initial = binderFixture([
         { pageId: 'page-1', row: 0, column: 0, cardId: 'card-1', entryKind: 'exact-card' },
@@ -1453,7 +1456,21 @@ describe('async frontend announcements', () => {
       apiMocks.binder.mockResolvedValue(initial.response);
       apiMocks.resolveCards.mockResolvedValue([{ ...card, id: 'card-1', pokedexNumber: 1 }]);
       apiMocks.assignmentCandidates.mockResolvedValue([]);
-      apiMocks.search.mockResolvedValue({ ok: true, cards: [replacement], total: 1, cursor: null });
+      apiMocks.card.mockResolvedValue(replacement);
+      const firstPage = Array.from({ length: 24 }, (_, index) => ({
+        ...card,
+        id: `option-${index}`,
+        name: `Option ${index}`,
+      }));
+      const nextPage = [
+        ...Array.from({ length: 5 }, (_, index) => ({ ...card, id: `later-${index}` })),
+        replacement,
+      ];
+      apiMocks.search
+        .mockResolvedValueOnce({ ok: true, cards: firstPage, total: 30, cursor: 'next-page' })
+        .mockResolvedValueOnce({ ok: true, cards: firstPage, total: 30, cursor: 'next-page' })
+        .mockRejectedValueOnce(new Error('Temporary search failure'))
+        .mockResolvedValueOnce({ ok: true, cards: nextPage, total: 30, cursor: null });
       apiMocks.setSlot.mockResolvedValue(initial.result);
       await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
       await waitFor(() => container.querySelector('.binder-library-card') !== null);
@@ -1474,15 +1491,48 @@ describe('async frontend announcements', () => {
       await waitFor(() => container.querySelector('.binder-tray-card') !== null);
       const params = apiMocks.search.mock.calls[0]?.[0] as URLSearchParams;
       expect(params.get('pokedexNumber')).toBe(mode === 'same' ? '1' : null);
+      expect(container.querySelectorAll('.binder-tray-card')).toHaveLength(24);
+      await clickButton('Find cards');
+      const refreshedParams = apiMocks.search.mock.calls[1]?.[0] as URLSearchParams;
+      expect(refreshedParams.has('cursor')).toBe(false);
+      const searchInput = container.querySelector<HTMLInputElement>('.card-picker input');
+      if (!searchInput) throw new Error('Missing card search input');
+      await actAndSettle(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+          searchInput,
+          'unsubmitted draft',
+        );
+        searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      await clickButton('Load more');
+      expect(container.querySelectorAll('.binder-tray-card')).toHaveLength(24);
+      await clickButton('Load more');
+      expect(container.querySelectorAll('.binder-tray-card')).toHaveLength(30);
+      expect(container.querySelector('.binder-tray-card .ownership-mark')).toBeNull();
+      const nextParams = apiMocks.search.mock.calls[3]?.[0] as URLSearchParams;
+      expect(nextParams.get('cursor')).toBe('next-page');
+      expect(nextParams.get('pokedexNumber')).toBe(mode === 'same' ? '1' : null);
+      expect(nextParams.get('q')).toBe('');
+      expect(
+        Array.from(container.querySelectorAll('button')).some(
+          (button) => button.textContent === 'Load more',
+        ),
+      ).toBe(false);
       await actAndSettle(() =>
-        container.querySelector<HTMLButtonElement>('.binder-tray-card')?.click(),
+        Array.from(container.querySelectorAll<HTMLButtonElement>('.binder-tray-card'))
+          .find((button) => button.textContent?.includes('Replacement'))
+          ?.click(),
       );
+      expect(apiMocks.setSlot).not.toHaveBeenCalled();
+      expect(container.textContent).toContain('You own 0 copies');
+      await clickButton('Don’t add a copy');
       expect(apiMocks.setSlot).toHaveBeenCalledWith('version-1', {
         page: 0,
         row: 0,
         column: 0,
         cardId: 'replacement',
         expectedRevision: 1,
+        copyChoice: { action: 'none' },
       });
       expect(apiMocks.insertEntries).not.toHaveBeenCalled();
       expect(apiMocks.moveEntry).not.toHaveBeenCalled();

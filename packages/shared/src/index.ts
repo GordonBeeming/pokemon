@@ -348,12 +348,26 @@ export const binderInsertDestinationsSchema = z
   .strict();
 export type BinderInsertDestinations = z.infer<typeof binderInsertDestinationsSchema>;
 
+export const binderCopyChoiceSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('none') }).strict(),
+  z.object({ action: z.literal('existing') }).strict(),
+  z
+    .object({
+      action: z.literal('add'),
+      expectedCollectionRevision: z.number().int().nonnegative(),
+    })
+    .strict(),
+]);
+export type BinderCopyChoice = z.infer<typeof binderCopyChoiceSchema>;
+
 export const binderSlotSetRequestSchema = binderSlotLocationSchema
   .extend({
     expectedRevision: z.number().int().positive(),
     cardId: cardIdSchema.nullable(),
+    copyChoice: binderCopyChoiceSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine((input) => input.cardId !== null || input.copyChoice === undefined);
 export type BinderSlotSetRequest = z.infer<typeof binderSlotSetRequestSchema>;
 
 export const binderSlotSwapRequestSchema = z

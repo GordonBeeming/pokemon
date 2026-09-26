@@ -152,7 +152,7 @@ const desktopBearer = 'a'.repeat(64);
 const sessionSecret = 'route-parity-session-secret-value';
 let sessionCookie = '';
 
-function routeProbeDatabase(): D1Database {
+function routeProbeDatabase(scopes: string[] = []): D1Database {
   const operationReached = () =>
     Promise.reject(new ApplicationError('route_business_operation_reached', 400));
   return {
@@ -168,7 +168,7 @@ function routeProbeDatabase(): D1Database {
           if (sql.includes('FROM desktop_tokens'))
             return Promise.resolve({
               owner_id: 'owner',
-              scopes: '[]',
+              scopes: JSON.stringify(scopes),
               expires_at: null,
               revoked_at: null,
               last_used_at: Math.floor(Date.now() / 1000),
@@ -219,6 +219,36 @@ beforeAll(async () => {
 });
 
 describe('browser and desktop route parity', () => {
+  it.each([
+    { action: 'add', scopes: ['binders:write'], status: 403 },
+    { action: 'add', scopes: ['binders:write', 'collection:write'], status: 400 },
+    { action: 'existing', scopes: ['binders:write'], status: 400 },
+    { action: 'none', scopes: ['binders:write'], status: 400 },
+  ])(
+    'requires collection write scope only for adding a copy: $action $scopes',
+    async ({ action, scopes, status }) => {
+      const response = await apiRoutes.request(
+        '/desktop/binders/versions/version-1/slot',
+        {
+          method: 'PUT',
+          headers: { authorization: `Bearer ${desktopBearer}`, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            page: 0,
+            row: 0,
+            column: 0,
+            cardId: 'card-1',
+            expectedRevision: 1,
+            copyChoice: action === 'add' ? { action, expectedCollectionRevision: 0 } : { action },
+          }),
+        },
+        { ...env, DB: routeProbeDatabase(scopes) },
+      );
+      expect(response.status).toBe(status);
+      if (status === 400)
+        expect(await response.json()).toMatchObject({ error: 'route_business_operation_reached' });
+    },
+  );
+
   it.each(['browser', 'desktop'] as const)(
     'reports invalid_query for malformed destination parameters on %s',
     async (authorization) => {

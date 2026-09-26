@@ -8,6 +8,7 @@ import {
   cardIdSchema,
   NATIONAL_POKEDEX,
   type BinderCapacityError,
+  type BinderCopyChoice,
   type BinderAssignmentCandidate,
   type BinderEntry,
   type BinderInsertDestinations,
@@ -23,6 +24,7 @@ import {
   type BinderView,
 } from '@pokedex/shared';
 import { newId, nowSeconds } from './db';
+import { CollectionDomainError, getCollectionState } from './collection';
 
 const MAX_BINDER_PAGES = 300;
 const MAX_BINDER_CARDS = 2000;
@@ -1212,6 +1214,43 @@ async function requireCard(db: D1Database, cardId: string | null): Promise<void>
   if (!card) domainError('card_not_found');
 }
 
+function assignmentQuantityAssertion(
+  db: D1Database,
+  ownerId: string,
+  version: VersionRow,
+  pageId: string,
+  at: BinderSlotLocation,
+  cardId: string | null,
+  options: { additionalCopies?: number; assert?: boolean } = {},
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `SELECT CASE WHEN ?1 IS NULL OR (
+        (SELECT COUNT(*) FROM binder_slots assigned
+         JOIN binder_pages assigned_page ON assigned_page.id = assigned.binder_page_id
+         JOIN binder_versions assigned_version ON assigned_version.id = assigned_page.binder_version_id
+         JOIN binders assigned_binder ON assigned_binder.id = assigned_version.binder_id
+         WHERE assigned_binder.owner_id = ?2
+           AND (assigned_version.id = ?6 OR (assigned_version.status = 'active'
+             AND NOT (?7 = 'draft' AND assigned_version.binder_id = ?8)))
+           AND assigned.assigned_card_id = ?1
+           AND NOT (assigned.binder_page_id = ?3 AND assigned.row_index = ?4 AND assigned.column_index = ?5))
+        < COALESCE((SELECT quantity FROM collection_cards WHERE owner_id = ?2 AND card_id = ?1), 0) + ?9
+      ) THEN 1 ELSE ${options.assert === false ? '0' : "json_extract('binder_assignment_quantity_exceeded', '$')"} END AS valid`,
+    )
+    .bind(
+      cardId,
+      ownerId,
+      pageId,
+      at.row,
+      at.column,
+      version.id,
+      version.status,
+      version.binder_id,
+      options.additionalCopies ?? 0,
+    );
+}
+
 export async function setBinderSlot(
   db: D1Database,
   ownerId: string,
@@ -1221,6 +1260,7 @@ export async function setBinderSlot(
   column: number,
   cardId: string | null,
   requestedRevision?: number,
+  copyChoice?: BinderCopyChoice,
 ): Promise<BinderMutationResult> {
   const version = await readVersion(db, ownerId, versionId);
   requireEditable(version);
@@ -1229,18 +1269,85 @@ export async function setBinderSlot(
   const page = await pageAt(db, versionId, pagePosition);
   await requireCard(db, cardId);
   const now = nowSeconds();
-  await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-    db
-      .prepare(
-        `UPDATE binder_slots SET card_id = ?1,
+  const collectionStatements: D1PreparedStatement[] = [];
+  if (cardId && copyChoice?.action === 'add') {
+    const current = await getCollectionState(db, ownerId, cardId);
+    if ((current?.revision ?? 0) !== copyChoice.expectedCollectionRevision)
+      throw new CollectionDomainError('collection_revision_conflict');
+    if ((current?.quantity ?? 0) >= 9999)
+      throw new CollectionDomainError('collection_quantity_out_of_bounds');
+    collectionStatements.push(
+      db
+        .prepare(
+          `SELECT CASE WHEN COALESCE((SELECT revision FROM collection_cards
+        WHERE owner_id = ?1 AND card_id = ?2), 0) = ?3 THEN 1
+        ELSE json_extract('collection_revision_conflict', '$') END AS valid`,
+        )
+        .bind(ownerId, cardId, copyChoice.expectedCollectionRevision),
+      db
+        .prepare(
+          `INSERT INTO collection_cards (owner_id, card_id, quantity, revision, updated_at)
+        VALUES (?1, ?2, 1, 1, ?3)
+        ON CONFLICT(owner_id, card_id) DO UPDATE SET quantity = quantity + 1,
+          revision = revision + 1, updated_at = excluded.updated_at, last_mutation_id = NULL`,
+        )
+        .bind(ownerId, cardId, now),
+    );
+  }
+  const placeCopy = copyChoice?.action === 'existing' || copyChoice?.action === 'add';
+  const quantityAssertion = assignmentQuantityAssertion(
+    db,
+    ownerId,
+    version,
+    page.id,
+    { page: pagePosition, row, column },
+    cardId,
+  );
+  try {
+    await runVersionBatch(db, ownerId, versionId, version.revision, false, [
+      ...collectionStatements,
+      ...(placeCopy ? [quantityAssertion] : []),
+      db
+        .prepare(
+          `UPDATE binder_slots SET card_id = ?1,
           entry_kind = CASE WHEN ?1 IS NULL THEN 'empty' ELSE 'exact-card' END,
           label = NULL, pokemon_number = NULL,
-          assigned_card_id = CASE WHEN assigned_card_id = ?1 THEN assigned_card_id ELSE NULL END, starts_new_page = CASE WHEN ?1 IS NULL THEN 0 ELSE starts_new_page END
+          assigned_card_id = CASE WHEN ?5 = 1 THEN ?1 WHEN ?6 = 1 THEN NULL
+            WHEN assigned_card_id = ?1 THEN assigned_card_id ELSE NULL END, starts_new_page = CASE WHEN ?1 IS NULL THEN 0 ELSE starts_new_page END
          WHERE binder_page_id = ?2 AND row_index = ?3 AND column_index = ?4`,
-      )
-      .bind(cardId, page.id, row, column),
-    ...revisionStatements(db, version, now),
-  ]);
+        )
+        .bind(
+          cardId,
+          page.id,
+          row,
+          column,
+          placeCopy ? 1 : 0,
+          copyChoice?.action === 'none' ? 1 : 0,
+        ),
+      ...revisionStatements(db, version, now),
+    ]);
+  } catch (error) {
+    if (error instanceof BinderDomainError) throw error;
+    if (cardId && copyChoice?.action === 'add') {
+      const current = await getCollectionState(db, ownerId, cardId);
+      if ((current?.revision ?? 0) !== copyChoice.expectedCollectionRevision)
+        throw new CollectionDomainError('collection_revision_conflict');
+    }
+    if (placeCopy) {
+      // The batch rolled back, so include the requested copy when checking its budget.
+      const budget = await assignmentQuantityAssertion(
+        db,
+        ownerId,
+        version,
+        page.id,
+        { page: pagePosition, row, column },
+        cardId,
+        { additionalCopies: copyChoice?.action === 'add' ? 1 : 0, assert: false },
+      ).first<{ valid: number }>();
+      if (budget?.valid === 0) throw new BinderDomainError('binder_assignment_quantity_exceeded');
+    }
+    throw error;
+  }
   return mutationResult(db, ownerId, versionId, [pagePosition]);
 }
 
@@ -1956,31 +2063,7 @@ export async function setBinderEntryAssignment(
   validateLocation(version, at);
   if (cardId !== null) await requireCard(db, cardId);
   const now = nowSeconds();
-  const quantityAssertion = db
-    .prepare(
-      `SELECT CASE WHEN ?1 IS NULL OR (
-        (SELECT COUNT(*) FROM binder_slots assigned
-         JOIN binder_pages assigned_page ON assigned_page.id = assigned.binder_page_id
-         JOIN binder_versions assigned_version ON assigned_version.id = assigned_page.binder_version_id
-         JOIN binders assigned_binder ON assigned_binder.id = assigned_version.binder_id
-         WHERE assigned_binder.owner_id = ?2
-           AND (assigned_version.id = ?6 OR (assigned_version.status = 'active'
-             AND NOT (?7 = 'draft' AND assigned_version.binder_id = ?8)))
-           AND assigned.assigned_card_id = ?1
-           AND NOT (assigned.binder_page_id = ?3 AND assigned.row_index = ?4 AND assigned.column_index = ?5))
-        < COALESCE((SELECT quantity FROM collection_cards WHERE owner_id = ?2 AND card_id = ?1), 0)
-      ) THEN 1 ELSE json_extract('binder_assignment_quantity_exceeded', '$') END AS valid`,
-    )
-    .bind(
-      cardId,
-      ownerId,
-      page.id,
-      at.row,
-      at.column,
-      versionId,
-      version.status,
-      version.binder_id,
-    );
+  const quantityAssertion = assignmentQuantityAssertion(db, ownerId, version, page.id, at, cardId);
   try {
     await runVersionBatch(db, ownerId, versionId, version.revision, false, [
       db

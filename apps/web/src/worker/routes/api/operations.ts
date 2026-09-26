@@ -1,5 +1,6 @@
 import type {
   BinderLayout,
+  BinderCopyChoice,
   BinderSlotLocation,
   CollectionIncrementRequest,
   CollectionNotesPatchRequest,
@@ -137,6 +138,7 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       location: BinderSlotLocation,
       cardId: string | null,
       expectedRevision: number,
+      copyChoice?: BinderCopyChoice,
     ) {
       return setBinderSlot(
         env.DB,
@@ -147,6 +149,7 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
         location.column,
         cardId,
         expectedRevision,
+        copyChoice,
       );
     },
     setBinderSlots: (

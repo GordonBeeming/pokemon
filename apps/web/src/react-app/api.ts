@@ -631,6 +631,7 @@ export const api = {
       row: number;
       column: number;
       cardId: string | null;
+      copyChoice?: import('@pokedex/shared').BinderCopyChoice;
     },
   ): Promise<BinderMutationResult> =>
     request(`/api/binders/versions/${encoded(id)}/slot`, binderMutationEnvelopeSchema, {

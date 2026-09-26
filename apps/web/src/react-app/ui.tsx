@@ -53,6 +53,8 @@ const errorMessages: Record<string, string> = {
   challenge_expired: 'That passkey request expired. Start again.',
   unknown_credential: 'This passkey is not registered for the collection.',
   binder_revision_conflict: 'This binder changed elsewhere. The latest page has been reloaded.',
+  binder_assignment_quantity_exceeded:
+    'All owned copies of this card are already placed. Add a new copy or save only the target.',
   collection_revision_conflict:
     'This card changed elsewhere. Reopen it before saving your changes.',
   collection_mutation_conflict: 'That save request was already used for different changes.',
