@@ -1,3 +1,4 @@
+import { NavigationLink } from './navigation-link';
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import {
@@ -226,22 +227,26 @@ export function Shell({
   return (
     <div className="app-shell">
       <aside className="sidebar" aria-label="Application navigation">
-        <a className="brand" href="#dashboard" onClick={() => navigate('dashboard')}>
+        <NavigationLink
+          className="brand"
+          href="#dashboard"
+          onNavigate={() => navigate('dashboard')}
+        >
           <span aria-hidden="true">PK</span>
           <strong>Pokédex</strong>
-        </a>
+        </NavigationLink>
         <nav aria-label="Primary navigation">
           {routes.map(([key, label]) => (
-            <button
+            <NavigationLink
               className={route === key ? 'nav-item active' : 'nav-item'}
               key={key}
-              type="button"
+              href={`#${key}`}
               aria-current={route === key ? 'page' : undefined}
-              onClick={() => navigate(key)}
+              onNavigate={() => navigate(key)}
             >
               <NavIcon route={key} />
               {label}
-            </button>
+            </NavigationLink>
           ))}
         </nav>
       </aside>
@@ -303,12 +308,16 @@ export function DashboardView({
           <p>Browse what is on the shelf, then move naturally into hunting or binder planning.</p>
         </div>
         <div className="header-actions">
-          <button className="quiet-button tone-accent" type="button" onClick={browse}>
+          <NavigationLink
+            className="quiet-button tone-accent"
+            href="#catalogue"
+            onNavigate={browse}
+          >
             Browse cards
-          </button>
-          <button className="quiet-button" type="button" onClick={plan}>
+          </NavigationLink>
+          <NavigationLink className="quiet-button" href="#species" onNavigate={plan}>
             Plan the Pokédex
-          </button>
+          </NavigationLink>
         </div>
       </header>
       <section className="collection-shelf" aria-labelledby="collection-shelf-heading">
