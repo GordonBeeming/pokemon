@@ -21,35 +21,41 @@ function setup(): D1Database {
       )
       .run(`card-${index}`, String(index), index);
   }
+  database.exec(`UPDATE catalogue_cards SET species='Squirtle';
+    INSERT INTO catalogue_search (card_id,name,set_name,number,species,rarity,artist)
+    SELECT id,name,set_name,number,species,'Common','Artist' FROM catalogue_cards;`);
   database.exec(`INSERT INTO collection_cards (owner_id,card_id,quantity,revision,updated_at) VALUES
     ('owner','card-30',1,1,1), ('owner','card-35',2,1,1), ('owner','card-1',0,1,1), ('other','card-34',1,1,1);`);
   return sqliteD1(database);
 }
 describe('catalogue ownership ordering', () => {
-  it.each([{}, { pokedexNumber: 7 }])(
-    'shows owned cards first across cursor pages for %j',
-    async (filters) => {
-      const db = setup();
-      const first = await searchCards(db, 'owner', { ...filters, limit: 24, offset: 0 });
-      expect(first.cards.slice(0, 3).map((card) => card.id)).toEqual([
-        'card-30',
-        'card-35',
-        'card-1',
-      ]);
-      const next = await searchCards(db, 'owner', {
-        ...filters,
-        limit: 24,
-        offset: 0,
-        cursor: first.cursor,
-      });
-      const ids = [...first.cards, ...next.cards].map((card) => card.id);
-      expect(ids).toHaveLength(35);
-      expect(new Set(ids).size).toBe(35);
-      expect(next.cursor).toBeNull();
-      const offset = await searchCards(db, 'owner', { ...filters, limit: 24, offset: 24 });
-      expect(offset.cards.map((card) => card.id)).toEqual(next.cards.map((card) => card.id));
-    },
-  );
+  it.each([
+    {},
+    { pokedexNumber: 7 },
+    { setId: 'base', query: 'Squirtle' },
+    { setId: 'base', pokedexNumber: 7 },
+    { setId: 'base', species: 'Squirtle' },
+  ])('shows owned cards first across cursor pages for %j', async (filters) => {
+    const db = setup();
+    const first = await searchCards(db, 'owner', { ...filters, limit: 24, offset: 0 });
+    expect(first.cards.slice(0, 3).map((card) => card.id)).toEqual([
+      'card-30',
+      'card-35',
+      'card-1',
+    ]);
+    const next = await searchCards(db, 'owner', {
+      ...filters,
+      limit: 24,
+      offset: 0,
+      cursor: first.cursor,
+    });
+    const ids = [...first.cards, ...next.cards].map((card) => card.id);
+    expect(ids).toHaveLength(35);
+    expect(new Set(ids).size).toBe(35);
+    expect(next.cursor).toBeNull();
+    const offset = await searchCards(db, 'owner', { ...filters, limit: 24, offset: 24 });
+    expect(offset.cards.map((card) => card.id)).toEqual(next.cards.map((card) => card.id));
+  });
   it('crosses from owned to unowned when the page ends on the last owned card', async () => {
     const db = setup();
     const first = await searchCards(db, 'owner', { limit: 2, offset: 0 });

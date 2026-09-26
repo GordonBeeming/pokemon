@@ -1683,7 +1683,6 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
                         {legacyResults.map((card) => (
                           <CardTile
                             className="binder-tray-card"
-                            showOwnership={false}
                             key={card.id}
                             disabled={pending}
                             onClick={() => setCopyCard(card)}
