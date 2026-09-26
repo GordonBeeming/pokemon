@@ -1102,6 +1102,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
       `${card.name} is now the exact target for pocket ${selected.row + 1}:${selected.column + 1}.`,
     );
     if (placed) {
+      resetPanels();
       setLegacyResults([]);
       setCopyCard(null);
       setSearchCursor(null);
