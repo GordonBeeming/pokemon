@@ -1441,6 +1441,57 @@ describe('binder D1 domain', () => {
     expect(await getBinderVersion(db, 'owner', created.version.id, 0, 2)).toEqual(before);
   });
 
+  it('retains deliberate gap markers when a page reservation is later removed', async () => {
+    const { database, db } = setup();
+    const created = await createBinder(
+      db,
+      'owner',
+      'Reservation cycle',
+      { kind: '2x2', rows: 2, columns: 2 },
+      8,
+    );
+    const pageId = created.pages[0]!.id;
+    const cleared = await setBinderSlot(
+      db,
+      'owner',
+      created.version.id,
+      0,
+      0,
+      1,
+      null,
+      created.version.revision,
+    );
+    const before = database
+      .prepare('SELECT * FROM binder_slots WHERE binder_page_id=? ORDER BY row_index,column_index')
+      .all(pageId);
+    expect(before[1]).toMatchObject({ is_manual_gap: 1 });
+    const reserved = await reserveBinderPage(
+      db,
+      'owner',
+      created.version.id,
+      0,
+      true,
+      'Art',
+      cleared.version.revision,
+    );
+    await reserveBinderPage(
+      db,
+      'owner',
+      created.version.id,
+      0,
+      false,
+      null,
+      reserved.version.revision,
+    );
+    expect(
+      database
+        .prepare(
+          'SELECT * FROM binder_slots WHERE binder_page_id=? ORDER BY row_index,column_index',
+        )
+        .all(pageId),
+    ).toEqual(before);
+  });
+
   it('fills a selected manual gap without inserting a second sleeve', async () => {
     const { database, db } = setup();
     const created = await createBinder(
