@@ -471,17 +471,16 @@ function DetailPanel({
                 {binderAdded ? (
                   <p role="status">
                     {binderAdded.label}{' '}
-                    <a
+                    <NavigationLink
                       href={binderAdded.href}
-                      onClick={(event) => {
-                        event.preventDefault();
+                      onNavigate={() => {
                         leave(() => {
                           location.hash = binderAdded.href;
                         });
                       }}
                     >
                       View this card in the binder
-                    </a>
+                    </NavigationLink>
                   </p>
                 ) : null}
               </>
