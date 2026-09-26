@@ -193,6 +193,26 @@ async function seedReferencedArt(art: R2Bucket): Promise<void> {
 }
 
 describe('backup restore', () => {
+  it('round-trips intentional empty sleeves through the version 5 backup', async () => {
+    const { database, db, art } = setup();
+    await seedReferencedArt(art);
+    database.exec(
+      "INSERT INTO binder_slots (binder_page_id,row_index,column_index,entry_kind,is_manual_gap) VALUES ('page-1',0,1,'empty',1)",
+    );
+    await createBackup(db, art, 'owner', { backupId: 'backup_manual_gap' });
+    database.exec(
+      "UPDATE binder_slots SET is_manual_gap=0 WHERE binder_page_id='page-1' AND row_index=0 AND column_index=1",
+    );
+    await restoreBackup(db, art, 'owner', 'backup_manual_gap');
+    expect(
+      database
+        .prepare(
+          "SELECT entry_kind,is_manual_gap FROM binder_slots WHERE binder_page_id='page-1' AND row_index=0 AND column_index=1",
+        )
+        .get(),
+    ).toEqual({ entry_kind: 'empty', is_manual_gap: 1 });
+  });
+
   it('round-trips pocket bookmarks through backup and restore', async () => {
     const { database, db, art } = setup();
     await seedReferencedArt(art);
@@ -211,77 +231,80 @@ describe('backup restore', () => {
     ]);
   });
 
-  it('restores the frozen v3 binder fixture with v4 defaults', async () => {
-    const { database, db, art } = setup();
-    const backupId = 'backup_v3_fixture';
-    const chunks: Array<{
-      kind: 'binders' | 'versions' | 'pages' | 'slots';
-      index: number;
-      objectKey: string;
-      checksum: string;
-      bytes: number;
-      rows: number;
-    }> = [];
-    for (const kind of ['binders', 'versions', 'pages', 'slots'] as const) {
-      const payload = JSON.stringify(V3_BINDER_FIXTURE[kind]);
-      const objectKey = `backups/owner/${backupId}/chunks/${kind}/0.json`;
-      const digest = await checksum(payload);
-      await art.put(objectKey, payload, { customMetadata: { checksum: digest } });
-      chunks.push({
-        kind,
-        index: 0,
-        objectKey,
-        checksum: digest,
-        bytes: new TextEncoder().encode(payload).byteLength,
-        rows: V3_BINDER_FIXTURE[kind].length,
+  it.each([3, 4])(
+    'restores an older version %i binder fixture with current defaults',
+    async (backupVersion) => {
+      const { database, db, art } = setup();
+      const backupId = 'backup_v3_fixture';
+      const chunks: Array<{
+        kind: 'binders' | 'versions' | 'pages' | 'slots';
+        index: number;
+        objectKey: string;
+        checksum: string;
+        bytes: number;
+        rows: number;
+      }> = [];
+      for (const kind of ['binders', 'versions', 'pages', 'slots'] as const) {
+        const payload = JSON.stringify(V3_BINDER_FIXTURE[kind]);
+        const objectKey = `backups/owner/${backupId}/chunks/${kind}/0.json`;
+        const digest = await checksum(payload);
+        await art.put(objectKey, payload, { customMetadata: { checksum: digest } });
+        chunks.push({
+          kind,
+          index: 0,
+          objectKey,
+          checksum: digest,
+          bytes: new TextEncoder().encode(payload).byteLength,
+          rows: V3_BINDER_FIXTURE[kind].length,
+        });
+      }
+      const manifest = JSON.stringify({
+        version: backupVersion,
+        ownerId: 'owner',
+        mutationEpoch: 0,
+        createdAt: '2026-08-28T00:00:00.000Z',
+        chunks,
       });
-    }
-    const manifest = JSON.stringify({
-      version: 3,
-      ownerId: 'owner',
-      mutationEpoch: 0,
-      createdAt: '2026-08-28T00:00:00.000Z',
-      chunks,
-    });
-    const manifestChecksum = await checksum(manifest);
-    const manifestKey = `backups/owner/${backupId}/manifest.json`;
-    await art.put(manifestKey, manifest);
-    database
-      .prepare(
-        `INSERT INTO backup_runs
-          (id,owner_id,object_key,checksum,backup_epoch,created_at)
-         VALUES (?1,'owner',?2,?3,0,1)`,
-      )
-      .run(backupId, manifestKey, manifestChecksum);
-
-    await restoreBackup(db, art, 'owner', backupId);
-    await restoreBackup(db, art, 'owner', backupId);
-
-    expect(
-      database.prepare('SELECT capacity FROM binder_versions WHERE id = ?1').get('v3-version'),
-    ).toEqual({ capacity: 4 });
-    expect(
-      database.prepare('SELECT kind, label FROM binder_pages WHERE id = ?1').get('v3-page'),
-    ).toEqual({ kind: 'slots', label: null });
-    expect(
+      const manifestChecksum = await checksum(manifest);
+      const manifestKey = `backups/owner/${backupId}/manifest.json`;
+      await art.put(manifestKey, manifest);
       database
         .prepare(
-          `SELECT row_index, column_index, entry_kind, card_id FROM binder_slots
-           WHERE binder_page_id = 'v3-page' ORDER BY row_index, column_index`,
+          `INSERT INTO backup_runs
+          (id,owner_id,object_key,checksum,backup_epoch,created_at)
+         VALUES (?1,'owner',?2,?3,0,1)`,
         )
-        .all(),
-    ).toEqual([
-      {
-        row_index: 0,
-        column_index: 0,
-        entry_kind: 'exact-card',
-        card_id: 'card-binder',
-      },
-      { row_index: 0, column_index: 1, entry_kind: 'empty', card_id: null },
-      { row_index: 1, column_index: 0, entry_kind: 'empty', card_id: null },
-      { row_index: 1, column_index: 1, entry_kind: 'empty', card_id: null },
-    ]);
-  });
+        .run(backupId, manifestKey, manifestChecksum);
+
+      await restoreBackup(db, art, 'owner', backupId);
+      await restoreBackup(db, art, 'owner', backupId);
+
+      expect(
+        database.prepare('SELECT capacity FROM binder_versions WHERE id = ?1').get('v3-version'),
+      ).toEqual({ capacity: 4 });
+      expect(
+        database.prepare('SELECT kind, label FROM binder_pages WHERE id = ?1').get('v3-page'),
+      ).toEqual({ kind: 'slots', label: null });
+      expect(
+        database
+          .prepare(
+            `SELECT row_index, column_index, entry_kind, card_id FROM binder_slots
+           WHERE binder_page_id = 'v3-page' ORDER BY row_index, column_index`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          row_index: 0,
+          column_index: 0,
+          entry_kind: 'exact-card',
+          card_id: 'card-binder',
+        },
+        { row_index: 0, column_index: 1, entry_kind: 'empty', card_id: null },
+        { row_index: 1, column_index: 0, entry_kind: 'empty', card_id: null },
+        { row_index: 1, column_index: 1, entry_kind: 'empty', card_id: null },
+      ]);
+    },
+  );
 
   it('preserves exact capacity and page reservations while repairing missing pockets', async () => {
     const { database, db, art } = setup();

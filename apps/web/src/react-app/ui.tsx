@@ -43,7 +43,7 @@ function NavIcon({ route }: { route: Route }): ReactElement {
 
 const errorMessages: Record<string, string> = {
   binder_page_contains_targets:
-    'Move the targets off this page before reserving it. No cards were moved.',
+    'Move or remove the entries on this page before reserving it. No sleeves were changed.',
   binder_shift_page_break:
     'The page break keeps these targets in place. Remove the page break or shift by a whole page.',
   binder_not_found:
