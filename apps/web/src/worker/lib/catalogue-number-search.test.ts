@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { searchCards } from './catalogue';
 import { applyAllMigrations, sqliteD1 } from './d1-test-helper';
 const databases: DatabaseSync[] = [];
@@ -49,6 +49,20 @@ function setup(): D1Database {
   return sqliteD1(database);
 }
 describe('exact collector-number search', () => {
+  it('uses the normalized-number index for the actual catalogue query', async () => {
+    const db = setup();
+    const prepare = vi.spyOn(db, 'prepare');
+    await searchCards(db, 'owner', { query: '23', limit: 24, offset: 0 });
+    const sql = prepare.mock.calls.find(
+      ([query]) => query.includes('ORDER BY') && query.includes('ltrim('),
+    )?.[0];
+    const database = databases.at(-1);
+    if (!sql || !database) throw new Error('Missing search query or database');
+    const plan = database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all('owner', '23', 25, 0);
+    expect(
+      plan.some((row) => String(row.detail).includes('idx_catalogue_cards_collector_number')),
+    ).toBe(true);
+  });
   it.each(['23', '023', '00023', ' #023 '])(
     'ignores leading zeros for %s while keeping owned cards first',
     async (query) => {
