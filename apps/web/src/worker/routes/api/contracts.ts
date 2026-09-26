@@ -1,4 +1,5 @@
 import {
+  binderBookmarkSetRequestSchema,
   binderLayoutSchema,
   binderRevisionRequestSchema,
   binderSlotSetRequestSchema,
@@ -53,6 +54,7 @@ export const binderFullPokedexPreviewSchema = z
   })
   .strict();
 export {
+  binderBookmarkSetRequestSchema,
   binderInsertRequestSchema,
   binderCompactRemoveRequestSchema,
   binderOffsetMoveRequestSchema,

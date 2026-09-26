@@ -1,5 +1,6 @@
 import { createHash, type Hash } from 'node:crypto';
 import { nowSeconds } from './db';
+import { tcgdexArtImageBase } from './tcgdex-art-image';
 import { ApplicationError, describeError, logWarn } from './log';
 
 const MAX_ART_BYTES = 15 * 1024 * 1024;
@@ -575,14 +576,9 @@ async function cacheTcgdexArt(
     );
     if (!detail.ok) return null;
     const payload: unknown = await detail.json();
-    const image =
-      payload && typeof payload === 'object' && 'image' in payload
-        ? (payload as { image?: unknown }).image
-        : null;
-    if (typeof image !== 'string') return null;
-    const imageBase = new URL(image);
-    if (imageBase.protocol !== 'https:' || imageBase.hostname !== 'assets.tcgdex.net') return null;
-    const response = await fetch(`${imageBase.href.replace(/\/+$/u, '')}/${variant}.webp`, {
+    const imageBase = tcgdexArtImageBase(payload, source.source_id, source.language);
+    if (!imageBase) return null;
+    const response = await fetch(`${imageBase}/${variant}.webp`, {
       headers: { accept: 'image/webp' },
       signal: AbortSignal.timeout(30_000),
     });

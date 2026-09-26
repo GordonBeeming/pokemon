@@ -193,6 +193,24 @@ async function seedReferencedArt(art: R2Bucket): Promise<void> {
 }
 
 describe('backup restore', () => {
+  it('round-trips pocket bookmarks through backup and restore', async () => {
+    const { database, db, art } = setup();
+    await seedReferencedArt(art);
+    database.exec(
+      "INSERT INTO binder_bookmarks (id,binder_page_id,row_index,column_index,name,created_at) VALUES ('bookmark-1','page-1',0,0,'Kanto',1)",
+    );
+    await createBackup(db, art, 'owner', { backupId: 'backup_bookmarks' });
+    database.exec('DELETE FROM binder_bookmarks');
+    await restoreBackup(db, art, 'owner', 'backup_bookmarks');
+    expect(
+      database
+        .prepare('SELECT id,binder_page_id,row_index,column_index,name FROM binder_bookmarks')
+        .all(),
+    ).toEqual([
+      { id: 'bookmark-1', binder_page_id: 'page-1', row_index: 0, column_index: 0, name: 'Kanto' },
+    ]);
+  });
+
   it('restores the frozen v3 binder fixture with v4 defaults', async () => {
     const { database, db, art } = setup();
     const backupId = 'backup_v3_fixture';

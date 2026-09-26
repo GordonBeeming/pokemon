@@ -1,3 +1,4 @@
+import { cardRegion } from './card-region';
 import { BinderCopyPrompt } from './binder-copy-prompt';
 import type { BinderCopyChoice } from '@pokedex/shared';
 import type { BinderInsertDestinations, BinderSlotLocation } from '@pokedex/shared';
@@ -276,6 +277,12 @@ function DetailPanel({
             {card.setName} · {card.number}
           </p>
           <dl>
+            {card.category === 'pokemon' ? (
+              <div>
+                <dt>Region</dt>
+                <dd>{cardRegion(card) ?? 'Not recorded'}</dd>
+              </div>
+            ) : null}
             <div>
               <dt>Price</dt>
               <dd>{money(card.price.amountAud)}</dd>
@@ -1103,6 +1110,7 @@ export function CatalogueView({
                 art={<Art card={card} decorative />}
                 title={card.name}
                 subtitle={`${card.setName} · ${card.number}`}
+                region={cardRegion(card)}
                 quantity={card.collection?.quantity ?? 0}
               />
             ))

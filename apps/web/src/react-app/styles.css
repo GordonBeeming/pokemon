@@ -1793,10 +1793,6 @@ dd {
 .binder-card-options .card-art {
   width: 100%;
 }
-.binder-card-options span:last-child {
-  display: grid;
-  min-width: 0;
-}
 .binder-card-options strong,
 .binder-card-options small {
   overflow: hidden;
@@ -2079,6 +2075,7 @@ dd {
     border-top: 1px solid #cfd8d1;
   }
   .filter-bar,
+  .catalogue-heading + .filter-bar,
   .planner-toolbar,
   .national-toolbar {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2140,6 +2137,7 @@ dd {
   }
   .metric-grid,
   .filter-bar,
+  .catalogue-heading + .filter-bar,
   .planner-toolbar,
   .national-toolbar {
     grid-template-columns: 1fr;
@@ -2633,4 +2631,44 @@ dd {
 .binder-copy-prompt > .card-art {
   width: 120px;
   max-width: 100%;
+}
+
+.card-tile-region-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.25rem;
+  min-height: 2rem;
+}
+.card-tile-region-row .ownership-mark {
+  position: static;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.card-tile .card-region {
+  justify-self: start;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--muted);
+  padding: 0.15rem 0.4rem;
+  font-size: 0.65rem;
+  line-height: 1.25;
+}
+
+.binder-bookmark-jump {
+  min-width: 0;
+  max-width: 18rem;
+}
+.binder-bookmark-jump select {
+  width: 100%;
+  min-width: 12rem;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  background: var(--surface);
+  color: var(--ink);
+  padding: 0.6rem;
+  font-size: 0.8rem;
 }

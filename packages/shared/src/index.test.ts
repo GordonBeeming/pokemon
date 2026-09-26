@@ -3,6 +3,8 @@ import {
   DESKTOP_SCOPES,
   artUrlSchema,
   apiErrorSchema,
+  binderBookmarkSchema,
+  binderBookmarkSetRequestSchema,
   binderEntrySchema,
   binderFullPokedexPreviewSchema,
   binderPlannerSummarySchema,
@@ -22,6 +24,25 @@ import {
 } from './index';
 
 describe('shared wire schemas', () => {
+  it('validates trimmed bookmark names and stable pocket coordinates', () => {
+    const input = { pageId: 'page-1', row: 0, column: 0, name: '  Kanto  ' };
+    expect(binderBookmarkSetRequestSchema.parse(input).name).toBe('Kanto');
+    expect(binderBookmarkSetRequestSchema.safeParse({ ...input, name: '   ' }).success).toBe(false);
+    expect(
+      binderBookmarkSetRequestSchema.safeParse({ ...input, name: 'x'.repeat(121) }).success,
+    ).toBe(false);
+    expect(binderBookmarkSetRequestSchema.safeParse({ ...input, row: -1 }).success).toBe(false);
+    expect(
+      binderBookmarkSchema.parse({
+        id: 'reserved-page:page-1',
+        kind: 'reserved-page',
+        name: 'Kanto Art',
+        pageId: 'page-1',
+        at: { page: 0, row: 0, column: 0 },
+      }).kind,
+    ).toBe('reserved-page');
+  });
+
   it('accepts stable card ids and rejects empty ids', () => {
     expect(cardIdSchema.parse('sv1-001')).toBe('sv1-001');
     expect(() => cardIdSchema.parse('')).toThrow();

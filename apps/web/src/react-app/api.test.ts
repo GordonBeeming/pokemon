@@ -50,16 +50,54 @@ function bodyAt(index: number): unknown {
 describe('API client', () => {
   it('validates paginated catalogue responses with same-origin art', async () => {
     vi.mocked(fetch).mockResolvedValue(
-      new Response(JSON.stringify({ ok: true, total: 1, cards: [card], cursor: null })),
+      new Response(
+        JSON.stringify({
+          ok: true,
+          total: 1,
+          cards: [{ ...card, pokedexNumber: 1 }],
+          cursor: null,
+        }),
+      ),
     );
     const result = await api.search(
       new URLSearchParams({ q: 'bulbasaur', limit: '50', offset: '0' }),
     );
+    expect(result.cards[0]?.pokedexNumber).toBe(1);
     expect(result.cards[0]?.imageLowUrl).toBe('/api/art/card-1/low');
     expect(result.cards[0]?.imageHighUrl).toBe('/api/art/card-1/high');
     expect(fetch).toHaveBeenCalledWith(
-      '/api/catalogue/search?q=bulbasaur&limit=50&offset=0',
+      '/api/catalogue/search?q=bulbasaur&limit=50&offset=0&includePokemonNumber=true',
       expect.objectContaining({ credentials: 'same-origin' }),
+    );
+  });
+
+  it('validates bookmark responses and sends annotation writes without binder revisions', async () => {
+    const bookmark = {
+      id: 'mark-1',
+      kind: 'pocket',
+      name: 'Kanto',
+      pageId: 'page-1',
+      at: { page: 0, row: 0, column: 0 },
+    };
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, bookmarks: [bookmark] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, bookmark })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true })));
+    expect(await api.binderBookmarks('version-1')).toEqual([bookmark]);
+    expect(
+      await api.setBinderBookmark('version-1', {
+        pageId: 'page-1',
+        row: 0,
+        column: 0,
+        name: 'Kanto',
+      }),
+    ).toEqual(bookmark);
+    await api.removeBinderBookmark('version-1', 'mark-1');
+    expect(bodyAt(1)).toEqual({ pageId: 'page-1', row: 0, column: 0, name: 'Kanto' });
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      '/api/binders/versions/version-1/bookmarks/mark-1',
+      expect.objectContaining({ method: 'DELETE' }),
     );
   });
 

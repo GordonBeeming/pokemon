@@ -3,6 +3,8 @@ import {
   apiErrorSchema,
   artUrlSchema,
   binderLayoutSchema,
+  binderBookmarkSchema,
+  binderBookmarkSetRequestSchema,
   binderInsertDestinationsSchema,
   binderAssignmentCandidatesSchema,
   binderFullPokedexPreviewSchema,
@@ -26,6 +28,8 @@ import {
 } from '@pokedex/shared';
 import type {
   BinderLayout,
+  BinderBookmark,
+  BinderBookmarkSetRequest,
   BinderEntry,
   BinderAssignmentCandidate,
   BinderMutationResult,
@@ -348,8 +352,14 @@ export const api = {
     }).then(() => undefined),
   dashboard: (signal?: AbortSignal): Promise<Dashboard> =>
     request('/api/dashboard', dashboardSchema, { signal }),
-  search: (params: URLSearchParams, signal?: AbortSignal): Promise<z.infer<typeof searchSchema>> =>
-    request(`/api/catalogue/search?${params}`, searchSchema, { signal }),
+  search: (
+    params: URLSearchParams,
+    signal?: AbortSignal,
+  ): Promise<z.infer<typeof searchSchema>> => {
+    const query = new URLSearchParams(params);
+    query.set('includePokemonNumber', 'true');
+    return request(`/api/catalogue/search?${query}`, searchSchema, { signal });
+  },
   resolveCards: (cardIds: string[], signal?: AbortSignal): Promise<CatalogueCardView[]> =>
     request(
       '/api/catalogue/cards/resolve?includePokemonNumber=true',
@@ -390,7 +400,9 @@ export const api = {
       body: json({ cardId }),
     }).then(() => undefined),
   card: (id: string, signal?: AbortSignal): Promise<CatalogueDetailView> =>
-    request(`/api/catalogue/${encoded(id)}`, detailSchema, { signal }).then((body) => body.card),
+    request(`/api/catalogue/${encoded(id)}?includePokemonNumber=true`, detailSchema, {
+      signal,
+    }).then((body) => body.card),
   createCustomCard: (input: {
     name: string;
     language: string;
@@ -449,6 +461,27 @@ export const api = {
       binderPlannerSummaryEnvelopeSchema,
       { signal },
     ).then((body) => body.summary),
+  binderBookmarks: (id: string, signal?: AbortSignal): Promise<BinderBookmark[]> =>
+    request(
+      `/api/binders/versions/${encoded(id)}/bookmarks`,
+      successSchema.extend({ bookmarks: z.array(binderBookmarkSchema) }),
+      { signal },
+    ).then((body) => body.bookmarks),
+  setBinderBookmark: (id: string, input: BinderBookmarkSetRequest): Promise<BinderBookmark> =>
+    request(
+      `/api/binders/versions/${encoded(id)}/bookmarks`,
+      successSchema.extend({ bookmark: binderBookmarkSchema }),
+      {
+        method: 'PUT',
+        body: json(binderBookmarkSetRequestSchema.parse(input)),
+      },
+    ).then((body) => body.bookmark),
+  removeBinderBookmark: (id: string, bookmarkId: string): Promise<void> =>
+    request(
+      `/api/binders/versions/${encoded(id)}/bookmarks/${encoded(bookmarkId)}`,
+      successSchema,
+      { method: 'DELETE' },
+    ).then(() => undefined),
   binderDestinations: (id: string, cardId?: string, signal?: AbortSignal) =>
     request(
       `/api/binders/versions/${encoded(id)}/destinations${cardId ? `?cardId=${encoded(cardId)}` : ''}`,

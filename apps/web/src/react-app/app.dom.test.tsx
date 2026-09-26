@@ -23,6 +23,9 @@ const apiMocks = vi.hoisted(() => ({
   binder: vi.fn(),
   binderShortages: vi.fn(),
   plannerSummary: vi.fn(),
+  binderBookmarks: vi.fn(),
+  setBinderBookmark: vi.fn(),
+  removeBinderBookmark: vi.fn(),
   binderDestinations: vi.fn(),
   previewFullPokedex: vi.fn(),
   assignmentCandidates: vi.fn(),
@@ -186,6 +189,7 @@ describe('async frontend announcements', () => {
       generatedPadding: 0,
     });
     apiMocks.assignmentCandidates.mockResolvedValue([]);
+    apiMocks.binderBookmarks.mockResolvedValue([]);
     apiMocks.binderDestinations.mockResolvedValue({
       versionId: 'version-1',
       maxCapacity: 3600,
@@ -1615,6 +1619,131 @@ describe('async frontend announcements', () => {
     expect(container.querySelector('.binder-library-card')).toBeNull();
   });
 
+  it('creates, renames, and removes a pocket bookmark with the Pokémon name as its default', async () => {
+    const initial = binderFixture([
+      { pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'pokemon', pokemonNumber: 1 },
+    ]);
+    const bookmark = {
+      id: 'bookmark-1',
+      kind: 'pocket',
+      name: 'Kanto starts',
+      pageId: 'page-1',
+      at: { page: 0, row: 0, column: 0 },
+    };
+    apiMocks.binders.mockResolvedValue([testBinder]);
+    apiMocks.binder.mockResolvedValue(initial.response);
+    apiMocks.setBinderBookmark.mockResolvedValue(bookmark);
+    apiMocks.removeBinderBookmark.mockResolvedValue(undefined);
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await waitFor(() => container.querySelector('.binder-slot') !== null);
+    await actAndSettle(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
+    await clickButton('Bookmark pocket');
+    const input = container.querySelector<HTMLInputElement>('input[maxlength="120"]');
+    if (!input) throw new Error('Missing bookmark name');
+    expect(input.value).toBe('Bulbasaur');
+    await actAndSettle(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        input,
+        'Kanto starts',
+      );
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await clickButton('Save bookmark');
+    expect(apiMocks.setBinderBookmark).toHaveBeenCalledWith('version-1', {
+      pageId: 'page-1',
+      row: 0,
+      column: 0,
+      name: 'Kanto starts',
+    });
+    expect(container.querySelector('.binder-bookmark-jump')?.textContent).toContain(
+      'Kanto starts · page 1',
+    );
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    await clickButton('Bookmark pocket');
+    expect(container.querySelector<HTMLInputElement>('input[maxlength="120"]')?.value).toBe(
+      'Kanto starts',
+    );
+    await clickButton('Remove bookmark');
+    expect(apiMocks.removeBinderBookmark).toHaveBeenCalledWith('version-1', 'bookmark-1');
+    expect(container.querySelector('.binder-bookmark-jump')?.textContent).toContain(
+      'No bookmarks yet',
+    );
+  });
+
+  it('jumps to the current location of a bookmark and defaults empty-pocket names to Empty', async () => {
+    const initial = binderFixture(
+      [{ pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'empty' }],
+      { columns: 1, capacity: 2, pageCount: 2 },
+    );
+    const destination = {
+      ...initial.response,
+      pages: [
+        {
+          ...initial.pages[0],
+          id: 'page-2',
+          position: 1,
+          slots: [{ pageId: 'page-2', row: 0, column: 0, cardId: null, entryKind: 'empty' }],
+        },
+      ],
+    };
+    apiMocks.binders.mockResolvedValue([testBinder]);
+    apiMocks.binder.mockImplementation((_id, page) =>
+      Promise.resolve(page === 1 ? destination : initial.response),
+    );
+    apiMocks.binderBookmarks.mockResolvedValue([
+      {
+        id: 'mark-2',
+        kind: 'pocket',
+        name: 'Johto',
+        pageId: 'page-2',
+        at: { page: 1, row: 0, column: 0 },
+      },
+      {
+        id: 'reserved-page:page-3',
+        kind: 'reserved-page',
+        name: 'Kanto Art',
+        pageId: 'page-3',
+        at: { page: 0, row: 0, column: 0 },
+      },
+    ]);
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await waitFor(() => container.querySelector('.binder-slot') !== null);
+    expect(container.querySelector('.binder-bookmark-jump')?.textContent).toContain('Kanto Art');
+    const select = container.querySelector('.binder-bookmark-jump select');
+    if (!select) throw new Error('Missing jump dropdown');
+    await actAndSettle(() => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(
+        select,
+        'mark-2',
+      );
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await waitFor(
+      () => container.querySelector<HTMLInputElement>('[aria-label="Go to page"]')?.value === '2',
+    );
+    expect(location.hash).toContain('page=2&row=1&column=1');
+    await clickButton('Bookmark pocket');
+    expect(container.querySelector<HTMLInputElement>('input[maxlength="120"]')?.value).toBe(
+      'Johto',
+    );
+    await closeEditor();
+    apiMocks.binderBookmarks.mockResolvedValue([]);
+    await clickButton('First');
+    await actAndSettle(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
+    await clickButton('Bookmark pocket');
+    expect(container.querySelector<HTMLInputElement>('input[maxlength="120"]')?.value).toBe(
+      'Empty',
+    );
+  });
+
   it('preserves a failed reservation label then clears it after a successful retry', async () => {
     const initial = binderFixture([
       { pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'empty' },
@@ -1630,7 +1759,14 @@ describe('async frontend announcements', () => {
       container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
     );
     await waitFor(() => container.querySelector('.binder-slot') !== null);
-    await manage();
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Page actions"]')?.click(),
+    );
+    await actAndSettle(() =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('.page-menu-popover button'))
+        .find((button) => button.textContent === 'Reserve this page')
+        ?.click(),
+    );
     const label = Array.from(container.querySelectorAll<HTMLInputElement>('input')).find((input) =>
       input.parentElement?.textContent?.includes('Page reservation label'),
     );
@@ -1649,7 +1785,7 @@ describe('async frontend announcements', () => {
     await actAndSettle(reserve);
     expect(label.value).toBe('Energy');
     await actAndSettle(reserve);
-    await waitFor(() => label.value === '');
+    await waitFor(() => !container.textContent?.includes('Page reservation label'));
     expect(apiMocks.reservePage).toHaveBeenLastCalledWith('version-1', 0, true, 'Energy', 1);
   });
 
@@ -2423,7 +2559,14 @@ describe('async frontend announcements', () => {
     await waitFor(() => apiMocks.arrangeBinder.mock.calls.length === 1);
     expect(apiMocks.arrangeBinder).toHaveBeenCalledWith('version-1', 'pokedex-number', 2);
 
-    await manage();
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('[aria-label="Page actions"]')?.click(),
+    );
+    await actAndSettle(() =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('.page-menu-popover button'))
+        .find((button) => button.textContent === 'Reserve this page')
+        ?.click(),
+    );
     const label = Array.from(container.querySelectorAll<HTMLInputElement>('input')).find((input) =>
       input.parentElement?.textContent?.includes('Page reservation label'),
     );
@@ -2442,6 +2585,8 @@ describe('async frontend announcements', () => {
     );
     await waitFor(() => apiMocks.reservePage.mock.calls.length === 1);
     expect(apiMocks.reservePage).toHaveBeenLastCalledWith('version-1', 1, true, 'Promos', 3);
+    await openActions();
+    await actAndSettle(() => action('Edit page label')?.click());
     await actAndSettle(() =>
       Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
         .find((button) => button.textContent === 'Unreserve this page')
