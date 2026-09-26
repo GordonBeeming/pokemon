@@ -146,16 +146,7 @@ export function BinderInsertDialog({
           setPending(true);
           void onInsert(destination, [...selected.values()], destinations.revision)
             .then((success) => {
-              if (success) {
-                setMessage(
-                  `${selected.size} ${selected.size === 1 ? 'target' : 'targets'} inserted.`,
-                );
-                setSelected(new Map());
-                setQuery('');
-                setResultOffset(0);
-                setCards([]);
-                setSearched(false);
-              }
+              if (success) onClose();
             })
             .catch((reason: unknown) => onNotice({ kind: 'error', message: userMessage(reason) }))
             .finally(() => setPending(false));

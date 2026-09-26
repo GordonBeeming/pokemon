@@ -45,39 +45,48 @@ export interface ReflowEntry {
 export function reflowBinderEntries(
   capacity: number,
   pageSize: number,
-  entries: readonly ReflowEntry[],
-  options: { anchorReservations?: boolean; startIndex?: number } = {},
+  entries: readonly (ReflowEntry | null)[],
+  options: {
+    anchorReservations?: boolean;
+    startIndex?: number;
+    gapIndices?: readonly number[];
+  } = {},
 ): Array<ReflowEntry | null> {
   const placed: Array<ReflowEntry | null> = Array.from({ length: capacity }, () => null);
   if (options.anchorReservations)
     for (const item of entries) {
-      if (item.entry.kind !== 'reserved') continue;
+      if (!item || item.entry.kind !== 'reserved') continue;
       const index = item.originalIndex;
       if (index === undefined || index < 0 || index >= capacity || placed[index] !== null)
         domainError('binder_slot_out_of_bounds');
       placed[index] = item;
     }
+  const gaps = new Set(options.gapIndices ?? []);
+  let requiredCapacity = 0;
   let cursor = options.startIndex ?? 0;
   for (const item of entries) {
+    if (!item) {
+      cursor += 1;
+      continue;
+    }
     if (options.anchorReservations && item.entry.kind === 'reserved') continue;
     if ('startsNewPage' in item.entry && item.entry.startsNewPage) {
       if (cursor % pageSize !== 0) cursor += pageSize - (cursor % pageSize);
-      while (cursor < capacity && placed[cursor] !== null) cursor += pageSize;
+      while (cursor < capacity && (placed[cursor] !== null || gaps.has(cursor))) cursor += pageSize;
     } else {
-      while (cursor < capacity && placed[cursor] !== null) cursor += 1;
+      while (cursor < capacity && (placed[cursor] !== null || gaps.has(cursor))) cursor += 1;
     }
-    if (cursor >= capacity) {
-      const requiredCapacity = cursor + 1;
-      throw new BinderDomainError('binder_capacity_exceeded', {
-        currentCapacity: capacity,
-        requiredCapacity,
-        additionalPockets: requiredCapacity - capacity,
-        pageIncrement: pageSize,
-      });
-    }
-    placed[cursor] = item;
+    requiredCapacity = Math.max(requiredCapacity, cursor + 1);
+    if (cursor < capacity) placed[cursor] = item;
     cursor += 1;
   }
+  if (requiredCapacity > capacity)
+    throw new BinderDomainError('binder_capacity_exceeded', {
+      currentCapacity: capacity,
+      requiredCapacity,
+      additionalPockets: requiredCapacity - capacity,
+      pageIncrement: pageSize,
+    });
   return placed;
 }
 
@@ -154,6 +163,7 @@ export type BinderErrorCode =
   | 'binder_shift_page_break'
   | 'binder_assignment_incompatible'
   | 'binder_assignment_quantity_exceeded'
+  | 'binder_page_contains_targets'
   | 'binder_reserved_page_not_empty'
   | 'binder_bookmark_reserved_page'
   | 'card_not_found';
@@ -1166,18 +1176,38 @@ export async function arrangeBinderVersion(
       pokedex_number: pokemon.number,
     };
   };
-  const arranged = [...targets].sort((left, right) =>
-    compareBinderCards(ordering(left), ordering(right), mode),
-  );
-  const reservations = entries.filter((item) => item.entry.kind === 'reserved');
-  const flowed = reflowBinderEntries(
-    available.length,
-    version.rows * version.columns,
-    [...reservations, ...arranged],
-    { anchorReservations: true },
-  );
+  const statements: D1PreparedStatement[] = [];
+  const visited = new Set<string>();
+  for (const slot of available) {
+    if (visited.has(slot.binder_page_id)) continue;
+    const section = binderSection(slots, slot.page_position);
+    section.forEach((item) => visited.add(item.binder_page_id));
+    const physical = physicalEntries(section);
+    const padding = generatedPaddingIndices(physical);
+    const last = lastOccupiedIndex(physical);
+    const gapIndices = physical.flatMap((item, index) =>
+      item === null && index < last && !padding.has(index) ? [index] : [],
+    );
+    const entries = physical.filter((item): item is ReflowEntry => item !== null);
+    const arranged = entries
+      .filter((item) => item.entry.kind !== 'reserved')
+      .sort((left, right) => compareBinderCards(ordering(left), ordering(right), mode));
+    const reservations = entries.filter((item) => item.entry.kind === 'reserved');
+    const plan = planSectionLayout(
+      db,
+      version,
+      slots,
+      section,
+      [...reservations, ...arranged],
+      0,
+      0,
+      { anchorReservations: true, gapIndices },
+    );
+    plan.slots.forEach((item) => visited.add(item.binder_page_id));
+    statements.push(...plan.statements);
+  }
   await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-    ...rewriteSlotsStatements(db, slots, flowed),
+    ...statements,
     ...revisionStatements(db, version, nowSeconds()),
   ]);
   return mutationResult(db, ownerId, versionId, [0]);
@@ -1471,11 +1501,7 @@ export async function swapBinderSlots(
       index % pageSize !== 0,
   );
   const flowed = breakNeedsReflow
-    ? reflowBinderEntries(
-        available.length,
-        pageSize,
-        physical.filter((entry) => entry !== null),
-      )
+    ? reflowBinderEntries(available.length, pageSize, logicalSuffix(physical, 0))
     : physical;
   await runVersionBatch(db, ownerId, versionId, version.revision, false, [
     ...rewriteSlotsStatements(db, slots, flowed),
@@ -1755,6 +1781,199 @@ async function materializedSlots(db: D1Database, versionId: string): Promise<Mat
   return result.results;
 }
 
+/** Empty runs immediately before an explicit page break are generated padding. */
+function lastOccupiedIndex(physical: readonly (ReflowEntry | null)[]): number {
+  for (let index = physical.length - 1; index >= 0; index -= 1)
+    if (physical[index] !== null) return index;
+  return -1;
+}
+
+function generatedPaddingIndices(
+  physical: readonly (ReflowEntry | null)[],
+  start = 0,
+): Set<number> {
+  const padding = new Set<number>();
+  physical.forEach((item, index) => {
+    if (!item || !('startsNewPage' in item.entry) || !item.entry.startsNewPage) return;
+    for (let previous = index - 1; previous >= start && physical[previous] === null; previous -= 1)
+      padding.add(previous);
+  });
+  return padding;
+}
+
+function physicalEntries(slots: readonly MaterializedSlot[]): Array<ReflowEntry | null> {
+  return slots.map((slot, originalIndex) => {
+    const entry = slotEntry(slot);
+    return entry ? { entry, assignedCardId: slot.assigned_card_id ?? null, originalIndex } : null;
+  });
+}
+
+function binderSection(slots: MaterializedSlot[], page: number): MaterializedSlot[] {
+  const previous =
+    slots.filter((slot) => slot.page_kind === 'reserved' && slot.page_position < page).at(-1)
+      ?.page_position ?? -1;
+  const next =
+    slots.find((slot) => slot.page_kind === 'reserved' && slot.page_position > page)
+      ?.page_position ?? Infinity;
+  return slots.filter(
+    (slot) =>
+      slot.page_kind !== 'reserved' && slot.page_position > previous && slot.page_position < next,
+  );
+}
+
+function logicalSuffix(
+  physical: Array<ReflowEntry | null>,
+  from: number,
+): Array<ReflowEntry | null> {
+  const padding = generatedPaddingIndices(physical, from);
+  const last = lastOccupiedIndex(physical);
+  return physical.slice(from, last + 1).filter((_item, index) => !padding.has(from + index));
+}
+
+function sectionStorage(
+  allSlots: MaterializedSlot[],
+  section: MaterializedSlot[],
+  pageSize: number,
+) {
+  const lastSectionPage = section.at(-1)!.page_position;
+  const divider = allSlots.find(
+    (slot) => slot.page_kind === 'reserved' && slot.page_position > lastSectionPage,
+  );
+  const lastUsedPage = Math.max(
+    -1,
+    ...allSlots
+      .filter((slot) => slot.page_kind === 'reserved' || slotEntry(slot) !== null)
+      .map((slot) => slot.page_position),
+  );
+  const byPage = new Map<string, MaterializedSlot[]>();
+  for (const slot of allSlots) {
+    const list = byPage.get(slot.binder_page_id) ?? [];
+    list.push(slot);
+    byPage.set(slot.binder_page_id, list);
+  }
+  const sparePages = divider
+    ? [...byPage.values()].filter(
+        (page) => page[0]!.page_position > lastUsedPage && page.length === pageSize,
+      )
+    : [];
+  const partialTail = divider
+    ? ([...byPage.values()].find(
+        (page) => page[0]!.page_position > lastUsedPage && page.length < pageSize,
+      )?.length ?? 0)
+    : 0;
+  return { divider, byPage, sparePages, partialTail };
+}
+
+/** Plan section growth by moving unused full tail pages before its divider. */
+function planSectionLayout(
+  db: D1Database,
+  version: VersionRow,
+  allSlots: MaterializedSlot[],
+  section: MaterializedSlot[],
+  entries: Array<ReflowEntry | null>,
+  start: number,
+  prefixEnd = start,
+  options: { anchorReservations?: boolean; gapIndices?: readonly number[] } = {},
+): {
+  slots: MaterializedSlot[];
+  flowed: Array<ReflowEntry | null>;
+  statements: D1PreparedStatement[];
+} {
+  const pageSize = version.rows * version.columns;
+  const { divider, byPage, sparePages, partialTail } = sectionStorage(allSlots, section, pageSize);
+  let flowed: Array<ReflowEntry | null>;
+  try {
+    flowed = reflowBinderEntries(section.length + sparePages.length * pageSize, pageSize, entries, {
+      ...options,
+      startIndex: start,
+    });
+  } catch (error) {
+    if (
+      error instanceof BinderDomainError &&
+      error.code === 'binder_capacity_exceeded' &&
+      error.details &&
+      'additionalPockets' in error.details
+    ) {
+      const extra = divider
+        ? Math.ceil(error.details.additionalPockets / pageSize) * pageSize - partialTail
+        : error.details.additionalPockets;
+      throw new BinderDomainError('binder_capacity_exceeded', {
+        currentCapacity: version.capacity,
+        requiredCapacity: version.capacity + extra,
+        additionalPockets: extra,
+        pageIncrement: pageSize,
+      });
+    }
+    throw error;
+  }
+  const prefix = physicalEntries(section).slice(0, prefixEnd);
+  prefix.forEach((item, index) => {
+    flowed[index] = item;
+  });
+  const used = lastOccupiedIndex(flowed) + 1;
+  const borrowed = sparePages.slice(0, Math.max(0, Math.ceil((used - section.length) / pageSize)));
+  const slots = [...section, ...borrowed.flat()];
+  flowed = flowed.slice(0, slots.length);
+  const statements: D1PreparedStatement[] = [];
+  if (borrowed.length && divider) {
+    const borrowedIds = new Set(borrowed.map((page) => page[0]!.binder_page_id));
+    const order = [...byPage.keys()].filter((id) => !borrowedIds.has(id));
+    order.splice(order.indexOf(divider.binder_page_id), 0, ...borrowedIds);
+    const positions = new Map(order.map((id, position) => [id, position]));
+    allSlots.forEach((slot) => {
+      slot.page_position = positions.get(slot.binder_page_id)!;
+    });
+    statements.push(
+      db
+        .prepare('UPDATE binder_pages SET position = position + ?1 WHERE binder_version_id = ?2')
+        .bind(MAX_BINDER_PAGES + 1, version.id),
+      db
+        .prepare(
+          `WITH positions AS (SELECT json_extract(value,'$.id') AS id, CAST(json_extract(value,'$.position') AS INTEGER) AS position FROM json_each(?1))
+        UPDATE binder_pages SET position = positions.position FROM positions WHERE binder_pages.id = positions.id`,
+        )
+        .bind(JSON.stringify(order.map((id, position) => ({ id, position })))),
+    );
+  }
+  statements.push(...rewriteSlotsStatements(db, slots, flowed));
+  slots.forEach((slot, index) => {
+    const encoded = encodedSlot(flowed[index] ?? null, slot);
+    Object.assign(slot, {
+      entry_kind: encoded.kind,
+      label: encoded.label,
+      card_id: encoded.cardId,
+      pokemon_number: encoded.pokemonNumber,
+      assigned_card_id: encoded.assignedCardId,
+      starts_new_page: encoded.startsNewPage ? 1 : 0,
+    });
+  });
+  allSlots.sort(
+    (a, b) =>
+      a.page_position - b.page_position ||
+      a.row_index - b.row_index ||
+      a.column_index - b.column_index,
+  );
+  return { slots, flowed, statements };
+}
+
+async function saveSectionLayout(
+  db: D1Database,
+  ownerId: string,
+  version: VersionRow,
+  allSlots: MaterializedSlot[],
+  section: MaterializedSlot[],
+  entries: Array<ReflowEntry | null>,
+  start: number,
+  prefixEnd = start,
+): Promise<{ slots: MaterializedSlot[]; flowed: Array<ReflowEntry | null> }> {
+  const plan = planSectionLayout(db, version, allSlots, section, entries, start, prefixEnd);
+  await runVersionBatch(db, ownerId, version.id, version.revision, false, [
+    ...plan.statements,
+    ...revisionStatements(db, version, nowSeconds()),
+  ]);
+  return plan;
+}
+
 function locationIndex(version: VersionRow, location: BinderSlotLocation): number {
   validateLocation(version, location);
   return (
@@ -1846,11 +2065,11 @@ async function mutateLogicalEntries(
   requestedRevision: number,
   anchor: BinderSlotLocation,
   mutate: (
-    entries: ReflowEntry[],
+    entries: Array<ReflowEntry | null>,
     index: number,
     physicalIndex: number,
     capacity: number,
-  ) => ReflowEntry[],
+  ) => Array<ReflowEntry | null>,
 ): Promise<BinderMutationResult> {
   const version = await readVersion(db, ownerId, versionId);
   requireEditable(version);
@@ -1860,26 +2079,14 @@ async function mutateLogicalEntries(
   const anchorSlot = slots[physicalIndex];
   if (!anchorSlot || anchorSlot.page_kind === 'reserved')
     domainError('binder_reserved_page_not_empty');
-  const available = slots.filter((slot) => slot.page_kind !== 'reserved');
-  const availableIndex = available.indexOf(anchorSlot);
-  const suffixSlots = available.slice(availableIndex);
-  const dense = suffixSlots
-    .map((slot, index) => {
-      const entry = slotEntry(slot);
-      return entry
-        ? { entry, assignedCardId: slot.assigned_card_id ?? null, originalIndex: index }
-        : null;
-    })
-    .filter((entry) => entry !== null);
-  const changed = mutate(dense, 0, availableIndex, suffixSlots.length);
-  const pageSize = version.rows * version.columns;
-  const flowed = reflowBinderEntries(available.length, pageSize, changed, {
-    startIndex: availableIndex,
-  }).slice(availableIndex);
-  await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-    ...rewriteSlotsStatements(db, suffixSlots, flowed),
-    ...revisionStatements(db, version, nowSeconds()),
-  ]);
+  const section = binderSection(slots, anchor.page);
+  const availableIndex = section.indexOf(anchorSlot);
+  const physical = physicalEntries(section);
+  const suffix = logicalSuffix(physical, availableIndex).map((item) =>
+    item ? { ...item, originalIndex: item.originalIndex! - availableIndex } : null,
+  );
+  const changed = mutate(suffix, 0, availableIndex, section.length - availableIndex);
+  await saveSectionLayout(db, ownerId, version, slots, section, changed, availableIndex);
   return { ...(await mutationResult(db, ownerId, versionId, [anchor.page])), anchor };
 }
 
@@ -1933,58 +2140,38 @@ export async function moveBinderEntryByOffset(
   );
   if (!sourceSlot) domainError('binder_slot_not_found');
   if (sourceSlot.page_kind === 'reserved') domainError('binder_reserved_page_not_empty');
-  const available = slots.filter((slot) => slot.page_kind !== 'reserved');
+  const available = binderSection(slots, from.page);
   const sourceIndex = available.indexOf(sourceSlot);
   if (!Number.isSafeInteger(offset) || offset === 0 || Math.abs(offset) > 120_000)
     domainError('binder_slot_out_of_bounds');
   const targetIndex = sourceIndex + offset;
   if (targetIndex < 0) domainError('binder_slot_out_of_bounds');
-  const physical = available.map((slot, originalIndex): ReflowEntry | null => {
-    const entry = slotEntry(slot);
-    return entry ? { entry, assignedCardId: slot.assigned_card_id ?? null, originalIndex } : null;
-  });
+  const physical = physicalEntries(available);
   const moved = physical[sourceIndex];
   if (!moved) domainError('binder_slot_not_found');
   if (offset < 0 && physical.slice(targetIndex, sourceIndex).some((item) => item !== null))
     domainError('binder_shift_occupied');
-
-  const pageSize = version.rows * version.columns;
-  const shifted: Array<ReflowEntry | null> = physical.map((item, index) =>
-    index < Math.min(sourceIndex, targetIndex) ? item : null,
-  );
-  // Keep existing gaps and order. A page break adds padding for the entire
-  // remaining sequence, so following targets cannot jump ahead of it.
-  let padding = 0;
-  let requiredLength = available.length;
-  for (let index = sourceIndex; index < physical.length; index += 1) {
-    const item = physical[index];
-    if (!item) continue;
-    let destination = index + offset + padding;
-    if ('startsNewPage' in item.entry && item.entry.startsNewPage && destination % pageSize !== 0) {
-      const extra = pageSize - (destination % pageSize);
-      padding += extra;
-      destination += extra;
-    }
-    requiredLength = Math.max(requiredLength, destination + 1);
-    if (destination < shifted.length) shifted[destination] = item;
-  }
-  if (requiredLength > available.length) {
-    const additionalPockets = requiredLength - available.length;
-    throw new BinderDomainError('binder_capacity_exceeded', {
-      currentCapacity: version.capacity,
-      requiredCapacity: version.capacity + additionalPockets,
-      additionalPockets,
-      pageIncrement: pageSize,
-    });
-  }
-  if (shifted.every((item, index) => item === physical[index]))
+  const suffix = logicalSuffix(physical, sourceIndex);
+  if (
+    'startsNewPage' in moved.entry &&
+    moved.entry.startsNewPage &&
+    Math.ceil(targetIndex / (version.rows * version.columns)) * (version.rows * version.columns) ===
+      sourceIndex
+  )
     domainError('binder_shift_page_break');
-  await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-    ...rewriteSlotsStatements(db, slots, shifted),
-    ...revisionStatements(db, version, nowSeconds()),
-  ]);
-  const finalIndex = shifted.indexOf(moved);
-  const targetSlot = available[finalIndex];
+  const { slots: nextSlots, flowed } = await saveSectionLayout(
+    db,
+    ownerId,
+    version,
+    slots,
+    available,
+    suffix,
+    targetIndex,
+    Math.min(sourceIndex, targetIndex),
+  );
+  // A forward shift creates new empty sleeves; retain only the prefix before the source.
+  const finalIndex = flowed.indexOf(moved);
+  const targetSlot = nextSlots[finalIndex];
   if (!targetSlot) domainError('binder_slot_not_found');
   const anchor = {
     page: targetSlot.page_position,
@@ -2023,26 +2210,22 @@ export async function previewFullPokedexInsert(
   const anchorSlot = slots[locationIndex(version, at)];
   if (!anchorSlot || anchorSlot.page_kind === 'reserved')
     domainError('binder_reserved_page_not_empty');
-  const usable = slots.filter((slot) => slot.page_kind !== 'reserved');
+  const usable = binderSection(slots, at.page);
   const startIndex = usable.indexOf(anchorSlot);
-  const existing = usable
-    .slice(startIndex)
-    .map((slot, index) => {
-      const entry = slotEntry(slot);
-      return entry
-        ? { entry, assignedCardId: slot.assigned_card_id ?? null, originalIndex: index }
-        : null;
-    })
-    .filter((entry) => entry !== null);
+  const existing = logicalSuffix(physicalEntries(usable), startIndex);
   const inserted = fullPokedexEntries(regionPageBreaks).map((entry) => ({ entry }));
   const pageSize = version.rows * version.columns;
-  const probeCapacity = usable.length + inserted.length + NATIONAL_POKEDEX.length * pageSize;
+  const { divider, sparePages, partialTail } = sectionStorage(slots, usable, pageSize);
+  const availableCapacity = usable.length + sparePages.length * pageSize;
+  const probeCapacity = availableCapacity + inserted.length + NATIONAL_POKEDEX.length * pageSize;
   const flowed = reflowBinderEntries(probeCapacity, pageSize, [...inserted, ...existing], {
     startIndex,
   });
   let requiredUsable = flowed.length;
   while (requiredUsable > 0 && flowed[requiredUsable - 1] === null) requiredUsable -= 1;
-  const additionalPockets = Math.max(0, requiredUsable - usable.length);
+  const shortfall = Math.max(0, requiredUsable - availableCapacity);
+  const additionalPockets =
+    shortfall && divider ? Math.ceil(shortfall / pageSize) * pageSize - partialTail : shortfall;
   const requiredCapacity = version.capacity + additionalPockets;
   return {
     currentCapacity: version.capacity,
@@ -2187,36 +2370,12 @@ export async function reserveBinderPage(
     return mutationResult(db, ownerId, versionId, [pagePosition]);
   }
   const slots = await materializedSlots(db, versionId);
-  const dense = slots
-    .filter((slot) => slot.page_kind !== 'reserved')
-    .map((slot) => {
-      const entry = slotEntry(slot);
-      return entry ? { entry, assignedCardId: slot.assigned_card_id ?? null } : null;
-    })
-    .filter((entry) => entry !== null);
-  const futureSlots = slots.map((slot) =>
-    slot.binder_page_id === page.id
-      ? { ...slot, page_kind: reserved ? ('reserved' as const) : ('slots' as const) }
-      : slot,
-  );
-  const available = futureSlots.filter((slot) => slot.page_kind !== 'reserved');
-  const flowed = reflowBinderEntries(available.length, version.rows * version.columns, dense);
+  if (reserved && slots.some((slot) => slot.binder_page_id === page.id && slotEntry(slot) !== null))
+    domainError('binder_page_contains_targets');
   await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-    ...(reserved
-      ? [
-          db
-            .prepare(
-              `UPDATE binder_slots SET entry_kind = 'empty', label = NULL, card_id = NULL,
-                pokemon_number = NULL, assigned_card_id = NULL, starts_new_page = 0
-               WHERE binder_page_id = ?1`,
-            )
-            .bind(page.id),
-        ]
-      : []),
     db
       .prepare('UPDATE binder_pages SET kind = ?1, label = ?2 WHERE id = ?3')
       .bind(reserved ? 'reserved' : 'slots', reserved ? label : null, page.id),
-    ...rewriteSlotsStatements(db, futureSlots, flowed),
     ...revisionStatements(db, version, nowSeconds()),
   ]);
   return mutationResult(db, ownerId, versionId, [pagePosition]);

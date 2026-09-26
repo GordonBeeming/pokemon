@@ -75,7 +75,6 @@ function DetailPanel({
   addToBinder,
   binderPlacement,
   binderError,
-  binderAdded,
   choosePlacement,
   cancelPlacement,
 }: {
@@ -98,7 +97,6 @@ function DetailPanel({
   addToBinder: () => void;
   binderPlacement: BinderInsertDestinations | null;
   binderError: string | null;
-  binderAdded: { href: string; label: string } | null;
   choosePlacement: (at: BinderSlotLocation, choice: BinderCopyChoice) => void;
   cancelPlacement: () => void;
 }): ReactElement {
@@ -357,7 +355,7 @@ function DetailPanel({
               <button
                 className="quiet-button"
                 type="button"
-                disabled={pending || representativePending}
+                disabled={pending || representativePending || dirty}
                 onClick={useAsRepresentative}
               >
                 {representativePending ? 'Saving Pokédex image…' : 'Use as Pokédex image'}
@@ -468,21 +466,6 @@ function DetailPanel({
                     )}
                   </section>
                 ) : null}
-                {binderAdded ? (
-                  <p role="status">
-                    {binderAdded.label}{' '}
-                    <NavigationLink
-                      href={binderAdded.href}
-                      onNavigate={() => {
-                        leave(() => {
-                          location.hash = binderAdded.href;
-                        });
-                      }}
-                    >
-                      View this card in the binder
-                    </NavigationLink>
-                  </p>
-                ) : null}
               </>
             ) : (
               <p>Create a binder in Binder Plans first.</p>
@@ -546,14 +529,12 @@ export function CatalogueView({
   const [binderAdding, setBinderAdding] = useState(false);
   const [binderError, setBinderError] = useState<string | null>(null);
   const [binderPlacement, setBinderPlacement] = useState<BinderInsertDestinations | null>(null);
-  const [binderAdded, setBinderAdded] = useState<{ href: string; label: string } | null>(null);
   const placementGeneration = useRef(0);
   const placementRequest = useRef<AbortController | null>(null);
   useEffect(() => {
     placementRequest.current?.abort();
     placementGeneration.current += 1;
     setBinderPlacement(null);
-    setBinderAdded(null);
     setBinderError(null);
     setBinderAdding(false);
     return () => placementRequest.current?.abort();
@@ -695,7 +676,6 @@ export function CatalogueView({
     setBinderError(null);
     setBinderAdding(true);
     setBinderPlacement(null);
-    setBinderAdded(null);
     try {
       const choices = await api.binderDestinations(versionId, detail.id, controller.signal);
       if (!controller.signal.aborted) setBinderPlacement(choices);
@@ -727,23 +707,16 @@ export function CatalogueView({
         expectedRevision: choices.revision,
         copyChoice,
       });
-      const params = new URLSearchParams({
-        version: choices.versionId,
-        page: String(at.page + 1),
-        row: String(at.row + 1),
-        column: String(at.column + 1),
-      });
       const label = `${card.name} added on page ${at.page + 1}, pocket ${at.row + 1}:${at.column + 1}.`;
       if (generation === placementGeneration.current) {
-        setBinderAdded({ href: `#binders?${params}`, label });
         setBinderPlacement(null);
+        closeDetail();
       }
       onNotice({ kind: 'success', message: label });
       if (copyChoice.action === 'add') {
         try {
           const updated = await api.card(card.id);
-          if (generation === placementGeneration.current && updated.collection)
-            applyState(updated.collection);
+          if (updated.collection) applyState(updated.collection);
         } catch (reason) {
           onNotice({ kind: 'error', message: userMessage(reason) });
         }
@@ -853,6 +826,7 @@ export function CatalogueView({
 
   async function addOne(): Promise<void> {
     if (!detail) return;
+    const openedWith = detailController.current;
     setSaving(true);
     onNotice(null);
     try {
@@ -862,6 +836,7 @@ export function CatalogueView({
       });
       applyState(state);
       onNotice({ kind: 'success', message: 'Added one copy.' });
+      if (detailController.current === openedWith) closeDetail();
     } catch (error) {
       const message = userMessage(error);
       if (message) onNotice({ kind: 'error', message });
@@ -895,6 +870,7 @@ export function CatalogueView({
 
   async function useAsRepresentative(): Promise<void> {
     if (!detail || !pokedexNumber) return;
+    const openedWith = detailController.current;
     setRepresentativePending(true);
     onNotice(null);
     try {
@@ -903,6 +879,7 @@ export function CatalogueView({
         kind: 'success',
         message: `${detail.name} from ${detail.setName} is now the National Pokédex image.`,
       });
+      if (detailController.current === openedWith) closeDetail();
     } catch (error) {
       const message = userMessage(error);
       if (message) onNotice({ kind: 'error', message });
@@ -1157,7 +1134,6 @@ export function CatalogueView({
           addToBinder={() => void addDetailToBinder()}
           binderPlacement={binderPlacement}
           binderError={binderError}
-          binderAdded={binderAdded}
           choosePlacement={(at, choice) => void chooseBinderPlacement(at, choice)}
           cancelPlacement={() => setBinderPlacement(null)}
         />

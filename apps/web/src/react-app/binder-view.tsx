@@ -926,11 +926,6 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
     if (!version || !mounted.current) return false;
     const startedOn = navigation.current;
     const stillHere = () => mounted.current && navigation.current === startedOn;
-    const editorControl =
-      document.activeElement instanceof HTMLElement &&
-      document.activeElement.closest('.pocket-editor-popup')
-        ? document.activeElement
-        : null;
     setPending(true);
     setMutationError(null);
     try {
@@ -939,7 +934,8 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
         onNotice({ kind: 'success', message });
         return false;
       }
-      pendingPocketFocus.current = editorControl ? null : (result.anchor ?? focusAt);
+      resetPanels();
+      pendingPocketFocus.current = result.anchor ?? focusAt;
       await load(
         result.version.id,
         binderMutationPage(result, result.anchor?.page ?? page).position,
@@ -950,11 +946,6 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
         onNotice({ kind: 'success', message });
         return false;
       }
-      if (editorControl)
-        requestAnimationFrame(() => {
-          if (editorControl.isConnected && !editorControl.matches(':disabled'))
-            editorControl.focus({ preventScroll: true });
-        });
       setStatus(message);
       onNotice({ kind: 'success', message });
       return true;
