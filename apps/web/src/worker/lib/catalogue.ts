@@ -1085,8 +1085,16 @@ export async function searchCards(
 ): Promise<{ total: number; cards: CatalogueCardView[]; cursor: string | null }> {
   const where = ['c.is_active = 1'];
   const values: unknown[] = [ownerId];
-  const fts = filters.query ? escapedFtsQuery(filters.query) : null;
-  if (fts) {
+  const numberQuery = filters.query?.trim().match(/^#?(\d+)$/u)?.[1];
+  const cardNumber = numberQuery === undefined ? null : numberQuery.replace(/^0+/u, '');
+  const fts = cardNumber === null && filters.query ? escapedFtsQuery(filters.query) : null;
+  if (cardNumber !== null) {
+    // Printed numbers can include a set total; only the numerator identifies the card.
+    const numerator = "trim(substr(c.number, 1, instr(c.number || '/', '/') - 1))";
+    where.push(`(${numerator} <> '' AND ${numerator} NOT GLOB '*[^0-9]*'
+      AND ltrim(${numerator}, '0') = ?2)`);
+    values.push(cardNumber);
+  } else if (fts) {
     where.push('c.id IN (SELECT card_id FROM catalogue_search WHERE catalogue_search MATCH ?2)');
     values.push(fts);
   }
@@ -1120,6 +1128,7 @@ export async function searchCards(
   if (cursor && filters.offset !== 0) throw new ApplicationError('invalid_catalogue_cursor', 400);
   const filterKey = JSON.stringify({
     query: fts,
+    ...(cardNumber !== null ? { cardNumber } : {}),
     language: filters.language ?? null,
     category: filters.category ?? null,
     setId: filters.setId ?? null,
