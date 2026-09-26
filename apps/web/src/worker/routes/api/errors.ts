@@ -30,6 +30,7 @@ const binderStatuses = {
   binder_assignment_incompatible: 409,
   binder_assignment_quantity_exceeded: 409,
   binder_reserved_page_not_empty: 409,
+  binder_page_contains_targets: 409,
   binder_bookmark_reserved_page: 409,
   card_not_found: 404,
 } as const satisfies Record<BinderErrorCode, PublicStatus>;

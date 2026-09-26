@@ -514,9 +514,7 @@ describe('async frontend announcements', () => {
         expectedRevision: 5,
         copyChoice: { action: 'none' },
       });
-      expect(
-        container.querySelector<HTMLAnchorElement>('.detail-binder a')?.getAttribute('href'),
-      ).toBe(`#binders?version=version-1&page=45&row=1&column=${mode === 'replace' ? 1 : 2}`);
+      expect(container.querySelector('[role=dialog]')).toBeNull();
       expect(apiMocks.setCollection).not.toHaveBeenCalled();
     },
   );
@@ -1213,8 +1211,8 @@ describe('async frontend announcements', () => {
     expect(apiMocks.insertEntries.mock.calls[0]?.[2]).toHaveLength(1025);
     expect(container.textContent).toContain('1025 targets selected.');
     await clickButton('Insert 1025 selected targets');
-    await waitFor(() => container.textContent?.includes('1025 targets inserted.') === true);
-    expect(container.querySelector('[role="dialog"]')).not.toBeNull();
+    await waitFor(() => container.querySelector('[role="dialog"]') === null);
+    expect(apiMocks.insertEntries).toHaveBeenCalledTimes(2);
     expect(apiMocks.startCatalogueSync).not.toHaveBeenCalled();
     expect(apiMocks.resizeBinder).not.toHaveBeenCalled();
     expect(apiMocks.insertFullPokedex).not.toHaveBeenCalled();
@@ -1332,9 +1330,7 @@ describe('async frontend announcements', () => {
     );
     await clickButton('Insert 1 selected target');
     await waitFor(() => apiMocks.insertEntries.mock.calls.length === 2);
-    await waitFor(
-      () => container.querySelector<HTMLInputElement>('.pocket-editor-popup input')?.value === '',
-    );
+    await waitFor(() => container.querySelector('.pocket-editor-popup') === null);
     await settle();
 
     const searched = apiMocks.search.mock.calls.at(-1)?.[0] as URLSearchParams;
@@ -1425,7 +1421,7 @@ describe('async frontend announcements', () => {
     );
     await actAndSettle(() => assign?.click());
     await waitFor(() => apiMocks.assignEntry.mock.calls.length === 1);
-    expect(container.querySelector('[role=dialog]')).not.toBeNull();
+    expect(container.querySelector('[role=dialog]')).toBeNull();
     expect(container.querySelector('.selected-slot')).not.toBeNull();
   });
 
@@ -1905,7 +1901,7 @@ describe('async frontend announcements', () => {
     );
     await actAndSettle(() => remove?.click());
     await waitFor(() => apiMocks.removeEntry.mock.calls.length === 1);
-    expect(container.querySelector('[role=dialog]')).not.toBeNull();
+    expect(container.querySelector('[role=dialog]')).toBeNull();
 
     await manage();
     const capacity = container.querySelector<HTMLInputElement>('#binder-capacity-input');
@@ -2136,6 +2132,29 @@ describe('async frontend announcements', () => {
     });
   });
 
+  it('closes the sort dialog only after a successful arrangement', async () => {
+    const fixture = binderFixture([
+      { pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'pokemon', pokemonNumber: 1 },
+    ]);
+    apiMocks.binders.mockResolvedValue([testBinder]);
+    apiMocks.binder.mockResolvedValue(fixture.response);
+    apiMocks.arrangeBinder
+      .mockRejectedValueOnce(new ApiError('internal_error', 'Failed', 500, null, null))
+      .mockResolvedValue(fixture.result);
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await waitFor(() => container.querySelector('.binder-slot') !== null);
+    await manage();
+    await clickButton('Arrange targets');
+    expect(container.querySelector('[role=dialog]')).not.toBeNull();
+    await clickButton('Arrange targets');
+    expect(container.querySelector('[role=dialog]')).toBeNull();
+    expect(apiMocks.arrangeBinder).toHaveBeenCalledTimes(2);
+  });
+
   it('grows and shrinks capacity deliberately and prepares recovery after overflow', async () => {
     const target = {
       pageId: 'page-1',
@@ -2178,12 +2197,16 @@ describe('async frontend announcements', () => {
         ?.click(),
     );
     await waitFor(() => apiMocks.resizeBinder.mock.calls.length === 1);
+    expect(container.querySelector('[role=dialog]')).toBeNull();
+    await manage();
+    const shrinkCapacity = container.querySelector<HTMLInputElement>('#binder-capacity-input');
+    if (!shrinkCapacity) throw new Error('Missing reopened capacity input');
     await actAndSettle(() => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
-        capacity,
+        shrinkCapacity,
         '1',
       );
-      capacity.dispatchEvent(new Event('input', { bubbles: true }));
+      shrinkCapacity.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await actAndSettle(() =>
       Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
@@ -2202,7 +2225,6 @@ describe('async frontend announcements', () => {
         pageIncrement: 1,
       }),
     );
-    await closeEditor();
     await actAndSettle(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
     await clickButton('Insert a gap or shift sleeves');
     const offset = Array.from(
@@ -2377,8 +2399,7 @@ describe('async frontend announcements', () => {
       true,
       1,
     );
-    expect(container.querySelector('[role=dialog]')).not.toBeNull();
-    await closeEditor();
+    expect(container.querySelector('[role=dialog]')).toBeNull();
     await actAndSettle(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
     await clickButton('Insert a gap or shift sleeves');
     const offset = Array.from(
@@ -2450,7 +2471,7 @@ describe('async frontend announcements', () => {
         container.querySelector('[data-binder-slot="1-0-0"]')?.getAttribute('aria-pressed') ===
         'true',
     );
-    expect(container.querySelector('[role=dialog]')).not.toBeNull();
+    expect(container.querySelector('[role=dialog]')).toBeNull();
     expect(apiMocks.binder).toHaveBeenLastCalledWith('version-1', 1, 1, expect.anything());
   });
 
