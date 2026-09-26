@@ -1471,7 +1471,9 @@ describe('async frontend announcements', () => {
         .mockResolvedValueOnce({ ok: true, cards: firstPage, total: 30, cursor: 'next-page' })
         .mockRejectedValueOnce(new Error('Temporary search failure'))
         .mockResolvedValueOnce({ ok: true, cards: nextPage, total: 30, cursor: null });
-      apiMocks.setSlot.mockResolvedValue(initial.result);
+      apiMocks.setSlot
+        .mockRejectedValueOnce(new Error('Temporary save failure'))
+        .mockResolvedValue(initial.result);
       await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
       await waitFor(() => container.querySelector('.binder-library-card') !== null);
       await actAndSettle(() =>
@@ -1526,6 +1528,11 @@ describe('async frontend announcements', () => {
       expect(apiMocks.setSlot).not.toHaveBeenCalled();
       expect(container.textContent).toContain('You own 0 copies');
       await clickButton('Don’t add a copy');
+      expect(container.querySelector('[role=dialog]')).not.toBeNull();
+      expect(container.textContent).toContain('Which copy are you placing?');
+      await clickButton('Don’t add a copy');
+      expect(container.querySelector('[role=dialog]')).toBeNull();
+      expect(container.querySelector('.selected-slot')).not.toBeNull();
       expect(apiMocks.setSlot).toHaveBeenCalledWith('version-1', {
         page: 0,
         row: 0,
