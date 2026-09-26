@@ -32,6 +32,7 @@ import { catalogueFilters, ownerOperations } from './operations';
 import {
   arrangementBody,
   BACKUP_CREATE_WINDOW_SECONDS,
+  binderBookmarkSetRequestSchema,
   binderRevisionRequestSchema,
   binderSlotSetRequestSchema,
   binderSlotSwapRequestSchema,
@@ -331,7 +332,13 @@ browserApiRoutes.put('/catalogue/national/:number/representative', async (c) => 
 browserApiRoutes.get('/catalogue/:id', async (c) => {
   try {
     const operations = ownerOperations(c.env, sessionOwner(c));
-    return c.json({ ok: true, card: await operations.cardDetail(c.req.param('id')) });
+    return c.json({
+      ok: true,
+      card: await operations.cardDetail(
+        c.req.param('id'),
+        c.req.query('includePokemonNumber') === 'true',
+      ),
+    });
   } catch (error) {
     return apiFailure(c, error);
   }
@@ -850,6 +857,42 @@ browserApiRoutes.put('/binders/versions/:id/reserved-page', async (c) => {
         parsed.data.expectedRevision,
       ),
     });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.get('/binders/versions/:id/bookmarks', async (c) => {
+  try {
+    return c.json({
+      ok: true,
+      bookmarks: await ownerOperations(c.env, sessionOwner(c)).binderBookmarks(c.req.param('id')),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.put('/binders/versions/:id/bookmarks', async (c) => {
+  try {
+    const parsed = binderBookmarkSetRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      bookmark: await ownerOperations(c.env, sessionOwner(c)).setBinderBookmark(
+        c.req.param('id'),
+        parsed.data,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.delete('/binders/versions/:id/bookmarks/:bookmarkId', async (c) => {
+  try {
+    await ownerOperations(c.env, sessionOwner(c)).removeBinderBookmark(
+      c.req.param('id'),
+      c.req.param('bookmarkId'),
+    );
+    return c.json({ ok: true });
   } catch (error) {
     return apiFailure(c, error);
   }

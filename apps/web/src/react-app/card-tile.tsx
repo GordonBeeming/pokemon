@@ -6,6 +6,7 @@ export function CardTile({
   title,
   subtitle,
   quantity,
+  region,
   className = '',
   ...button
 }: {
@@ -13,6 +14,7 @@ export function CardTile({
   title: string;
   subtitle: string;
   quantity: number;
+  region?: string | null;
   className?: string;
 } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children' | 'title'>): ReactElement {
   return (
@@ -20,9 +22,18 @@ export function CardTile({
       {art}
       <span className="card-tile-title">
         <strong title={title}>{title}</strong>
-        <small>{subtitle}</small>
+        <small title={subtitle}>{subtitle}</small>
+        {region ? (
+          <span className="card-tile-region-row">
+            <span className="card-region" title={`Species first found in ${region}`}>
+              <span className="sr-only">Region: </span>
+              {region}
+            </span>
+            <OwnershipMark quantity={quantity} />
+          </span>
+        ) : null}
       </span>
-      <OwnershipMark quantity={quantity} />
+      {!region ? <OwnershipMark quantity={quantity} /> : null}
     </button>
   );
 }

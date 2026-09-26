@@ -129,6 +129,22 @@ const sharedRoutes = [
     desktop: '/desktop/binders/versions/version-1/assignment-candidates?page=0&row=0&column=0',
   },
   {
+    method: 'GET',
+    browser: '/binders/versions/version-1/bookmarks',
+    desktop: '/desktop/binders/versions/version-1/bookmarks',
+  },
+  {
+    method: 'PUT',
+    browser: '/binders/versions/version-1/bookmarks',
+    desktop: '/desktop/binders/versions/version-1/bookmarks',
+    body: { pageId: 'page-1', row: 0, column: 0, name: 'Favorite' },
+  },
+  {
+    method: 'DELETE',
+    browser: '/binders/versions/version-1/bookmarks/bookmark-1',
+    desktop: '/desktop/binders/versions/version-1/bookmarks/bookmark-1',
+  },
+  {
     method: 'PUT',
     browser: '/binders/versions/version-1/slot',
     desktop: '/desktop/binders/versions/version-1/slot',

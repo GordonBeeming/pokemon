@@ -110,6 +110,16 @@ const slotRow = z
     starts_new_page: z.number().int().min(0).max(1).optional(),
   })
   .strict();
+const bookmarkRow = z
+  .object({
+    id: z.string().min(1),
+    binder_page_id: z.string(),
+    row_index: z.number().int().nonnegative(),
+    column_index: z.number().int().nonnegative(),
+    name: z.string().min(1).max(120),
+    created_at: z.number().int().nonnegative(),
+  })
+  .strict();
 const artRow = z
   .object({
     card_id: z.string(),
@@ -151,6 +161,7 @@ const backupKindSchema = z.enum([
   'versions',
   'pages',
   'slots',
+  'bookmarks',
   'art_manifest',
 ]);
 type BackupKind = z.infer<typeof backupKindSchema>;
@@ -210,6 +221,7 @@ const backupRowSchemas = {
   versions: versionRow,
   pages: pageRow,
   slots: slotRow,
+  bookmarks: bookmarkRow,
   art_manifest: artRow,
 } as const satisfies Record<BackupKind, z.ZodType>;
 
@@ -289,6 +301,14 @@ const backupQueries: readonly BackupQuery[] = [
      FROM binder_slots s JOIN binder_pages p ON p.id = s.binder_page_id
      JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
      WHERE b.owner_id = ?1 AND s.rowid > ?2 ORDER BY s.rowid LIMIT ?3`,
+  },
+  {
+    kind: 'bookmarks',
+    sql: `SELECT bm.rowid AS backup_cursor, bm.id, bm.binder_page_id, bm.row_index, bm.column_index,
+      bm.name, bm.created_at
+     FROM binder_bookmarks bm JOIN binder_pages p ON p.id = bm.binder_page_id
+     JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
+     WHERE b.owner_id = ?1 AND bm.rowid > ?2 ORDER BY bm.rowid LIMIT ?3`,
   },
   {
     kind: 'art_manifest',
@@ -873,6 +893,13 @@ export async function restoreBackup(
                  + row_index.value * version.columns + column_index.value < version.capacity`,
           )
           .bind(ownerId),
+        db
+          .prepare(
+            `INSERT INTO binder_bookmarks (id,binder_page_id,row_index,column_index,name,created_at)
+           SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.binder_page_id'),json_extract(j.value,'$.row_index'),json_extract(j.value,'$.column_index'),json_extract(j.value,'$.name'),json_extract(j.value,'$.created_at') FROM ${jsonRows} AND c.kind='bookmarks'
+           ON CONFLICT(id) DO NOTHING`,
+          )
+          .bind(restoreRunId, ownerId),
         db
           .prepare(
             `SELECT CASE WHEN NOT EXISTS (

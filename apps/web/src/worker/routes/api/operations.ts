@@ -1,4 +1,5 @@
 import type {
+  BinderBookmarkSetRequest,
   BinderLayout,
   BinderCopyChoice,
   BinderSlotLocation,
@@ -17,6 +18,7 @@ import {
   addBinderPage,
   arrangeBinderVersion,
   deleteBinderPage,
+  getBinderBookmarks,
   getBinderVersion,
   getBinderInsertDestinations,
   getBinderVersionShortages,
@@ -24,6 +26,8 @@ import {
   getBinderPlannerSummary,
   listBinders,
   reorderBinderPages,
+  removeBinderBookmark,
+  setBinderBookmark,
   setBinderSlot,
   setBinderSlots,
   swapBinderSlots,
@@ -72,6 +76,7 @@ export function catalogueFilters(
     throw new ApplicationError('invalid_filter', 400);
   return {
     query: query.q,
+    includePokemonNumber: query.includePokemonNumber === 'true',
     language: language?.success ? language.data : undefined,
     category: category?.success ? category.data : undefined,
     setId: query.setId,
@@ -87,8 +92,8 @@ export function catalogueFilters(
 export function ownerOperations(env: CloudflareEnv, ownerId: string) {
   return {
     searchCatalogue: (filters: CatalogueFilters) => searchCards(env.DB, ownerId, filters),
-    async cardDetail(cardId: string) {
-      const card = await getCardDetail(env.DB, ownerId, cardId);
+    async cardDetail(cardId: string, includePokemonNumber = false) {
+      const card = await getCardDetail(env.DB, ownerId, cardId, includePokemonNumber);
       if (!card) throw new ApplicationError('card_not_found', 404);
       return card;
     },
@@ -201,6 +206,11 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       label: string | null,
       expectedRevision: number,
     ) => reserveBinderPage(env.DB, ownerId, versionId, page, reserved, label, expectedRevision),
+    binderBookmarks: (versionId: string) => getBinderBookmarks(env.DB, ownerId, versionId),
+    setBinderBookmark: (versionId: string, input: BinderBookmarkSetRequest) =>
+      setBinderBookmark(env.DB, ownerId, versionId, input),
+    removeBinderBookmark: (versionId: string, bookmarkId: string) =>
+      removeBinderBookmark(env.DB, ownerId, versionId, bookmarkId),
     resizeBinderCapacity: (versionId: string, capacity: number, expectedRevision: number) =>
       resizeBinderCapacity(env.DB, ownerId, versionId, capacity, expectedRevision),
     insertFullPokedex: (

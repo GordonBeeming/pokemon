@@ -1,4 +1,5 @@
 import {
+  binderBookmarkSchema,
   binderLayoutSchema,
   binderAssignmentCandidatesSchema,
   binderMutationResultSchema,
@@ -7,6 +8,8 @@ import {
   binderVersionSummarySchema,
   cardIdSchema,
   NATIONAL_POKEDEX,
+  type BinderBookmark,
+  type BinderBookmarkSetRequest,
   type BinderCapacityError,
   type BinderCopyChoice,
   type BinderAssignmentCandidate,
@@ -152,6 +155,7 @@ export type BinderErrorCode =
   | 'binder_assignment_incompatible'
   | 'binder_assignment_quantity_exceeded'
   | 'binder_reserved_page_not_empty'
+  | 'binder_bookmark_reserved_page'
   | 'card_not_found';
 
 export class BinderDomainError extends Error {
@@ -1616,6 +1620,19 @@ export async function cloneBinderVersion(
          FROM mapping JOIN binder_slots slots ON slots.binder_page_id = mapping.source_id`,
       )
       .bind(mappingJson),
+    db
+      .prepare(
+        `WITH mapping AS (
+          SELECT json_extract(value, '$.sourceId') AS source_id,
+            json_extract(value, '$.newId') AS new_id
+          FROM json_each(?1)
+         )
+         INSERT INTO binder_bookmarks (id, binder_page_id, row_index, column_index, name, created_at)
+         SELECT 'bookmark_' || lower(hex(randomblob(16))), mapping.new_id,
+           bookmark.row_index, bookmark.column_index, bookmark.name, ?2
+         FROM mapping JOIN binder_bookmarks bookmark ON bookmark.binder_page_id = mapping.source_id`,
+      )
+      .bind(mappingJson, now),
     db.prepare('UPDATE binders SET updated_at = ?1 WHERE id = ?2').bind(now, source.binder_id),
   ]);
   return mutationResult(db, ownerId, newVersionId, [0]);
@@ -2157,6 +2174,18 @@ export async function reserveBinderPage(
   requireEditable(version);
   expectedRevision(version, requestedRevision);
   const page = await pageAt(db, versionId, pagePosition);
+  const currentPage = await db
+    .prepare('SELECT kind FROM binder_pages WHERE id = ?1')
+    .bind(page.id)
+    .first<{ kind: 'slots' | 'reserved' }>();
+  if (reserved && currentPage?.kind === 'reserved') {
+    // Already reserved: a label-only rename must not reflow or move any other page's slots.
+    await runVersionBatch(db, ownerId, versionId, version.revision, false, [
+      db.prepare('UPDATE binder_pages SET label = ?1 WHERE id = ?2').bind(label, page.id),
+      ...revisionStatements(db, version, nowSeconds()),
+    ]);
+    return mutationResult(db, ownerId, versionId, [pagePosition]);
+  }
   const slots = await materializedSlots(db, versionId);
   const dense = slots
     .filter((slot) => slot.page_kind !== 'reserved')
@@ -2191,6 +2220,153 @@ export async function reserveBinderPage(
     ...revisionStatements(db, version, nowSeconds()),
   ]);
   return mutationResult(db, ownerId, versionId, [pagePosition]);
+}
+
+const RESERVED_PAGE_BOOKMARK_PREFIX = 'reserved-page:';
+
+function reservedPageBookmarkId(pageId: string): string {
+  return `${RESERVED_PAGE_BOOKMARK_PREFIX}${pageId}`;
+}
+
+interface BookmarkRow {
+  id: string;
+  binder_page_id: string;
+  row_index: number;
+  column_index: number;
+  name: string;
+}
+
+export async function getBinderBookmarks(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+): Promise<BinderBookmark[]> {
+  await readVersion(db, ownerId, versionId);
+  const pages = await listPageRows(db, versionId);
+  const byPageId = new Map(pages.map((page) => [page.id, page]));
+  const rows = await db
+    .prepare(
+      `SELECT bookmark.id, bookmark.binder_page_id, bookmark.row_index, bookmark.column_index,
+        bookmark.name
+       FROM binder_bookmarks bookmark
+       JOIN binder_pages page ON page.id = bookmark.binder_page_id
+       WHERE page.binder_version_id = ?1`,
+    )
+    .bind(versionId)
+    .all<BookmarkRow>();
+  const pocketBookmarks = rows.results
+    .filter((row) => byPageId.get(row.binder_page_id)?.kind !== 'reserved')
+    .map((row) => {
+      const page = byPageId.get(row.binder_page_id);
+      if (!page) domainError('binder_page_not_found');
+      return binderBookmarkSchema.parse({
+        id: row.id,
+        kind: 'pocket',
+        name: row.name,
+        pageId: row.binder_page_id,
+        at: { page: page.position, row: row.row_index, column: row.column_index },
+      });
+    });
+  const reservedBookmarks = pages
+    .filter((page) => page.kind === 'reserved')
+    .map((page) =>
+      binderBookmarkSchema.parse({
+        id: reservedPageBookmarkId(page.id),
+        kind: 'reserved-page',
+        name: page.label ?? `Reserved page ${page.position + 1}`,
+        pageId: page.id,
+        at: { page: page.position, row: 0, column: 0 },
+      }),
+    );
+  return [...pocketBookmarks, ...reservedBookmarks].sort(
+    (a, b) => a.at.page - b.at.page || a.at.row - b.at.row || a.at.column - b.at.column,
+  );
+}
+
+export async function setBinderBookmark(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  input: BinderBookmarkSetRequest,
+): Promise<BinderBookmark> {
+  const version = await readVersion(db, ownerId, versionId);
+  const page = await db
+    .prepare('SELECT id, position, kind FROM binder_pages WHERE id = ?1 AND binder_version_id = ?2')
+    .bind(input.pageId, versionId)
+    .first<PageRow>();
+  if (!page) domainError('binder_page_not_found');
+  if (page.kind === 'reserved') domainError('binder_bookmark_reserved_page');
+  validateLocation(version, { page: page.position, row: input.row, column: input.column });
+  const id = newId('bookmark');
+  const now = nowSeconds();
+  try {
+    // The slot-existence guard and the write happen in one batch so a concurrent
+    // capacity shrink that removes this exact pocket cannot race the insert.
+    await db.batch([
+      db
+        .prepare(
+          `SELECT CASE WHEN NOT EXISTS (
+        SELECT 1 FROM binder_pages WHERE id = ?1 AND kind = 'reserved'
+      ) THEN 1 ELSE json_extract('binder_bookmark_reserved_page', '$') END AS valid`,
+        )
+        .bind(page.id),
+      db
+        .prepare(
+          `SELECT CASE WHEN EXISTS (
+             SELECT 1 FROM binder_slots
+             WHERE binder_page_id = ?1 AND row_index = ?2 AND column_index = ?3
+           ) THEN 1 ELSE json_extract('binder_slot_not_found', '$') END AS valid`,
+        )
+        .bind(page.id, input.row, input.column),
+      db
+        .prepare(
+          `INSERT INTO binder_bookmarks (id, binder_page_id, row_index, column_index, name, created_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+           ON CONFLICT (binder_page_id, row_index, column_index) DO UPDATE SET name = excluded.name`,
+        )
+        .bind(id, page.id, input.row, input.column, input.name, now),
+    ]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('binder_bookmark_reserved_page'))
+      domainError('binder_bookmark_reserved_page');
+    if (message.includes('binder_slot_not_found')) domainError('binder_slot_not_found');
+    throw error;
+  }
+  const row = await db
+    .prepare(
+      `SELECT id, binder_page_id, row_index, column_index, name FROM binder_bookmarks
+       WHERE binder_page_id = ?1 AND row_index = ?2 AND column_index = ?3`,
+    )
+    .bind(page.id, input.row, input.column)
+    .first<BookmarkRow>();
+  if (!row) domainError('binder_slot_not_found');
+  return binderBookmarkSchema.parse({
+    id: row.id,
+    kind: 'pocket',
+    name: row.name,
+    pageId: row.binder_page_id,
+    at: { page: page.position, row: row.row_index, column: row.column_index },
+  });
+}
+
+export async function removeBinderBookmark(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  bookmarkId: string,
+): Promise<void> {
+  await readVersion(db, ownerId, versionId);
+  if (bookmarkId.startsWith(RESERVED_PAGE_BOOKMARK_PREFIX))
+    domainError('binder_bookmark_reserved_page');
+  await db
+    .prepare(
+      `DELETE FROM binder_bookmarks WHERE id = ?1 AND binder_page_id IN (
+         SELECT id FROM binder_pages WHERE binder_version_id = ?2
+       )`,
+    )
+    .bind(bookmarkId, versionId)
+    .run();
 }
 
 export async function resizeBinderCapacity(

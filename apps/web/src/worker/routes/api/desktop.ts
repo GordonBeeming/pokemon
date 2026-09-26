@@ -15,6 +15,7 @@ import { apiFailure, parsedJson } from './errors';
 import { catalogueFilters, ownerOperations } from './operations';
 import {
   bulkUploadRequestBody,
+  binderBookmarkSetRequestSchema,
   binderSlotSetRequestSchema,
   binderSlotSwapRequestSchema,
   binderInsertRequestSchema,
@@ -179,7 +180,13 @@ desktopApiRoutes.get('/desktop/catalogue/sources', async (c) => {
 desktopApiRoutes.get('/desktop/catalogue/:id', async (c) => {
   try {
     const operations = ownerOperations(c.env, await desktopOwner(c, 'catalogue:read'));
-    return c.json({ ok: true, card: await operations.cardDetail(c.req.param('id')) });
+    return c.json({
+      ok: true,
+      card: await operations.cardDetail(
+        c.req.param('id'),
+        c.req.query('includePokemonNumber') === 'true',
+      ),
+    });
   } catch (error) {
     return apiFailure(c, error);
   }
@@ -495,6 +502,36 @@ desktopApiRoutes.put('/desktop/binders/versions/:id/reserved-page', async (c) =>
         parsed.data.expectedRevision,
       ),
     });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+desktopApiRoutes.get('/desktop/binders/versions/:id/bookmarks', async (c) => {
+  try {
+    const operations = ownerOperations(c.env, await desktopOwner(c, 'binders:write'));
+    return c.json({ ok: true, bookmarks: await operations.binderBookmarks(c.req.param('id')) });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+desktopApiRoutes.put('/desktop/binders/versions/:id/bookmarks', async (c) => {
+  try {
+    const parsed = binderBookmarkSetRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const operations = ownerOperations(c.env, await desktopOwner(c, 'binders:write'));
+    return c.json({
+      ok: true,
+      bookmark: await operations.setBinderBookmark(c.req.param('id'), parsed.data),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+desktopApiRoutes.delete('/desktop/binders/versions/:id/bookmarks/:bookmarkId', async (c) => {
+  try {
+    const operations = ownerOperations(c.env, await desktopOwner(c, 'binders:write'));
+    await operations.removeBinderBookmark(c.req.param('id'), c.req.param('bookmarkId'));
+    return c.json({ ok: true });
   } catch (error) {
     return apiFailure(c, error);
   }

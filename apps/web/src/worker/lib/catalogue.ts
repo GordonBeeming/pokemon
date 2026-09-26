@@ -63,6 +63,7 @@ export interface CatalogueFilters {
   species?: string;
   pokedexNumber?: number;
   cursor?: string | null;
+  includePokemonNumber?: boolean;
 }
 
 const catalogueCursorSchema = z
@@ -985,7 +986,16 @@ function cardPrice(row: CardRow): CatalogueCardView['price'] {
   };
 }
 
-function detail(row: CardRow): CatalogueDetailView {
+function pokemonNumber(row: CardRow): number | null {
+  return row.pokedex_number !== null &&
+    Number.isInteger(row.pokedex_number) &&
+    row.pokedex_number >= 1 &&
+    row.pokedex_number <= NATIONAL_POKEDEX_SIZE
+    ? row.pokedex_number
+    : null;
+}
+
+function detail(row: CardRow, includePokemonNumber = false): CatalogueDetailView {
   const source =
     row.source_provider && row.source_id && row.source_updated_at !== null
       ? {
@@ -999,6 +1009,7 @@ function detail(row: CardRow): CatalogueDetailView {
   if (!source) throw new Error('card_provenance_missing');
   return {
     ...brief(row),
+    ...(includePokemonNumber ? { pokedexNumber: pokemonNumber(row) } : {}),
     supertype: row.supertype,
     subtype: row.subtype,
     species: row.species,
@@ -1012,9 +1023,10 @@ function detail(row: CardRow): CatalogueDetailView {
   };
 }
 
-function view(row: CardRow): CatalogueCardView {
+function view(row: CardRow, includePokemonNumber = false): CatalogueCardView {
   return {
     ...brief(row),
+    ...(includePokemonNumber ? { pokedexNumber: pokemonNumber(row) } : {}),
     imageHighUrl: artUrl(row.id, 'high', row.high_key, row.source_provider),
     collection: collection(row),
     price: cardPrice(row),
@@ -1062,20 +1074,7 @@ export async function resolveCatalogueCards(
     )
     .bind(ownerId, JSON.stringify(cardIds))
     .all<CardRow>();
-  return result.results.map((row) => ({
-    ...view(row),
-    ...(includePokemonNumber
-      ? {
-          pokedexNumber:
-            row.pokedex_number !== null &&
-            Number.isInteger(row.pokedex_number) &&
-            row.pokedex_number >= 1 &&
-            row.pokedex_number <= NATIONAL_POKEDEX_SIZE
-              ? row.pokedex_number
-              : null,
-        }
-      : {}),
-  }));
+  return result.results.map((row) => view(row, includePokemonNumber));
 }
 
 export async function searchCards(
@@ -1185,7 +1184,7 @@ export async function searchCards(
   const last = page.at(-1);
   return {
     total,
-    cards: page.map(view),
+    cards: page.map((row) => view(row, filters.includePokemonNumber)),
     cursor:
       result.results.length > filters.limit && last
         ? encodeCatalogueCursor(last, filterKey, total)
@@ -1197,12 +1196,13 @@ export async function getCardDetail(
   db: D1Database,
   ownerId: string,
   cardId: string,
+  includePokemonNumber = false,
 ): Promise<CatalogueDetailView | null> {
   const row = await db
     .prepare(`${cardSelect} WHERE c.id = ?2`)
     .bind(ownerId, cardId)
     .first<CardRow>();
-  return row ? detail(row) : null;
+  return row ? detail(row, includePokemonNumber) : null;
 }
 
 export async function listSetFacets(

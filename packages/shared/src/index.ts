@@ -443,6 +443,31 @@ export const binderReservePageRequestSchema = binderRevisionRequestSchema
     label: z.string().trim().min(1).max(120).nullable().optional(),
   })
   .strict();
+
+export const binderBookmarkKindSchema = z.enum(['pocket', 'reserved-page']);
+export type BinderBookmarkKind = z.infer<typeof binderBookmarkKindSchema>;
+
+export const binderBookmarkSchema = z
+  .object({
+    id: z.string().trim().min(1).max(128),
+    kind: binderBookmarkKindSchema,
+    name: z.string().trim().min(1).max(120),
+    pageId: z.string().trim().min(1).max(128),
+    at: binderSlotLocationSchema,
+  })
+  .strict();
+export type BinderBookmark = z.infer<typeof binderBookmarkSchema>;
+
+export const binderBookmarkSetRequestSchema = z
+  .object({
+    pageId: z.string().trim().min(1).max(128),
+    row: z.number().int().nonnegative(),
+    column: z.number().int().nonnegative(),
+    name: z.string().trim().min(1).max(120),
+  })
+  .strict();
+export type BinderBookmarkSetRequest = z.infer<typeof binderBookmarkSetRequestSchema>;
+
 export const binderCapacityRequestSchema = binderRevisionRequestSchema
   .extend({
     capacity: z.number().int().positive(),
@@ -523,6 +548,7 @@ export const catalogueCardViewSchema = catalogueBriefSchema.extend({
 export type CatalogueCardView = z.infer<typeof catalogueCardViewSchema>;
 
 export const catalogueDetailViewSchema = catalogueDetailSchema.extend({
+  pokedexNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE).nullable().optional(),
   collection: collectionStateSchema.nullable(),
   price: priceBaselineSchema,
 });

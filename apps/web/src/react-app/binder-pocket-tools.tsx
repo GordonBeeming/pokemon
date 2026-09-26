@@ -8,7 +8,8 @@ import {
 } from 'react';
 import type { BinderSlotLocation } from '@pokedex/shared';
 
-export type PocketTool = 'same' | 'any' | 'shift' | 'remove' | 'placement' | 'insert' | 'reserve';
+export type PocketTool =
+  'same' | 'any' | 'shift' | 'remove' | 'placement' | 'insert' | 'reserve' | 'bookmark';
 const tools: Array<{ tool: PocketTool; label: string; path: string }> = [
   {
     tool: 'same',
@@ -29,18 +30,21 @@ const tools: Array<{ tool: PocketTool; label: string; path: string }> = [
   { tool: 'placement', label: 'Owned copies and page break', path: 'M5 3v18M5 4h13l-3 5 3 5H5' },
   { tool: 'insert', label: 'Insert targets here', path: 'M4 3h12v18H4zM16 12h6M19 9v6' },
   { tool: 'reserve', label: 'Reserve sleeve', path: 'M5 3h14v18l-7-5-7 5z' },
+  { tool: 'bookmark', label: 'Bookmark pocket', path: 'M6 3h12v18l-6-4-6 4V3z' },
 ];
 
 export function PocketTools({
   target,
   reserved,
   pending,
+  editable = true,
   alignEnd,
   onTool,
 }: {
   target: boolean;
   reserved: boolean;
   pending: boolean;
+  editable?: boolean;
   alignEnd: boolean;
   onTool: (tool: PocketTool) => void;
 }): ReactElement {
@@ -67,11 +71,13 @@ export function PocketTools({
       window.removeEventListener('scroll', update, true);
     };
   }, [target, reserved]);
-  const visible = target
-    ? ['same', 'any', 'shift', 'remove', 'placement']
-    : reserved
-      ? ['insert', 'remove']
-      : ['insert', 'reserve'];
+  const visible = !editable
+    ? ['bookmark']
+    : target
+      ? ['same', 'any', 'shift', 'remove', 'placement', 'bookmark']
+      : reserved
+        ? ['insert', 'remove', 'bookmark']
+        : ['insert', 'reserve', 'bookmark'];
   return (
     <div
       ref={rail}
