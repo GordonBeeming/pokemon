@@ -25,6 +25,7 @@ export interface ArtUploadRequest {
   variant: ArtVariant;
   sha256: string;
   maxBytes: number;
+  onlyIfMissing?: boolean;
 }
 
 export interface ArtUploadTicket extends ArtUploadRequest {
@@ -236,9 +237,10 @@ export async function createArtUploadToken(
   variant: ArtVariant,
   expectedSha256: string,
   maxBytes: number,
+  onlyIfMissing = false,
 ): Promise<ArtUploadTicket> {
   const tickets = await createArtUploadTokens(db, ownerId, [
-    { cardId, variant, sha256: expectedSha256, maxBytes },
+    { cardId, variant, sha256: expectedSha256, maxBytes, onlyIfMissing },
   ]);
   const ticket = tickets.at(0);
   if (!ticket) throw new ApplicationError('invalid_art_upload_request', 400);
@@ -290,6 +292,8 @@ export async function createArtUploadTokens(
         const version = versions.results[index];
         if (!version || version.request_index !== index)
           throw new ApplicationError('invalid_art_upload_request', 400);
+        if (request.onlyIfMissing && version.expected_version !== 1)
+          throw new ApplicationError('art_already_exists', 409);
         const token = `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll('-', '');
         const tokenHash = await hashToken(token);
         return {

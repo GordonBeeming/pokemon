@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   binderBookmarkSchema,
   binderLayoutSchema,
@@ -584,7 +585,15 @@ export async function deleteBinder(
 export async function activeBinderShortages(
   db: D1Database,
   ownerId: string,
-): Promise<{ shortages: BinderShortage[]; pokemonShortages: BinderPokemonShortage[] }> {
+  page = { offset: 0, limit: MAX_SHORTAGE_PAGE },
+): Promise<{
+  shortages: BinderShortage[];
+  pokemonShortages: BinderPokemonShortage[];
+  totalMissing: number;
+  totalEntries: number;
+  snapshot: string;
+  nextOffset: number | null;
+}> {
   const exact = await db
     .prepare(
       `WITH assigned AS (
@@ -607,7 +616,8 @@ export async function activeBinderShortages(
          MAX(COALESCE(collection.quantity,0)-COALESCE(assigned.assigned,0),0) AS available
        FROM targets JOIN catalogue_cards card ON card.id=targets.card_id
        LEFT JOIN collection_cards collection ON collection.owner_id=?1 AND collection.card_id=targets.card_id
-       LEFT JOIN assigned ON assigned.card_id=targets.card_id`,
+       LEFT JOIN assigned ON assigned.card_id=targets.card_id
+       ORDER BY card.name COLLATE NOCASE,card.set_name,card.number,targets.card_id`,
     )
     .bind(ownerId)
     .all<{
@@ -644,7 +654,8 @@ export async function activeBinderShortages(
        COALESCE(assigned.assigned,0) AS assigned,
        MAX(COALESCE(owned.owned,0)-COALESCE(assigned.assigned,0),0) AS available
      FROM targets LEFT JOIN owned ON owned.pokedex_number=targets.pokemon_number
-     LEFT JOIN assigned ON assigned.pokedex_number=targets.pokemon_number`,
+     LEFT JOIN assigned ON assigned.pokedex_number=targets.pokemon_number
+     ORDER BY targets.pokemon_number`,
     )
     .bind(ownerId)
     .all<{
@@ -662,29 +673,41 @@ export async function activeBinderShortages(
   }
   for (const row of pokemon.results)
     row.available = Math.max(row.available - (allocated.get(row.pokemon_number) ?? 0), 0);
+  const shortages = exact.results
+    .filter((row) => row.required > row.available)
+    .map((row) => ({
+      cardId: cardIdSchema.parse(row.card_id),
+      required: row.required,
+      owned: row.owned,
+      assigned: row.assigned,
+      available: row.available,
+      missing: row.required - row.available,
+    }));
+  const pokemonShortages = pokemon.results
+    .filter((row) => row.required > row.available)
+    .map((row) => ({
+      pokemonNumber: row.pokemon_number,
+      required: row.required,
+      owned: row.owned,
+      assigned: row.assigned,
+      available: row.available,
+      missing: row.required - row.available,
+    }));
   return {
-    shortages: exact.results
-      .filter((row) => row.required > row.available)
-      .map((row) => ({
-        cardId: cardIdSchema.parse(row.card_id),
-        required: row.required,
-        owned: row.owned,
-        assigned: row.assigned,
-        available: row.available,
-        missing: row.required - row.available,
-      }))
-      .slice(0, MAX_SHORTAGE_PAGE),
-    pokemonShortages: pokemon.results
-      .filter((row) => row.required > row.available)
-      .map((row) => ({
-        pokemonNumber: row.pokemon_number,
-        required: row.required,
-        owned: row.owned,
-        assigned: row.assigned,
-        available: row.available,
-        missing: row.required - row.available,
-      }))
-      .slice(0, MAX_SHORTAGE_PAGE),
+    shortages: shortages.slice(page.offset, page.offset + page.limit),
+    snapshot: createHash('sha256')
+      .update(JSON.stringify([shortages, pokemonShortages]))
+      .digest('hex'),
+    pokemonShortages: pokemonShortages.slice(page.offset, page.offset + page.limit),
+    totalMissing: [...shortages, ...pokemonShortages].reduce(
+      (total, item) => total + item.missing,
+      0,
+    ),
+    totalEntries: shortages.length + pokemonShortages.length,
+    nextOffset:
+      page.offset + page.limit < Math.max(shortages.length, pokemonShortages.length)
+        ? page.offset + page.limit
+        : null,
   };
 }
 

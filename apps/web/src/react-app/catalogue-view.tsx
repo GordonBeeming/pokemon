@@ -562,6 +562,7 @@ export function CatalogueView({
     nextPage: number,
     params = initialParams,
     filters: { query: string; ownership: CatalogueOwnership } = { query, ownership },
+    options: { keepDetail?: boolean } = {},
   ): Promise<void> {
     const moved = nextPage !== page;
     const generation = ++searchGeneration.current;
@@ -586,8 +587,10 @@ export function CatalogueView({
       setCards(result.cards);
       setTotal(result.total);
       setPage(nextPage);
-      setDetail(null);
-      setSelectedCardId(null);
+      if (!options.keepDetail) {
+        setDetail(null);
+        setSelectedCardId(null);
+      }
       if (moved) requestAnimationFrame(() => gallery.current?.scrollIntoView({ block: 'start' }));
     } catch (error) {
       const message = userMessage(error);
@@ -812,6 +815,8 @@ export function CatalogueView({
               notes,
             });
       applyState(state);
+      if (quantity !== currentQuantity)
+        await search(0, initialParams, { query, ownership }, { keepDetail: true });
       return true;
     } catch (error) {
       const message = userMessage(error);
@@ -835,8 +840,11 @@ export function CatalogueView({
         delta: 1,
       });
       applyState(state);
-      onNotice({ kind: 'success', message: 'Added one copy.' });
-      if (detailController.current === openedWith) closeDetail();
+      if (detailController.current === openedWith) {
+        closeDetail();
+        await search(0);
+        onNotice({ kind: 'success', message: 'Added one copy.' });
+      }
     } catch (error) {
       const message = userMessage(error);
       if (message) onNotice({ kind: 'error', message });

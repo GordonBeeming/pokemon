@@ -193,6 +193,60 @@ async function seedReferencedArt(art: R2Bucket): Promise<void> {
 }
 
 describe('backup restore', () => {
+  it('preserves copy-addition order across backup and restore', async () => {
+    const { database, db, art } = setup();
+    await seedReferencedArt(art);
+    database.exec(`INSERT INTO collection_cards(owner_id,card_id,quantity,notes,revision,updated_at,last_added_order)
+      VALUES('owner','card-binder',1,NULL,1,1,15),('owner','custom-a',1,NULL,1,1,27)`);
+    await createBackup(db, art, 'owner', { backupId: 'backup_addition_order' });
+    database.exec("UPDATE collection_cards SET quantity=quantity+1 WHERE card_id='card-binder'");
+    await restoreBackup(db, art, 'owner', 'backup_addition_order');
+    expect(
+      database
+        .prepare('SELECT card_id,last_added_order FROM collection_cards ORDER BY last_added_order')
+        .all(),
+    ).toEqual([
+      { card_id: 'card-binder', last_added_order: 15 },
+      { card_id: 'custom-a', last_added_order: 27 },
+    ]);
+  });
+
+  it('restores old collection backups without inventing an addition order', async () => {
+    const { database, db, art } = setup();
+    const backupId = 'backup_legacy_addition';
+    const body = JSON.stringify({
+      version: 2,
+      ownerId: 'owner',
+      mutationEpoch: 0,
+      createdAt: '2026-09-27T00:00:00.000Z',
+      catalogue: [],
+      sources: [],
+      collection: [
+        { card_id: 'card-binder', quantity: 2, notes: null, revision: 1, updated_at: 1 },
+      ],
+      binders: [],
+      versions: [],
+      pages: [],
+      slots: [],
+      artManifest: [],
+    });
+    const key = `backups/owner/${backupId}/legacy.json`;
+    await art.put(key, body);
+    database
+      .prepare(
+        "INSERT INTO backup_runs(id,owner_id,object_key,checksum,backup_epoch,created_at) VALUES(?1,'owner',?2,?3,0,1)",
+      )
+      .run(backupId, key, await checksum(body));
+    await restoreBackup(db, art, 'owner', backupId);
+    expect(
+      database
+        .prepare(
+          "SELECT quantity,last_added_order FROM collection_cards WHERE card_id='card-binder'",
+        )
+        .get(),
+    ).toEqual({ quantity: 2, last_added_order: 0 });
+  });
+
   it('preserves a placed Pokémon target in the last pocket of a reserved page', async () => {
     const { database, db, art } = setup();
     await seedReferencedArt(art);

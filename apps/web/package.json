@@ -16,6 +16,7 @@
     "wrangler:dry-run": "wrangler deploy --dry-run --config wrangler.jsonc",
     "migrate:local": "wrangler d1 migrations apply DB --local --config wrangler.jsonc",
     "seed:local-art": "node scripts/seed-local-art.mjs",
+    "art:backfill": "node scripts/backfill-art.mjs",
     "format:check": "prettier --check --ignore-path ../../.prettierignore ."
   },
   "dependencies": {

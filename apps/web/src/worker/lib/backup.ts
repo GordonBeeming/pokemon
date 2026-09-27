@@ -3,7 +3,7 @@ import { newId, nowSeconds } from './db';
 import { ApplicationError } from './log';
 
 const LEGACY_BACKUP_VERSION = 2 as const;
-const BACKUP_VERSION = 5 as const;
+const BACKUP_VERSION = 6 as const;
 const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 const MAX_BACKUP_CHUNK_BYTES = 1_500_000;
 const MAX_BACKUP_MANIFEST_BYTES = 1_000_000;
@@ -54,6 +54,7 @@ const collectionRow = z
     notes: z.string().nullable(),
     revision: z.number().int().positive(),
     updated_at: z.number().int().nonnegative(),
+    last_added_order: z.number().int().nonnegative().safe().nullable().optional(),
   })
   .strict();
 const speciesRepresentativeRow = z
@@ -180,7 +181,7 @@ const backupChunkSchema = z
 
 const backupManifestSchema = z
   .object({
-    version: z.union([z.literal(3), z.literal(4), z.literal(BACKUP_VERSION)]),
+    version: z.union([z.literal(3), z.literal(4), z.literal(5), z.literal(BACKUP_VERSION)]),
     ownerId: z.string().min(1),
     mutationEpoch: z.number().int().nonnegative(),
     createdAt: z.string().datetime(),
@@ -264,7 +265,7 @@ const backupQueries: readonly BackupQuery[] = [
   {
     kind: 'collection',
     sql: `SELECT cc.rowid AS backup_cursor, cc.card_id, cc.quantity, cc.notes, cc.revision,
-      cc.updated_at FROM collection_cards cc
+      cc.updated_at, cc.last_added_order FROM collection_cards cc
      WHERE cc.owner_id = ?1 AND cc.rowid > ?2 ORDER BY cc.rowid LIMIT ?3`,
   },
   {
@@ -817,8 +818,8 @@ export async function restoreBackup(
           .bind(restoreRunId, ownerId),
         db
           .prepare(
-            `INSERT INTO collection_cards (owner_id,card_id,quantity,notes,revision,updated_at)
-           SELECT ?2,json_extract(j.value,'$.card_id'),json_extract(j.value,'$.quantity'),json_extract(j.value,'$.notes'),json_extract(j.value,'$.revision'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='collection'`,
+            `INSERT INTO collection_cards (owner_id,card_id,quantity,notes,revision,updated_at,last_added_order)
+           SELECT ?2,json_extract(j.value,'$.card_id'),json_extract(j.value,'$.quantity'),json_extract(j.value,'$.notes'),json_extract(j.value,'$.revision'),json_extract(j.value,'$.updated_at'),COALESCE(json_extract(j.value,'$.last_added_order'),0) FROM ${jsonRows} AND c.kind='collection'`,
           )
           .bind(restoreRunId, ownerId),
         db

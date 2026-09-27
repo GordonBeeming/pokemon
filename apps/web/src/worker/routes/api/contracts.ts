@@ -100,6 +100,7 @@ export const redeemBody = z
   .strict();
 export const uploadRequestBody = z
   .object({
+    onlyIfMissing: z.boolean().optional(),
     cardId: z.string().trim().min(1).max(128),
     variant: z.enum(['high', 'low']),
     sha256: z.string().regex(/^[a-f0-9]{64}$/u),

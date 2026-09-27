@@ -2,7 +2,7 @@ import { binderDestinationsQuerySchema } from './contracts';
 import { deleteBinderBody } from './contracts';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { languageSchema, binderSearchQuerySchema } from '@pokedex/shared';
+import { languageSchema, binderSearchQuerySchema, NATIONAL_POKEDEX } from '@pokedex/shared';
 import { activeBinderShortages, searchBinderSpaces } from '../../lib/binders';
 import { getTcgdexPreviewArtResponse } from '../../lib/art';
 import {
@@ -131,7 +131,7 @@ browserApiRoutes.get('/dashboard', async (c) => {
       activeBinderShortages(c.env.DB, ownerId),
       ownerOperations(c.env, ownerId).searchCatalogue({
         owned: true,
-        limit: 8,
+        limit: 50,
         offset: 0,
         cursor: null,
       }),
@@ -143,7 +143,69 @@ browserApiRoutes.get('/dashboard', async (c) => {
       binderCount: binders.length,
       activeShortages: activeBinderTargets.shortages,
       activePokemonShortages: activeBinderTargets.pokemonShortages,
+      activeShortageCount: activeBinderTargets.totalMissing,
+      activeShortageEntries: activeBinderTargets.totalEntries,
       cards: ownedCards.cards,
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.get('/dashboard/shortages', async (c) => {
+  const parsed = z
+    .object({ offset: z.coerce.number().int().min(0).max(120000).default(0) })
+    .safeParse(c.req.query());
+  if (!parsed.success) return c.json({ ok: false, error: 'invalid_offset' }, 400);
+  try {
+    const ownerId = sessionOwner(c);
+    const report = await activeBinderShortages(c.env.DB, ownerId, {
+      offset: parsed.data.offset,
+      limit: 50,
+    });
+    const cards = await resolveCatalogueCards(
+      c.env.DB,
+      ownerId,
+      report.shortages.map((item) => item.cardId),
+    );
+    const byId = new Map(cards.map((card) => [card.id, card]));
+    const entries = [
+      ...report.shortages.map((item) => {
+        const card = byId.get(item.cardId);
+        return {
+          ...item,
+          kind: 'exact-card' as const,
+          label: card ? `${card.name} · ${card.setName} · ${card.number}` : item.cardId,
+          pokemonNumber: null,
+          setId: card?.setId ?? null,
+          number: card?.number ?? null,
+          language: card?.language ?? null,
+          assigned: item.assigned ?? 0,
+          available: item.available ?? 0,
+        };
+      }),
+      ...report.pokemonShortages.map((item) => {
+        const pokemon = NATIONAL_POKEDEX[item.pokemonNumber - 1];
+        return {
+          ...item,
+          kind: 'pokemon' as const,
+          label: `#${String(item.pokemonNumber).padStart(4, '0')} ${pokemon?.name ?? 'Pokémon'}`,
+          cardId: null,
+          setId: null,
+          number: null,
+          language: null,
+          assigned: item.assigned ?? 0,
+          available: item.available ?? 0,
+        };
+      }),
+    ];
+    return c.json({
+      ok: true,
+      entries,
+      totalMissing: report.totalMissing,
+      totalEntries: report.totalEntries,
+      snapshot: report.snapshot,
+      nextOffset: report.nextOffset,
     });
   } catch (error) {
     return apiFailure(c, error);

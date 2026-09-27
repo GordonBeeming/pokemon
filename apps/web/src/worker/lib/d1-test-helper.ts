@@ -96,6 +96,7 @@ export function applyAllMigrations(database: DatabaseSync): void {
     '014_binder_bookmarks.sql',
     '015_binder_gap_provenance.sql',
     '016_reserved_page_manual_placement.sql',
+    '017_collection_addition_order.sql',
   ])
     database.exec(readFileSync(new URL(name, directory), 'utf8'));
 }
