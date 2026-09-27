@@ -655,6 +655,29 @@ button.metric.metric-action:hover {
   grid-template-columns: minmax(16rem, 1fr) minmax(10rem, 0.35fr) auto;
   align-items: end;
 }
+.catalogue-copy-tools {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  margin-block: 1rem 1.5rem;
+}
+.catalogue-copy-tools p {
+  margin: 0;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+.catalogue-copy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+.catalogue-copy-actions > button {
+  max-width: 100%;
+  min-width: 0;
+}
+.catalogue-copy-tools ~ .custom-card-tools {
+  margin-top: 0;
+}
 .custom-card-tools {
   width: max-content;
   max-width: 100%;

@@ -624,20 +624,23 @@ export function CatalogueView({
     };
   }, [initialParams.toString(), refreshKey]);
 
-  async function copyResults(all: boolean): Promise<void> {
+  async function copyResults(
+    all: boolean,
+    order: 'displayed' | 'release' = 'displayed',
+  ): Promise<void> {
     if (!displayedFilters.current || copying) return;
     const controller = new AbortController();
     copyController.current = controller;
     setCopying(true);
     try {
       const results = all
-        ? await collectCardsForClipboard(displayedFilters.current, controller.signal)
+        ? await collectCardsForClipboard(displayedFilters.current, controller.signal, order)
         : cards;
       if (controller.signal.aborted) return;
       copyCards(results);
       onNotice({
         kind: 'success',
-        message: `Copied ${results.length} ${results.length === 1 ? 'card' : 'cards'}. Open a binder, select a pocket, and choose Paste cards here.`,
+        message: `Copied ${results.length} ${results.length === 1 ? 'card' : 'cards'} in ${order === 'release' ? 'release-date' : 'displayed'} order. Open a binder, select a pocket, and choose Paste cards here.`,
       });
     } catch (cause) {
       if (!controller.signal.aborted) onNotice({ kind: 'error', message: userMessage(cause) });
@@ -1039,28 +1042,44 @@ export function CatalogueView({
           {loading ? 'Searching…' : 'Search'}
         </button>
       </form>
-      <div className="binder-header-actions" aria-label="Copy catalogue cards">
-        <button
-          className="quiet-button tone-accent"
-          type="button"
-          disabled={busy || copying || total === 0 || total > 2000 || !displayedFilters.current}
-          onClick={() => void copyResults(true)}
-        >
-          {copying
-            ? 'Copying…'
-            : `Copy all ${total.toLocaleString('en-AU')} ${total === 1 ? 'card' : 'cards'}`}
-        </button>
-        {total > PAGE_SIZE ? (
+      <section className="catalogue-copy-tools" aria-label="Copy catalogue cards">
+        <p>
+          Copy all {total.toLocaleString('en-AU')} matching {total === 1 ? 'card' : 'cards'}
+        </p>
+        <div className="catalogue-copy-actions">
+          <button
+            className="quiet-button tone-accent"
+            type="button"
+            disabled={busy || copying || total === 0 || total > 2000 || !displayedFilters.current}
+            onClick={() => void copyResults(true)}
+          >
+            Copy displayed order
+          </button>
           <button
             className="quiet-button"
             type="button"
-            disabled={busy || copying || !cards.length || !displayedFilters.current}
-            onClick={() => void copyResults(false)}
+            disabled={busy || copying || total === 0 || total > 2000 || !displayedFilters.current}
+            onClick={() => void copyResults(true, 'release')}
           >
-            Copy this page
+            Copy release-date order
           </button>
-        ) : null}
-        {total > 2000 ? <span>Narrow the results to 2,000 cards or fewer to copy all.</span> : null}
+          {total > PAGE_SIZE ? (
+            <button
+              className="quiet-button"
+              type="button"
+              disabled={busy || copying || !cards.length || !displayedFilters.current}
+              onClick={() => void copyResults(false)}
+            >
+              Copy this page
+            </button>
+          ) : null}
+        </div>
+        <p>
+          {copying
+            ? 'Copying cards…'
+            : 'Displayed order keeps the current arrangement. Release-date order is oldest first, regardless of ownership.'}
+        </p>
+        {total > 2000 ? <p>Narrow the results to 2,000 cards or fewer to copy all.</p> : null}
         {copied ? (
           <span>
             {copied.cards.length} {copied.cards.length === 1 ? 'card' : 'cards'} in binder
@@ -1075,7 +1094,7 @@ export function CatalogueView({
             </NavigationLink>
           </span>
         ) : null}
-      </div>
+      </section>
       {!speciesName ? (
         <details className="custom-card-tools">
           <summary>Add a card that is not in TCGdex</summary>
