@@ -59,6 +59,18 @@ describe('binder space search', () => {
         expect.objectContaining({ row: 0, column: 0 }),
       ]);
       expect((await searchBinderSpaces(db, 'owner', version.id, { q: '%' })).matches).toEqual([]);
+      database.exec(
+        "UPDATE catalogue_cards SET name='Évoli',set_name='Éclats' WHERE id='card'; UPDATE binder_slots SET label='ÜBER promos' WHERE entry_kind='reserved'; UPDATE binder_pages SET label='ÜBER page' WHERE kind='reserved';",
+      );
+      expect(
+        (await searchBinderSpaces(db, 'owner', version.id, { q: 'évoli' })).matches,
+      ).toHaveLength(1);
+      expect(
+        (await searchBinderSpaces(db, 'owner', version.id, { q: 'éclats' })).matches,
+      ).toHaveLength(1);
+      expect(
+        (await searchBinderSpaces(db, 'owner', version.id, { q: 'über' })).matches,
+      ).toHaveLength(2);
       await expect(
         searchBinderSpaces(db, 'someone-else', version.id, { q: 'Pikachu' }),
       ).rejects.toMatchObject({ code: 'binder_version_not_found' });

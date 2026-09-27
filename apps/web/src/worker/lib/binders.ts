@@ -742,6 +742,20 @@ export async function searchBinderSpaces(
   const { q, offset } = binderSearchQuerySchema.parse(input);
   const version = await readVersion(db, ownerId, versionId);
   const query = q.toLocaleLowerCase('en-AU');
+  // SQLite lower() only folds ASCII. Bind the Unicode case variants needed by this query
+  // as JSON so accented names and labels work without interpolating input into SQL.
+  const folds = [...new Set(query)].flatMap((character) => {
+    const upper = character.toLocaleUpperCase('en-AU');
+    return upper !== character && [...upper].some((value) => (value.codePointAt(0) ?? 0) > 127)
+      ? [[upper, character]]
+      : [];
+  });
+  const foldText = (expression: string): string =>
+    folds.reduce(
+      (sql, _pair, index) =>
+        `replace(${sql},json_extract(?8,'$[${index}][0]'),json_extract(?8,'$[${index}][1]'))`,
+      `lower(${expression})`,
+    );
   const pokemon = NATIONAL_POKEDEX.filter((entry) =>
     `#${String(entry.number).padStart(4, '0')} ${entry.number} ${entry.name} ${entry.discoveryCategory}`
       .toLocaleLowerCase('en-AU')
@@ -761,14 +775,15 @@ export async function searchBinderSpaces(
     WHERE p.binder_version_id=?1 AND p.kind='slots'
       AND p.position*?4+s.row_index*?5+s.column_index < ?6
       AND ((s.entry_kind='pokemon' AND s.pokemon_number IN (SELECT value FROM json_each(?3)))
-        OR (s.entry_kind='reserved' AND instr(lower('reserved ' || COALESCE(s.label,'sleeve')),?2)>0)
+        OR (s.entry_kind='reserved' AND instr(${foldText("'reserved ' || COALESCE(s.label,'sleeve')")},?2)>0)
         OR (s.entry_kind='empty' AND instr('empty pocket',?2)>0)
-        OR (s.entry_kind='exact-card' AND instr(lower(COALESCE(c.name,'') || ' ' || COALESCE(c.set_name,'') || ' ' || COALESCE(c.number,'')),?2)>0))
+        OR (s.entry_kind='exact-card' AND instr(${foldText("COALESCE(c.name,'') || ' ' || COALESCE(c.set_name,'') || ' ' || COALESCE(c.number,'')")},?2)>0))
     UNION ALL
     SELECT position AS page,NULL AS row,NULL AS column,'reserved-page' AS kind,NULL AS pokemon_number,NULL AS assigned_card_id,
       'Reserved page: ' || COALESCE(label,'Unlabelled') AS label
     FROM binder_pages WHERE binder_version_id=?1 AND kind='reserved'
-      AND instr(lower('reserved page ' || COALESCE(label,'')),?2)>0
+      AND instr(${foldText("'reserved page ' || COALESCE(label,'')")},?2)>0
+      AND json_valid(?8)
     ORDER BY page,row,column LIMIT 51 OFFSET ?7
   `,
     )
@@ -780,6 +795,7 @@ export async function searchBinderSpaces(
       version.columns,
       version.capacity,
       offset,
+      JSON.stringify(folds),
     )
     .all<{
       page: number;
