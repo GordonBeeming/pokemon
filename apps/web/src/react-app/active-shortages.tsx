@@ -37,6 +37,7 @@ export function ActiveShortages({
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
 
   const requestController = useRef<AbortController | null>(null);
+  const snapshot = useRef<string | undefined>(undefined);
 
   async function loadInitial(signal: AbortSignal): Promise<void> {
     setLoading(true);
@@ -44,6 +45,7 @@ export function ActiveShortages({
     try {
       const report = await api.activeShortages(0, signal);
       if (signal.aborted) return;
+      snapshot.current = report.snapshot;
       setEntries(report.entries);
       setTotalMissing(report.totalMissing);
       setTotalEntries(report.totalEntries);
@@ -68,7 +70,11 @@ export function ActiveShortages({
     try {
       const report = await api.activeShortages(nextOffset, controller.signal);
       if (controller.signal.aborted) return;
-      if (report.totalEntries !== totalEntries || report.totalMissing !== totalMissing) {
+      if (
+        report.snapshot !== snapshot.current ||
+        report.totalEntries !== totalEntries ||
+        report.totalMissing !== totalMissing
+      ) {
         await loadInitial(controller.signal);
         return;
       }

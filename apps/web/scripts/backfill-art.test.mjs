@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   imageUrl,
+  isManifestConflict,
+  isCacheMiss,
   matchCsvProduct,
   matchingCsvGroups,
   matchProviderCard,
@@ -15,6 +17,14 @@ const card = {
   number: '25',
 };
 describe('artwork fallback identity', () => {
+  it('only accepts a manifest race as preserved artwork and recovers malformed cache JSON', () => {
+    expect(isManifestConflict(409, { error: 'art_upload_version_conflict' })).toBe(true);
+    expect(isManifestConflict(409, { error: 'art_upload_in_progress' })).toBe(false);
+    expect(isManifestConflict(500, { error: 'art_upload_version_conflict' })).toBe(false);
+    expect(isCacheMiss(new SyntaxError('truncated JSON'))).toBe(true);
+    expect(isCacheMiss({ code: 'ENOENT' })).toBe(true);
+    expect(isCacheMiss({ code: 'EACCES' })).toBe(false);
+  });
   it('maps dated McDonalds promotions and kit members without crossing years or decks', () => {
     const groups = [
       { name: "McDonald's Promos 2014", groupId: 1 },

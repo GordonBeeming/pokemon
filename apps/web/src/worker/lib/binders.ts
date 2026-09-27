@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   binderBookmarkSchema,
   binderLayoutSchema,
@@ -590,6 +591,7 @@ export async function activeBinderShortages(
   pokemonShortages: BinderPokemonShortage[];
   totalMissing: number;
   totalEntries: number;
+  snapshot: string;
   nextOffset: number | null;
 }> {
   const exact = await db
@@ -693,6 +695,9 @@ export async function activeBinderShortages(
     }));
   return {
     shortages: shortages.slice(page.offset, page.offset + page.limit),
+    snapshot: createHash('sha256')
+      .update(JSON.stringify([shortages, pokemonShortages]))
+      .digest('hex'),
     pokemonShortages: pokemonShortages.slice(page.offset, page.offset + page.limit),
     totalMissing: [...shortages, ...pokemonShortages].reduce(
       (total, item) => total + item.missing,

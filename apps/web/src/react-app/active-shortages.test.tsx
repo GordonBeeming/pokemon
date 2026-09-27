@@ -104,6 +104,39 @@ it('shows a retryable error and correctly describes zero shortages', async () =>
   expect(container.textContent).toContain('No active shortages');
   expect(container.textContent).toContain('Some copies may still need');
 });
+it('restarts pagination when targets change without changing aggregate totals', async () => {
+  const updated = { ...pokemon, label: '#0007 Squirtle', pokemonNumber: 7 };
+  report
+    .mockResolvedValueOnce({
+      entries: [pokemon],
+      snapshot: 'before',
+      totalMissing: 2,
+      totalEntries: 2,
+      nextOffset: 50,
+    })
+    .mockResolvedValueOnce({
+      entries: [updated],
+      snapshot: 'after',
+      totalMissing: 2,
+      totalEntries: 2,
+      nextOffset: null,
+    })
+    .mockResolvedValueOnce({
+      entries: [updated],
+      snapshot: 'after',
+      totalMissing: 2,
+      totalEntries: 2,
+      nextOffset: 50,
+    });
+  await render();
+  await click('Active shortages');
+  await click('Load more shortages');
+  expect(report).toHaveBeenNthCalledWith(1, 0, expect.any(AbortSignal));
+  expect(report).toHaveBeenNthCalledWith(2, 50, expect.any(AbortSignal));
+  expect(report).toHaveBeenNthCalledWith(3, 0, expect.any(AbortSignal));
+  expect(container.textContent).toContain('#0007 Squirtle');
+  expect(container.textContent).not.toContain('#0025 Pikachu');
+});
 it('links species without restrictive name filters and exact cards by set and collector number', () => {
   expect(catalogueHrefForEntry(pokemon)).toBe('#catalogue?pokedexNumber=25');
   expect(

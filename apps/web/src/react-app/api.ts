@@ -86,6 +86,7 @@ const activeShortageEntrySchema = z.object({
   missing: z.number(),
 });
 const activeShortagesResponseSchema = successSchema.extend({
+  snapshot: z.string().optional(),
   entries: z.array(activeShortageEntrySchema).max(100),
   totalMissing: z.number(),
   totalEntries: z.number(),

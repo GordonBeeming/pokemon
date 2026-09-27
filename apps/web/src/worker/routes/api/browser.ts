@@ -204,6 +204,7 @@ browserApiRoutes.get('/dashboard/shortages', async (c) => {
       entries,
       totalMissing: report.totalMissing,
       totalEntries: report.totalEntries,
+      snapshot: report.snapshot,
       nextOffset: report.nextOffset,
     });
   } catch (error) {

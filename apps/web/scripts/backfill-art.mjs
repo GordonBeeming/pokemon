@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { Buffer } from 'node:buffer';
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile, appendFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, readFile, writeFile, appendFile, rename } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,15 @@ const app = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const maxBytes = 15 * 1024 * 1024;
 const userAgent = 'PokedexCatalogueBackfill/1.0 (+https://github.com/GordonBeeming/pokemon)';
 const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
+export const isManifestConflict = (status, body) =>
+  status === 409 && body?.error === 'art_upload_version_conflict';
+async function writeCache(path, value) {
+  const temporary = `${path}.${randomUUID()}.tmp`;
+  await writeFile(temporary, JSON.stringify(value));
+  await rename(temporary, path);
+}
+export const isCacheMiss = (error) =>
+  error instanceof SyntaxError || error instanceof z.ZodError || error.code === 'ENOENT';
 const cardSchema = z.object({
   id: z.string().min(1).max(128),
   name: z.string(),
@@ -347,12 +356,12 @@ export async function main(args) {
         .parse(JSON.parse(await readFile(path, 'utf8')));
       if (Date.now() - saved.checkedAt < 86400000) return saved.stamp;
     } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
+      if (!isCacheMiss(error)) throw error;
     }
     const stamp = (await bytesFrom('https://tcgcsv.com/last-updated.txt', 1024))
       .toString('utf8')
       .trim();
-    await writeFile(path, JSON.stringify({ checkedAt: Date.now(), stamp }));
+    await writeCache(path, { checkedAt: Date.now(), stamp });
     return stamp;
   }
   async function csvJson(path) {
@@ -363,12 +372,12 @@ export async function main(args) {
     try {
       return JSON.parse(await readFile(cachePath, 'utf8'));
     } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
+      if (!isCacheMiss(error)) throw error;
     }
     const job = csvQueue.then(async () => {
       await new Promise((done) => setTimeout(done, 150));
       const result = await jsonFrom(url, 16 * 1024 * 1024);
-      await writeFile(cachePath, JSON.stringify(result));
+      await writeCache(cachePath, result);
       return result;
     });
     csvQueue = job.then(
@@ -588,8 +597,13 @@ export async function main(args) {
             },
             ticket.token,
           );
-          if (!upload.ok && upload.status !== 409)
-            throw new Error(`Image upload failed (${upload.status})`);
+          if (!upload.ok) {
+            const failure = await upload.json();
+            if (!isManifestConflict(upload.status, failure))
+              throw new Error(
+                `Image upload failed (${upload.status}): ${failure.error ?? 'unknown'}`,
+              );
+          }
           const stored = await responseBytes(
             await appFetch(`/api/desktop/art/${encodeURIComponent(card.id)}/${variant}`),
           );

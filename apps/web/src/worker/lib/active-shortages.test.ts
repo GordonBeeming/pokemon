@@ -88,6 +88,14 @@ it('counts exact and Pokémon shortages across report pages without counting pla
     }
     expect(keys).toHaveLength(269);
     expect(new Set(keys).size).toBe(269);
+    const before = await activeBinderShortages(db, 'owner');
+    database.exec(
+      "UPDATE binder_slots SET pokemon_number=151 WHERE entry_kind='pokemon' AND pokemon_number=150",
+    );
+    const after = await activeBinderShortages(db, 'owner');
+    expect(after.totalMissing).toBe(before.totalMissing);
+    expect(after.totalEntries).toBe(before.totalEntries);
+    expect(after.snapshot).not.toBe(before.snapshot);
     expect(await activeBinderShortages(db, 'other')).toMatchObject({
       totalMissing: 0,
       totalEntries: 0,
