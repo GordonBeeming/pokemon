@@ -1638,7 +1638,9 @@ describe('async frontend announcements', () => {
     await waitFor(() => container.querySelector('.binder-slot') !== null);
     await actAndSettle(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
     await clickButton('Bookmark pocket');
-    const input = container.querySelector<HTMLInputElement>('input[maxlength="120"]');
+    const input = container.querySelector<HTMLInputElement>(
+      '.pocket-editor-popup input[maxlength="120"]',
+    );
     if (!input) throw new Error('Missing bookmark name');
     expect(input.value).toBe('Bulbasaur');
     await actAndSettle(() => {
@@ -1660,9 +1662,10 @@ describe('async frontend announcements', () => {
     );
     expect(container.querySelector('[role="dialog"]')).toBeNull();
     await clickButton('Bookmark pocket');
-    expect(container.querySelector<HTMLInputElement>('input[maxlength="120"]')?.value).toBe(
-      'Kanto starts',
-    );
+    expect(
+      container.querySelector<HTMLInputElement>('.pocket-editor-popup input[maxlength="120"]')
+        ?.value,
+    ).toBe('Kanto starts');
     await clickButton('Remove bookmark');
     expect(apiMocks.removeBinderBookmark).toHaveBeenCalledWith('version-1', 'bookmark-1');
     expect(container.querySelector('.binder-bookmark-jump')?.textContent).toContain(
@@ -1727,17 +1730,19 @@ describe('async frontend announcements', () => {
     );
     expect(location.hash).toContain('page=2&row=1&column=1');
     await clickButton('Bookmark pocket');
-    expect(container.querySelector<HTMLInputElement>('input[maxlength="120"]')?.value).toBe(
-      'Johto',
-    );
+    expect(
+      container.querySelector<HTMLInputElement>('.pocket-editor-popup input[maxlength="120"]')
+        ?.value,
+    ).toBe('Johto');
     await closeEditor();
     apiMocks.binderBookmarks.mockResolvedValue([]);
     await clickButton('First');
     await actAndSettle(() => container.querySelector<HTMLButtonElement>('.binder-slot')?.click());
     await clickButton('Bookmark pocket');
-    expect(container.querySelector<HTMLInputElement>('input[maxlength="120"]')?.value).toBe(
-      'Empty',
-    );
+    expect(
+      container.querySelector<HTMLInputElement>('.pocket-editor-popup input[maxlength="120"]')
+        ?.value,
+    ).toBe('Empty');
   });
 
   it('preserves a failed reservation label then clears it after a successful retry', async () => {

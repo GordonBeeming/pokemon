@@ -1,6 +1,9 @@
 import {
   binderBookmarkSchema,
   binderLayoutSchema,
+  binderSearchQuerySchema,
+  binderSearchResultSchema,
+  type BinderSearchResult,
   binderAssignmentCandidatesSchema,
   binderMutationResultSchema,
   binderPageSchema,
@@ -728,6 +731,100 @@ export async function getBinderPlannerSummary(db: D1Database, ownerId: string, v
     capacity: version.capacity,
     pageSize: version.rows * version.columns,
   };
+}
+
+export async function searchBinderSpaces(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  input: { q: string; offset?: number },
+): Promise<BinderSearchResult> {
+  const { q, offset } = binderSearchQuerySchema.parse(input);
+  const version = await readVersion(db, ownerId, versionId);
+  const query = q.toLocaleLowerCase('en-AU');
+  // SQLite lower() only folds ASCII. Bind the Unicode case variants needed by this query
+  // as JSON so accented names and labels work without interpolating input into SQL.
+  const folds = [...new Set(query)].flatMap((character) => {
+    const upper = character.toLocaleUpperCase('en-AU');
+    return upper !== character && [...upper].some((value) => (value.codePointAt(0) ?? 0) > 127)
+      ? [[upper, character]]
+      : [];
+  });
+  const foldText = (expression: string): string =>
+    folds.reduce(
+      (sql, _pair, index) =>
+        `replace(${sql},json_extract(?8,'$[${index}][0]'),json_extract(?8,'$[${index}][1]'))`,
+      `lower(${expression})`,
+    );
+  const pokemonNumber = /^#?\d+$/u.test(query) ? Number(query.replace('#', '')) : null;
+  const pokemon = NATIONAL_POKEDEX.filter((entry) =>
+    pokemonNumber !== null
+      ? entry.number === pokemonNumber
+      : `#${String(entry.number).padStart(4, '0')} ${entry.number} ${entry.name} ${entry.discoveryCategory}`
+          .toLocaleLowerCase('en-AU')
+          .includes(query),
+  ).map((entry) => entry.number);
+  const result = await db
+    .prepare(
+      `
+    SELECT p.position AS page, s.row_index AS row, s.column_index AS column,
+      s.entry_kind AS kind, s.pokemon_number, s.assigned_card_id,
+      CASE s.entry_kind WHEN 'reserved' THEN 'Reserved: ' || COALESCE(s.label, 'sleeve')
+        WHEN 'empty' THEN 'Empty pocket'
+        WHEN 'exact-card' THEN COALESCE(c.name, 'Exact card target') || ' · ' || COALESCE(c.set_name, '') || ' · ' || COALESCE(c.number, '')
+        ELSE '' END AS label
+    FROM binder_slots s JOIN binder_pages p ON p.id=s.binder_page_id
+    LEFT JOIN catalogue_cards c ON c.id=s.card_id
+    WHERE p.binder_version_id=?1 AND p.kind='slots'
+      AND p.position*?4+s.row_index*?5+s.column_index < ?6
+      AND ((s.entry_kind='pokemon' AND s.pokemon_number IN (SELECT value FROM json_each(?3)))
+        OR (s.entry_kind='reserved' AND instr(${foldText("'reserved ' || COALESCE(s.label,'sleeve')")},?2)>0)
+        OR (s.entry_kind='empty' AND instr('empty pocket',?2)>0)
+        OR (s.entry_kind='exact-card' AND instr(${foldText("COALESCE(c.name,'') || ' ' || COALESCE(c.set_name,'') || ' ' || COALESCE(c.number,'')")},?2)>0))
+    UNION ALL
+    SELECT position AS page,NULL AS row,NULL AS column,'reserved-page' AS kind,NULL AS pokemon_number,NULL AS assigned_card_id,
+      'Reserved page: ' || COALESCE(label,'Unlabelled') AS label
+    FROM binder_pages WHERE binder_version_id=?1 AND kind='reserved'
+      AND instr(${foldText("'reserved page ' || COALESCE(label,'')")},?2)>0
+      AND json_valid(?8)
+    ORDER BY page,row,column LIMIT 51 OFFSET ?7
+  `,
+    )
+    .bind(
+      versionId,
+      query,
+      JSON.stringify(pokemon),
+      version.rows * version.columns,
+      version.columns,
+      version.capacity,
+      offset,
+      JSON.stringify(folds),
+    )
+    .all<{
+      page: number;
+      row: number | null;
+      column: number | null;
+      kind: string;
+      pokemon_number: number | null;
+      assigned_card_id: string | null;
+      label: string;
+    }>();
+  return binderSearchResultSchema.parse({
+    matches: result.results.slice(0, 50).map((row) => {
+      const species = row.pokemon_number ? NATIONAL_POKEDEX[row.pokemon_number - 1] : undefined;
+      return {
+        page: row.page,
+        row: row.row,
+        column: row.column,
+        kind: row.kind,
+        placed: row.assigned_card_id !== null,
+        label: species
+          ? `#${String(species.number).padStart(4, '0')} ${species.name} · ${species.discoveryCategory}`
+          : row.label,
+      };
+    }),
+    nextOffset: result.results.length > 50 ? offset + 50 : null,
+  });
 }
 
 export async function getBinderVersionShortages(

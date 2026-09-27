@@ -1,4 +1,5 @@
 import { z } from 'zod';
+export * from './binder-search';
 import { NATIONAL_POKEDEX_SIZE } from './national-pokedex';
 
 export * from './national-pokedex';
