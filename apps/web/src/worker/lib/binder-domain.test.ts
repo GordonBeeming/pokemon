@@ -1930,7 +1930,7 @@ describe('binder D1 domain', () => {
     expect(pages.pages[2]).toMatchObject({ kind: 'reserved', label: 'Archive' });
   });
 
-  it('swaps complete entry payloads across pages and rejects whole reserved pages', async () => {
+  it('swaps complete entry payloads across ordinary and reserved pages', async () => {
     const { db } = setup();
     const created = await createBinder(
       db,
@@ -2006,7 +2006,7 @@ describe('binder D1 domain', () => {
         { page: 2, row: 0, column: 0 },
         reserved.version.revision,
       ),
-    ).rejects.toMatchObject({ code: 'binder_reserved_page_not_empty' });
+    ).resolves.toMatchObject({ version: { revision: reserved.version.revision + 1 } });
   });
 
   it('keeps an occupied-to-empty swap at the requested physical destination', async () => {

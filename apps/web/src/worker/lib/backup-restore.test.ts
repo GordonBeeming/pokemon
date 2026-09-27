@@ -193,6 +193,47 @@ async function seedReferencedArt(art: R2Bucket): Promise<void> {
 }
 
 describe('backup restore', () => {
+  it('preserves a placed Pokémon target in the last pocket of a reserved page', async () => {
+    const { database, db, art } = setup();
+    await seedReferencedArt(art);
+    database.exec(`
+      UPDATE catalogue_cards SET pokedex_number=494 WHERE id='card-binder';
+      INSERT INTO collection_cards(owner_id,card_id,quantity,notes,revision,updated_at)
+        VALUES('owner','card-binder',1,NULL,1,1);
+      UPDATE binder_slots SET entry_kind='empty',card_id=NULL;
+      UPDATE binder_pages SET kind='reserved',label='Unova' WHERE id='page-1';
+      UPDATE binder_slots SET row_index=1,column_index=1,card_id=NULL,entry_kind='pokemon',
+        pokemon_number=494,assigned_card_id='card-binder',starts_new_page=1;
+      INSERT INTO binder_bookmarks(id,binder_page_id,row_index,column_index,name,created_at)
+        VALUES('victini-mark','page-1',1,1,'Victini',1);
+    `);
+    await createBackup(db, art, 'owner', { backupId: 'backup_reserved_victini' });
+    database.exec(
+      "UPDATE binder_slots SET entry_kind='empty',pokemon_number=NULL,assigned_card_id=NULL,starts_new_page=0; UPDATE binder_pages SET kind='slots',label=NULL; DELETE FROM binder_bookmarks;",
+    );
+    await restoreBackup(db, art, 'owner', 'backup_reserved_victini');
+    expect(database.prepare("SELECT kind,label FROM binder_pages WHERE id='page-1'").get()).toEqual(
+      { kind: 'reserved', label: 'Unova' },
+    );
+    expect(
+      database
+        .prepare(
+          "SELECT row_index,column_index,entry_kind,pokemon_number,assigned_card_id,starts_new_page FROM binder_slots WHERE binder_page_id='page-1' AND row_index=1 AND column_index=1",
+        )
+        .get(),
+    ).toEqual({
+      row_index: 1,
+      column_index: 1,
+      entry_kind: 'pokemon',
+      pokemon_number: 494,
+      assigned_card_id: 'card-binder',
+      starts_new_page: 1,
+    });
+    expect(
+      database.prepare("SELECT name FROM binder_bookmarks WHERE id='victini-mark'").get(),
+    ).toEqual({ name: 'Victini' });
+  });
+
   it('round-trips intentional empty sleeves through the version 5 backup', async () => {
     const { database, db, art } = setup();
     await seedReferencedArt(art);

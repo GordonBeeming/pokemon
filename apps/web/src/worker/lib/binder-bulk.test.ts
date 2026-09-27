@@ -161,21 +161,34 @@ describe('binder copy choices', () => {
     });
   });
 
-  it('rolls back an added copy if the slot is on a reserved page', async () => {
+  it('adds a copy on a reserved page atomically and rolls it back if the slot write fails', async () => {
     const { database, db } = setup();
     const created = await createBinder(db, 'owner', 'Binder', { kind: '2x2', rows: 2, columns: 2 });
     await reserveBinderPage(db, 'owner', created.version.id, 0, true, 'Reserved', 1);
+    database.exec(
+      "CREATE TRIGGER fixture_slot_failure BEFORE UPDATE OF card_id ON binder_slots WHEN NEW.card_id='card-1' BEGIN SELECT RAISE(ABORT,'fixture_slot_failure'); END;",
+    );
     await expect(
       setBinderSlot(db, 'owner', created.version.id, 0, 0, 0, 'card-1', 2, {
         action: 'add',
         expectedCollectionRevision: 0,
       }),
-    ).rejects.toThrow();
+    ).rejects.toThrow('fixture_slot_failure');
     expect(database.prepare('SELECT COUNT(*) AS count FROM collection_cards').get()).toEqual({
       count: 0,
     });
     const binder = await getBinderVersion(db, 'owner', created.version.id);
     expect(binder.version.revision).toBe(2);
+    database.exec('DROP TRIGGER fixture_slot_failure');
+    const placed = await setBinderSlot(db, 'owner', created.version.id, 0, 0, 0, 'card-1', 2, {
+      action: 'add',
+      expectedCollectionRevision: 0,
+    });
+    expect(placed.pages[0]).toMatchObject({ kind: 'reserved', label: 'Reserved' });
+    expect(placed.pages[0]?.slots[0]).toMatchObject({ cardId: 'card-1', assignedCardId: 'card-1' });
+    expect(database.prepare('SELECT quantity FROM collection_cards').get()).toEqual({
+      quantity: 1,
+    });
   });
 
   it('rejects a changed collection count and the collection limit without changing the target', async () => {

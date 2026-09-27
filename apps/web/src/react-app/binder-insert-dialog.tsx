@@ -15,6 +15,7 @@ export function BinderInsertDialog({
   revision,
   error,
   at,
+  reservedPage = false,
   onClose,
   onInsert,
   onNotice,
@@ -23,6 +24,7 @@ export function BinderInsertDialog({
   revision: number;
   error: string | null;
   at: BinderSlotLocation | null;
+  reservedPage?: boolean;
   onClose: () => void;
   onInsert: (at: BinderSlotLocation, entries: BinderEntry[], revision: number) => Promise<boolean>;
   onNotice: (notice: Notice) => void;
@@ -160,7 +162,7 @@ export function BinderInsertDialog({
     <PocketPanel anchor={at} title="Insert targets" wide footer={footer} onClose={onClose}>
       <p>
         {at
-          ? `Insert at page ${at.page + 1}, pocket ${at.row + 1}:${at.column + 1}, shifting later targets.`
+          ? `Insert at page ${at.page + 1}, pocket ${at.row + 1}:${at.column + 1}, shifting later targets${reservedPage ? ' on this reserved page only' : ''}.`
           : destinations?.appendAt
             ? `Append at page ${destinations.appendAt.page + 1}, pocket ${destinations.appendAt.row + 1}:${destinations.appendAt.column + 1}.`
             : destinations

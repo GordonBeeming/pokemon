@@ -1415,6 +1415,14 @@ dd {
 .reserved-binder-page {
   background: #efe7cf;
 }
+.reserved-binder-page .binder-slot:has(.card-art) {
+  grid-template-rows: minmax(0, 1fr) auto auto;
+}
+.reserved-binder-page .binder-slot .card-art {
+  min-height: 0;
+  height: 100%;
+  aspect-ratio: auto;
+}
 .reserved-page-label {
   margin: 0 0 1rem;
   color: #6b4d16;
@@ -2726,4 +2734,28 @@ dd {
   .binder-space-search {
     display: none;
   }
+}
+.binder-move-notice {
+  padding: 1rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+}
+.binder-move-notice p {
+  margin: 0;
+  flex: 1 1 18rem;
+}
+.reserved-page-heading {
+  margin-bottom: 1rem;
+}
+.reserved-page-heading .reserved-page-label {
+  margin-bottom: 0.4rem;
+}
+.reserved-page-heading p:last-child {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.85rem;
 }

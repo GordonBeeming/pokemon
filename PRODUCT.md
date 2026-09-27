@@ -26,6 +26,8 @@ TCGdex supplies physical card metadata and source art. Pokédex excludes TCG Poc
 
 Binder plans are fixed-capacity digital copies of physical layouts. A creator chooses the page face and enters the physical binder's exact pocket capacity, then deliberately grows or safely shrinks the plan when needed. Full pages use the selected rows and columns; only the final page may be partial. Each sleeve is empty, reserved, an exact-card target, or a National Pokédex target. Targets and owned-card placement are separate, so a target is not presented as physically filled until a compatible copy is assigned. Editable binder versions support page starts, signed-offset moves, closing gaps, anchored reservations, and a full 1,025-entry National Pokédex insert without catalogue synchronisation. Active versions report shortages, while archived versions remain readable but cannot change.
 
+Reserved binder pages allow manual card and placeholder placement in individual pockets. Their labels and contents are preserved by automatic layout operations. Explicit inserts, gap-closing, and offset shifts on a reserved page stay within that page and reject overflow; moving to another page uses the pocket move action.
+
 ## Desktop companion
 
 The Tauri app captures or imports one card image at a time, stores pending scans locally, synchronises high- and low-resolution WebP art, and keeps its cloud token in Keychain. Its authenticated MCP tools can inspect pending scans, search the catalogue, confirm a match, update collection notes and quantities, and work with binder drafts.

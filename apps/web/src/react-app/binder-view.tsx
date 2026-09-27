@@ -226,7 +226,7 @@ function BinderUsage({
         <strong>
           {summary?.available ?? Math.max(0, capacity - counts.target - counts.reserved)}
         </strong>{' '}
-        available
+        {reservedPages > 0 ? 'available outside reserved pages' : 'available'}
       </span>
     </section>
   );
@@ -496,9 +496,15 @@ function BinderGrid({
       aria-label={reservedPage ? `Reserved binder page ${page + 1}` : `Binder page ${page + 1}`}
     >
       {reservedPage ? (
-        <p className="reserved-page-label">
-          Reserved page{currentPage.label ? `: ${currentPage.label}` : ''}
-        </p>
+        <div className="reserved-page-heading">
+          <p className="reserved-page-label">
+            Reserved page{currentPage.label ? `: ${currentPage.label}` : ''}
+          </p>
+          <p>
+            Place cards or placeholders in any pocket. Automatic arrangement leaves these pockets
+            unchanged.
+          </p>
+        </div>
       ) : null}
       <div
         className={`binder-grid${columns <= 4 ? ' binder-grid-fit' : ''}`}
@@ -530,8 +536,8 @@ function BinderGrid({
                 className={`binder-slot ${state} ${selectedTarget ? 'selected-slot' : ''}`}
                 data-binder-slot={`${page}-${slot.row}-${slot.column}`}
                 type="button"
-                disabled={pending || reservedPage}
-                draggable={slot.entryKind !== 'empty' && editable && !reservedPage}
+                disabled={pending}
+                draggable={slot.entryKind !== 'empty' && editable}
                 aria-pressed={selectedTarget}
                 aria-label={`${place(at)}, ${label(slot, cards)}. ${state}.`}
                 onDragStart={(event) =>
@@ -589,7 +595,7 @@ function BinderGrid({
                       : state}
                 </small>
               </button>
-              {selectedTarget && !reservedPage ? (
+              {selectedTarget ? (
                 <PocketTools
                   target={slot.entryKind === 'exact-card' || slot.entryKind === 'pokemon'}
                   reserved={slot.entryKind === 'reserved'}
@@ -781,7 +787,6 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
       }
       const retained =
         keepSelection?.page === next &&
-        data.pages[0]?.kind !== 'reserved' &&
         data.pages[0]?.slots.some(
           (slot) => slot.row === keepSelection.row && slot.column === keepSelection.column,
         )
@@ -805,7 +810,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
       setCards(
         (current) => new Map([...current, ...resolved.map((card) => [card.id, card] as const)]),
       );
-      if (historyMode === 'none' && data.pages[0]?.kind !== 'reserved') {
+      if (historyMode === 'none') {
         const first = data.pages[0]?.slots[0];
         pendingPocketFocus.current =
           retained ?? (first ? { page: next, row: first.row, column: first.column } : null);
@@ -1618,6 +1623,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
           revision={version.revision}
           error={mutationError}
           at={insertAt}
+          reservedPage={reservedPage && insertAt?.page === page}
           onNotice={onNotice}
           onClose={() => setInsertOpen(false)}
           onInsert={(at, entries, revision) =>
@@ -1645,7 +1651,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
           setPageManagementOpen(false);
           setTool(null);
           setManagementOpen(false);
-          setInsertAt(null);
+          setInsertAt(reservedPage ? (selected ?? { page, row: 0, column: 0 }) : null);
           setInsertOpen(true);
         }}
         onManage={() => {
@@ -1692,6 +1698,22 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
         }}
       />
       <div className="binder-workspace">
+        {moveSource && (
+          <div className="surface binder-move-notice" role="status">
+            <p>
+              Moving the card or placeholder from {place(moveSource)}. Choose a destination pocket;
+              you can change pages first.
+            </p>
+            <button
+              className="quiet-button"
+              type="button"
+              disabled={pending}
+              onClick={() => setMoveSource(null)}
+            >
+              Cancel move
+            </button>
+          </div>
+        )}
         <BinderGrid
           page={page}
           currentPage={currentPage}
@@ -1711,6 +1733,12 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
             setPageManagementOpen(false);
             setManagementOpen(false);
             setInsertOpen(false);
+            if (nextTool === 'move' && selected) {
+              setTool(null);
+              setMoveSource(selected);
+              setStatus('Choose a destination pocket. You can change pages first.');
+              return;
+            }
             if (nextTool === 'insert') {
               setTool(null);
               setManagementOpen(false);
@@ -1759,7 +1787,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
                 onClose={() => setTool(null)}
               />
             ) : null}
-            {editable && selected && !reservedPage && replacement !== null ? (
+            {editable && selected && replacement !== null ? (
               <section className="slot-picker-panel" aria-labelledby="slot-picker-heading">
                 <div className="slot-picker-heading">
                   <div>
@@ -2002,27 +2030,29 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
                       >
                         Remove physical placement
                       </button>
-                      <label className="checkbox-row">
-                        <input
-                          type="checkbox"
-                          checked={selectedSlot?.startsNewPage === true}
-                          onChange={(event) =>
-                            void mutate(
-                              () =>
-                                api.setPageBreak(
-                                  version.id,
-                                  selected,
-                                  event.target.checked,
-                                  version.revision,
-                                ),
-                              event.target.checked
-                                ? 'Target starts a new page.'
-                                : 'Page break removed.',
-                            )
-                          }
-                        />{' '}
-                        Start this target on a new page
-                      </label>
+                      {!reservedPage && (
+                        <label className="checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={selectedSlot?.startsNewPage === true}
+                            onChange={(event) =>
+                              void mutate(
+                                () =>
+                                  api.setPageBreak(
+                                    version.id,
+                                    selected,
+                                    event.target.checked,
+                                    version.revision,
+                                  ),
+                                event.target.checked
+                                  ? 'Target starts a new page.'
+                                  : 'Page break removed.',
+                              )
+                            }
+                          />{' '}
+                          Start this target on a new page
+                        </label>
+                      )}
                     </section>
                   </>
                 ) : null}
@@ -2030,7 +2060,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
             ) : (
               <p>
                 {reservedPage
-                  ? 'This page is reserved. Unreserve it before editing pockets.'
+                  ? 'Select a pocket to place a card or placeholder on this reserved page.'
                   : 'Select a pocket to edit it.'}
               </p>
             )}

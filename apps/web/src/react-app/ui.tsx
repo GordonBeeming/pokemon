@@ -77,6 +77,8 @@ const errorMessages: Record<string, string> = {
 };
 
 export function userMessage(error: unknown): string {
+  if (error instanceof ApiError && error.code === 'reserved_page_full')
+    return 'There is not enough room on this reserved page. Choose fewer targets or free a pocket on this page.';
   if (error instanceof DOMException && error.name === 'AbortError') return '';
   if (!(error instanceof ApiError)) return 'The request could not be completed. Try again.';
   const base = errorMessages[error.code] ?? 'The request could not be completed. Try again.';
