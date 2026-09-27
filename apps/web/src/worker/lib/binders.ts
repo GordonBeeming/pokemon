@@ -173,6 +173,7 @@ export type BinderErrorCode =
   | 'binder_assignment_quantity_exceeded'
   | 'binder_page_contains_targets'
   | 'binder_reserved_page_not_empty'
+  | 'reserved_page_full'
   | 'binder_bookmark_reserved_page'
   | 'card_not_found';
 
@@ -727,7 +728,10 @@ export async function getBinderPlannerSummary(db: D1Database, ownerId: string, v
     reservedSleeves,
     reservedPages: pages.filter((page) => page.kind === 'reserved').length,
     generatedPadding,
-    available: Math.max(0, usable.length - targets - reservedSleeves - generatedPadding),
+    available: Math.max(
+      0,
+      usable.filter((slot) => slotEntry(slot) === null).length - generatedPadding,
+    ),
     capacity: version.capacity,
     pageSize: version.rows * version.columns,
   };
@@ -775,7 +779,7 @@ export async function searchBinderSpaces(
         ELSE '' END AS label
     FROM binder_slots s JOIN binder_pages p ON p.id=s.binder_page_id
     LEFT JOIN catalogue_cards c ON c.id=s.card_id
-    WHERE p.binder_version_id=?1 AND p.kind='slots'
+    WHERE p.binder_version_id=?1
       AND p.position*?4+s.row_index*?5+s.column_index < ?6
       AND ((s.entry_kind='pokemon' AND s.pokemon_number IN (SELECT value FROM json_each(?3)))
         OR (s.entry_kind='reserved' AND instr(${foldText("'reserved ' || COALESCE(s.label,'sleeve')")},?2)>0)
@@ -997,7 +1001,6 @@ export async function getBinderAssignmentCandidates(
     .bind(versionId, location.page, location.row, location.column)
     .first<MaterializedSlot>();
   if (!target) domainError('binder_slot_not_found');
-  if (target.page_kind === 'reserved') domainError('binder_reserved_page_not_empty');
   if (target.entry_kind !== 'exact-card' && target.entry_kind !== 'pokemon')
     domainError('binder_slot_not_found');
   const result = await db
@@ -1575,8 +1578,31 @@ export async function swapBinderSlots(
       slot.column_index === target.column,
   );
   if (!sourceSlot || !targetSlot) domainError('binder_slot_not_found');
-  if (sourceSlot.page_kind === 'reserved' || targetSlot.page_kind === 'reserved')
-    domainError('binder_reserved_page_not_empty');
+  if (sourceSlot.page_kind === 'reserved' || targetSlot.page_kind === 'reserved') {
+    const sourcePayload = (slot: MaterializedSlot): ReflowEntry | null => {
+      const entry = slotEntry(slot);
+      return entry
+        ? { entry, assignedCardId: slot.assigned_card_id ?? null, originalIndex: 0 }
+        : null;
+    };
+    const newSource = sourcePayload(targetSlot);
+    const newTarget = sourcePayload(sourceSlot);
+    const manualOutput = new Set<number>();
+    if (!newSource) manualOutput.add(0);
+    if (!newTarget) manualOutput.add(1);
+    await runVersionBatch(db, ownerId, versionId, version.revision, false, [
+      ...rewriteSlotsStatements(
+        db,
+        [sourceSlot, targetSlot],
+        [newSource, newTarget],
+        manualOutput,
+        new Set<number>(),
+        true,
+      ),
+      ...revisionStatements(db, version, nowSeconds()),
+    ]);
+    return mutationResult(db, ownerId, versionId, [source.page, target.page]);
+  }
   const available = slots.filter((slot) => slot.page_kind !== 'reserved');
   const payload = (slot: MaterializedSlot, originalIndex: number): ReflowEntry | null => {
     const entry = slotEntry(slot);
@@ -1918,6 +1944,14 @@ function manualGapIndices(
   slots: readonly MaterializedSlot[],
   physical = physicalEntries(slots),
 ): Set<number> {
+  if (slots[0]?.page_kind === 'reserved') {
+    const last = lastOccupiedIndex(physical);
+    return new Set(
+      slots.flatMap((slot, index) =>
+        physical[index] === null && (index < last || slot.is_manual_gap === 1) ? [index] : [],
+      ),
+    );
+  }
   const inferredPadding = generatedPaddingIndices(physical);
   const last = lastOccupiedIndex(physical);
   return new Set(
@@ -1939,6 +1973,8 @@ function physicalEntries(slots: readonly MaterializedSlot[]): Array<ReflowEntry 
 }
 
 function binderSection(slots: MaterializedSlot[], page: number): MaterializedSlot[] {
+  const isReserved = slots.find((slot) => slot.page_position === page)?.page_kind === 'reserved';
+  if (isReserved) return slots.filter((slot) => slot.page_position === page);
   const previous =
     slots.filter((slot) => slot.page_kind === 'reserved' && slot.page_position < page).at(-1)
       ?.page_position ?? -1;
@@ -2018,6 +2054,41 @@ function planSectionLayout(
   flowed: Array<ReflowEntry | null>;
   statements: D1PreparedStatement[];
 } {
+  if (section[0]?.page_kind === 'reserved') {
+    const flowed: Array<ReflowEntry | null> = Array.from({ length: section.length }, () => null);
+    const prefix = physicalEntries(section).slice(0, prefixEnd);
+    prefix.forEach((item, index) => {
+      flowed[index] = item;
+    });
+
+    let cursor = start;
+    let requiredCapacity = prefixEnd;
+    const manualOutput = new Set(
+      [...manualGapIndices(section)].filter((index) => index < prefixEnd),
+    );
+    for (let index = prefixEnd; index < start; index += 1) manualOutput.add(index);
+
+    for (const item of entries) {
+      if (!item) {
+        manualOutput.add(cursor);
+      }
+      requiredCapacity = Math.max(requiredCapacity, cursor + 1);
+      if (cursor < section.length) {
+        flowed[cursor] = item;
+      }
+      cursor += 1;
+    }
+
+    if (requiredCapacity > section.length) {
+      throw new BinderDomainError('reserved_page_full');
+    }
+
+    return {
+      slots: section,
+      flowed,
+      statements: rewriteSlotsStatements(db, section, flowed, manualOutput, new Set(), true),
+    };
+  }
   const pageSize = version.rows * version.columns;
   const { divider, byPage, sparePages, partialTail, occupiedTailPadding } = sectionStorage(
     allSlots,
@@ -2180,8 +2251,9 @@ function rewriteSlotsStatements(
   entries: Array<ReflowEntry | null>,
   manual: ReadonlySet<number>,
   automatic: ReadonlySet<number>,
+  includeReserved = false,
 ): D1PreparedStatement[] {
-  const available = slots.filter((slot) => slot.page_kind !== 'reserved');
+  const available = includeReserved ? slots : slots.filter((slot) => slot.page_kind !== 'reserved');
   const rows = available.map((slot, index) =>
     encodedSlot(entries[index] ?? null, slot, manual.has(index), automatic.has(index)),
   );
@@ -2255,8 +2327,7 @@ async function mutateLogicalEntries(
   const slots = await materializedSlots(db, versionId);
   const physicalIndex = locationIndex(version, anchor);
   const anchorSlot = slots[physicalIndex];
-  if (!anchorSlot || anchorSlot.page_kind === 'reserved')
-    domainError('binder_reserved_page_not_empty');
+  if (!anchorSlot) domainError('binder_slot_not_found');
   const section = binderSection(slots, anchor.page);
   const availableIndex = section.indexOf(anchorSlot);
   const physical = physicalEntries(section);
@@ -2317,7 +2388,6 @@ export async function moveBinderEntryByOffset(
       slot.column_index === from.column,
   );
   if (!sourceSlot) domainError('binder_slot_not_found');
-  if (sourceSlot.page_kind === 'reserved') domainError('binder_reserved_page_not_empty');
   const available = binderSection(slots, from.page);
   const sourceIndex = available.indexOf(sourceSlot);
   if (!Number.isSafeInteger(offset) || offset === 0 || Math.abs(offset) > 120_000)
@@ -2331,6 +2401,7 @@ export async function moveBinderEntryByOffset(
     domainError('binder_shift_occupied');
   const suffix = logicalSuffix(physical, sourceIndex, manualGapIndices(available, physical));
   if (
+    sourceSlot.page_kind !== 'reserved' &&
     'startsNewPage' in moved.entry &&
     moved.entry.startsNewPage &&
     Math.ceil(targetIndex / (version.rows * version.columns)) * (version.rows * version.columns) ===
@@ -2386,8 +2457,8 @@ export async function previewFullPokedexInsert(
   expectedRevision(version, requestedRevision);
   const slots = await materializedSlots(db, versionId);
   const anchorSlot = slots[locationIndex(version, at)];
-  if (!anchorSlot || anchorSlot.page_kind === 'reserved')
-    domainError('binder_reserved_page_not_empty');
+  if (anchorSlot?.page_kind === 'reserved') domainError('reserved_page_full');
+  if (!anchorSlot) domainError('binder_slot_not_found');
   const usable = binderSection(slots, at.page);
   const startIndex = usable.indexOf(anchorSlot);
   const current = logicalSuffix(physicalEntries(usable), startIndex, manualGapIndices(usable));
@@ -2598,19 +2669,17 @@ export async function getBinderBookmarks(
     )
     .bind(versionId)
     .all<BookmarkRow>();
-  const pocketBookmarks = rows.results
-    .filter((row) => byPageId.get(row.binder_page_id)?.kind !== 'reserved')
-    .map((row) => {
-      const page = byPageId.get(row.binder_page_id);
-      if (!page) domainError('binder_page_not_found');
-      return binderBookmarkSchema.parse({
-        id: row.id,
-        kind: 'pocket',
-        name: row.name,
-        pageId: row.binder_page_id,
-        at: { page: page.position, row: row.row_index, column: row.column_index },
-      });
+  const pocketBookmarks = rows.results.map((row) => {
+    const page = byPageId.get(row.binder_page_id);
+    if (!page) domainError('binder_page_not_found');
+    return binderBookmarkSchema.parse({
+      id: row.id,
+      kind: 'pocket',
+      name: row.name,
+      pageId: row.binder_page_id,
+      at: { page: page.position, row: row.row_index, column: row.column_index },
     });
+  });
   const reservedBookmarks = pages
     .filter((page) => page.kind === 'reserved')
     .map((page) =>
@@ -2639,12 +2708,11 @@ export async function setBinderBookmark(
     .bind(input.pageId, versionId)
     .first<PageRow>();
   if (!page) domainError('binder_page_not_found');
-  if (page.kind === 'reserved') domainError('binder_bookmark_reserved_page');
   validateLocation(version, { page: page.position, row: input.row, column: input.column });
   const id = newId('bookmark');
   const now = nowSeconds();
-  // Resolve ownership, page state and the exact pocket in the write itself. A concurrent
-  // reservation or capacity shrink makes this a no-op rather than a generic SQL error.
+  // Resolve ownership and the exact pocket in the write itself. A concurrent capacity
+  // shrink makes this a no-op rather than a generic SQL error.
   const saved = await db
     .prepare(
       `
@@ -2655,7 +2723,7 @@ export async function setBinderBookmark(
     JOIN binders binder ON binder.id = version.binder_id
     JOIN binder_slots slot ON slot.binder_page_id = page.id
     WHERE page.id = ?2 AND page.binder_version_id = ?7 AND binder.owner_id = ?8
-      AND page.kind <> 'reserved' AND slot.row_index = ?3 AND slot.column_index = ?4
+      AND slot.row_index = ?3 AND slot.column_index = ?4
       AND page.position * (version.rows * version.columns)
         + slot.row_index * version.columns + slot.column_index < version.capacity
     ON CONFLICT (binder_page_id, row_index, column_index) DO UPDATE SET name = excluded.name
@@ -2664,11 +2732,6 @@ export async function setBinderBookmark(
     .bind(id, page.id, input.row, input.column, input.name, now, versionId, ownerId)
     .run();
   if (!saved.meta.changes) {
-    const current = await db
-      .prepare('SELECT kind FROM binder_pages WHERE id = ?1 AND binder_version_id = ?2')
-      .bind(page.id, versionId)
-      .first<{ kind: string }>();
-    if (current?.kind === 'reserved') domainError('binder_bookmark_reserved_page');
     domainError('binder_slot_not_found');
   }
   const row = await db
@@ -2697,6 +2760,7 @@ export async function removeBinderBookmark(
   await readVersion(db, ownerId, versionId);
   if (bookmarkId.startsWith(RESERVED_PAGE_BOOKMARK_PREFIX))
     domainError('binder_bookmark_reserved_page');
+
   await db
     .prepare(
       `DELETE FROM binder_bookmarks WHERE id = ?1 AND binder_page_id IN (

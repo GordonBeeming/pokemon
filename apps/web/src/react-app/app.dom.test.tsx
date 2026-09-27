@@ -207,6 +207,103 @@ describe('async frontend announcements', () => {
     vi.unstubAllGlobals();
   });
 
+  it('moves Victini to the last pocket of a reserved page without unreserving it', async () => {
+    const slots = Array.from({ length: 9 }, (_, index) => ({
+      pageId: 'page-1',
+      row: Math.floor(index / 3),
+      column: index % 3,
+      cardId: null,
+      entryKind: index === 0 ? ('pokemon' as const) : ('empty' as const),
+      pokemonNumber: index === 0 ? 494 : null,
+      startsNewPage: index === 0,
+    }));
+    const initial = binderFixture(slots, { rows: 3, columns: 3, capacity: 18, pageCount: 2 });
+    let moved = false;
+    const destination = () => ({
+      id: 'page-2',
+      position: 1,
+      kind: 'reserved' as const,
+      label: 'Unova',
+      slots: slots.map((slot, index) => ({
+        ...slot,
+        pageId: 'page-2',
+        entryKind: moved && index === 8 ? ('pokemon' as const) : ('empty' as const),
+        pokemonNumber: moved && index === 8 ? 494 : null,
+        startsNewPage: moved && index === 8,
+      })),
+    });
+    apiMocks.binders.mockResolvedValue([testBinder]);
+    apiMocks.resolveCards.mockResolvedValue([]);
+    apiMocks.binder.mockImplementation((_id: string, page: number) =>
+      Promise.resolve({
+        version: { ...initial.version, revision: moved ? 2 : 1 },
+        pages: page === 1 ? [destination()] : initial.pages,
+        nextPage: page === 0 ? 1 : null,
+      }),
+    );
+    apiMocks.swapSlots.mockImplementation(() => {
+      moved = true;
+      return Promise.resolve({
+        version: { ...initial.version, revision: 2 },
+        pages: [destination()],
+      });
+    });
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('[data-binder-slot="0-0-0"]')?.click(),
+    );
+    await clickButton('Move to another pocket');
+    await clickButton('Next');
+    await waitFor(() => container.querySelector('[data-binder-slot="1-2-2"]') !== null);
+    const last = container.querySelector<HTMLButtonElement>('[data-binder-slot="1-2-2"]');
+    expect(last?.disabled).toBe(false);
+    await actAndSettle(() => last?.click());
+    await waitFor(
+      () =>
+        container.querySelector('[data-binder-slot="1-2-2"]')?.textContent?.includes('Victini') ===
+        true,
+    );
+    expect(apiMocks.swapSlots).toHaveBeenCalledWith('version-1', {
+      expectedRevision: 1,
+      source: { page: 0, row: 0, column: 0 },
+      target: { page: 1, row: 2, column: 2 },
+    });
+    expect(container.querySelector('.reserved-page-label')?.textContent).toContain('Unova');
+    expect(
+      container.querySelector('[data-binder-slot="1-2-2"]')?.getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(container.querySelector('.binder-move-notice')).toBeNull();
+  });
+
+  it('opens manual insertion at an empty pocket on a reserved page', async () => {
+    const fixture = binderFixture([
+      { pageId: 'page-1', row: 0, column: 0, cardId: null, entryKind: 'empty' },
+    ]);
+    apiMocks.binders.mockResolvedValue([testBinder]);
+    apiMocks.resolveCards.mockResolvedValue([]);
+    apiMocks.binder.mockResolvedValue({
+      ...fixture.response,
+      pages: fixture.pages.map((page) => ({ ...page, kind: 'reserved', label: 'Promos' })),
+    });
+    await actAndSettle(() => root.render(<BinderView onNotice={() => undefined} />));
+    await waitFor(() => container.querySelector('.binder-library-card') !== null);
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('.binder-library-card')?.click(),
+    );
+    await actAndSettle(() =>
+      container.querySelector<HTMLButtonElement>('[data-binder-slot="0-0-0"]')?.click(),
+    );
+    await clickButton('Insert targets here');
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain(
+      'Insert at page 1, pocket 1:1',
+    );
+    expect(container.textContent).not.toContain('Unreserve it before editing');
+  });
+
   it('announces route loading and completion with the loaded count', async () => {
     const tokens = deferred<Awaited<ReturnType<typeof apiMocks.tokens>>>();
     apiMocks.me.mockResolvedValue({ user: { id: 'owner' } });

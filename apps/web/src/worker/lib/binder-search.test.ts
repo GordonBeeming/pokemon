@@ -60,7 +60,7 @@ describe('binder space search', () => {
         ),
       ).toEqual(['reserved', 'reserved-page']);
       const empty = await searchBinderSpaces(db, 'owner', version.id, { q: 'empty' });
-      expect(empty.matches).toHaveLength(6);
+      expect(empty.matches).toHaveLength(10);
       expect(empty.matches.filter((item) => item.page === 3)).toEqual([
         expect.objectContaining({ row: 0, column: 0 }),
       ]);

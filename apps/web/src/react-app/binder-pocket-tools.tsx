@@ -9,8 +9,9 @@ import {
 import type { BinderSlotLocation } from '@pokedex/shared';
 
 export type PocketTool =
-  'same' | 'any' | 'shift' | 'remove' | 'placement' | 'insert' | 'reserve' | 'bookmark';
+  'same' | 'any' | 'move' | 'shift' | 'remove' | 'placement' | 'insert' | 'reserve' | 'bookmark';
 const tools: Array<{ tool: PocketTool; label: string; path: string }> = [
+  { tool: 'move', label: 'Move to another pocket', path: 'M4 12h16m-5-5 5 5-5 5' },
   {
     tool: 'same',
     label: 'Replace with same type',
@@ -74,9 +75,9 @@ export function PocketTools({
   const visible = !editable
     ? ['bookmark']
     : target
-      ? ['same', 'any', 'shift', 'remove', 'placement', 'bookmark']
+      ? ['same', 'any', 'move', 'shift', 'remove', 'placement', 'bookmark']
       : reserved
-        ? ['insert', 'remove', 'bookmark']
+        ? ['move', 'insert', 'remove', 'bookmark']
         : ['insert', 'reserve', 'bookmark'];
   return (
     <div
