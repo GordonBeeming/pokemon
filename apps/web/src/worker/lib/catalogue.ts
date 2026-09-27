@@ -603,6 +603,14 @@ export async function applyStagedCatalogueRun(
           )
         : 0;
     const claimToken = crypto.randomUUID();
+    const conflictingDates = await scalarCount(
+      db,
+      `SELECT COUNT(*) AS count FROM (
+      SELECT set_id,language FROM catalogue_stage_cards WHERE run_id=?1 GROUP BY set_id,language
+      HAVING COUNT(DISTINCT NULLIF(release_date,''))>1)`,
+      runId,
+    );
+    if (conflictingDates) throw new ApplicationError('set_release_date_conflict', 409);
     const now = nowSeconds();
     const results = await db.batch([
       db
@@ -622,11 +630,25 @@ export async function applyStagedCatalogueRun(
         .bind(runId, claimToken, now),
       db
         .prepare(
+          `INSERT INTO catalogue_sets(set_id,language,set_name,release_date,updated_at)
+        SELECT set_id,language,MIN(set_name),MIN(NULLIF(release_date,'')),?1
+        FROM catalogue_stage_cards WHERE run_id=?2
+          AND EXISTS(SELECT 1 FROM sync_run_claims WHERE run_id=?2 AND claim_token=?3)
+        GROUP BY set_id,language
+        ON CONFLICT(set_id,language) DO UPDATE SET
+          set_name=excluded.set_name,
+          release_date=CASE WHEN ?4=1 THEN COALESCE(excluded.release_date,catalogue_sets.release_date)
+            ELSE COALESCE(catalogue_sets.release_date,excluded.release_date) END,
+          updated_at=excluded.updated_at`,
+        )
+        .bind(now, runId, claimToken, run.complete_source),
+      db
+        .prepare(
           `INSERT INTO catalogue_cards
             (id, name, language, category, set_id, set_name, number, number_sort, supertype,
-             subtype, species, rarity, artist, release_date, pokedex_number, created_at, updated_at)
+             subtype, species, rarity, artist, pokedex_number, created_at, updated_at)
            SELECT card_id, name, language, category, set_id, set_name, number, number_sort,
-             supertype, subtype, species, rarity, artist, release_date, pokedex_number, ?1, ?1
+             supertype, subtype, species, rarity, artist, pokedex_number, ?1, ?1
            FROM catalogue_stage_cards
            WHERE run_id = ?2
              AND EXISTS (SELECT 1 FROM sync_run_claims WHERE run_id = ?2 AND claim_token = ?3)
@@ -635,7 +657,7 @@ export async function applyStagedCatalogueRun(
              number = excluded.number, number_sort = excluded.number_sort,
              supertype = excluded.supertype, subtype = excluded.subtype, species = excluded.species,
              rarity = excluded.rarity, artist = excluded.artist,
-             release_date = excluded.release_date, pokedex_number = excluded.pokedex_number,
+             pokedex_number = excluded.pokedex_number,
              is_active = 1, updated_at = excluded.updated_at
            WHERE catalogue_cards.is_custom = 0`,
         )
@@ -789,11 +811,12 @@ export async function listNationalPokedexCoverage(
            ) AS has_tcgdex_source,
            ROW_NUMBER() OVER (
              PARTITION BY c.pokedex_number
-             ORDER BY CASE WHEN c.release_date IS NULL THEN 1 ELSE 0 END, c.release_date,
+             ORDER BY CASE WHEN set_meta.release_date IS NULL THEN 1 ELSE 0 END, set_meta.release_date,
                c.set_name, CASE WHEN c.number_sort IS NULL THEN 1 ELSE 0 END,
                c.number_sort, c.number, c.id
            ) AS rank
          FROM catalogue_cards c
+         LEFT JOIN catalogue_sets set_meta ON set_meta.set_id=c.set_id AND set_meta.language=c.language
          LEFT JOIN art_manifest low ON low.card_id = c.id AND low.variant = 'low'
          LEFT JOIN art_manifest high ON high.card_id = c.id AND high.variant = 'high'
          WHERE c.is_active = 1 AND c.category = 'pokemon'
@@ -1046,7 +1069,7 @@ function view(row: CardRow, includePokemonNumber = false): CatalogueCardView {
 
 const cardSelect = `
   SELECT c.pokedex_number, c.id, c.name, c.language, c.category, c.set_id, c.set_name, c.number, c.number_sort,
-    c.supertype, c.subtype, c.species, c.rarity, c.artist, c.is_active, c.is_custom, c.updated_at,c.release_date,
+    c.supertype, c.subtype, c.species, c.rarity, c.artist, c.is_active, c.is_custom, c.updated_at,set_meta.release_date,
     s.provider AS source_provider, s.source_id, s.source_updated_at,
     cc.notes, cc.quantity, cc.updated_at AS collection_updated_at,
     cc.revision AS collection_revision, cc.last_added_order AS collection_added_order,
@@ -1056,6 +1079,7 @@ const cardSelect = `
     price.source_captured_at AS price_source_captured_at, price.fx_date AS price_fx_date,
     price.amount_aud_micros AS price_aud_micros
   FROM catalogue_cards c
+  LEFT JOIN catalogue_sets set_meta ON set_meta.set_id=c.set_id AND set_meta.language=c.language
   LEFT JOIN card_sources s ON s.rowid = (
     SELECT source.rowid FROM card_sources source
     WHERE source.card_id = c.id AND source.active = 1
@@ -1143,7 +1167,7 @@ export async function searchCards(
   const additionOrder =
     'CASE WHEN COALESCE(cc.quantity, 0) > 0 THEN -COALESCE(cc.last_added_order,0) ELSE 0 END';
   const leadingOrder = ownedFirst ? `${ownershipOrder}, ${additionOrder}, ` : '';
-  const releaseOrder = `NULLIF(c.release_date,'') IS NULL,COALESCE(c.release_date,''),c.set_name,c.set_id,c.number_sort IS NULL,COALESCE(c.number_sort,0),c.number,c.name,c.id`;
+  const releaseOrder = `set_meta.release_date IS NULL,COALESCE(set_meta.release_date,''),c.set_name,c.set_id,c.number_sort IS NULL,COALESCE(c.number_sort,0),c.number,c.name,c.id`;
   const predicate = where.join(' AND ');
   const cursor = decodeCatalogueCursor(filters.cursor);
   if (cursor && filters.offset !== 0) throw new ApplicationError('invalid_catalogue_cursor', 400);
@@ -1157,7 +1181,7 @@ export async function searchCards(
     pokedexNumber: filters.pokedexNumber ?? null,
     owned: filters.owned ?? null,
     ownedFirst,
-    order: 'owned-addition-release-v3',
+    order: 'owned-addition-set-release-v4',
     sort: filters.sort ?? null,
   });
   if (cursor && cursor.filterKey !== filterKey)
@@ -1238,8 +1262,9 @@ export async function listSetFacets(
     .prepare(
       `SELECT c.set_id, c.set_name, c.language, COUNT(*) AS total, COUNT(CASE WHEN COALESCE(cc.quantity, 0) > 0 THEN 1 END) AS owned
     FROM catalogue_cards c LEFT JOIN collection_cards cc ON cc.card_id = c.id AND cc.owner_id = ?1
+    LEFT JOIN catalogue_sets set_meta ON set_meta.set_id=c.set_id AND set_meta.language=c.language
     WHERE c.is_active = 1 AND (?2 IS NULL OR c.language = ?2)
-    GROUP BY c.set_id, c.set_name, c.language ORDER BY MIN(NULLIF(c.release_date,'')) IS NULL,MIN(NULLIF(c.release_date,'')),c.set_name COLLATE NOCASE,c.set_id,c.language`,
+    GROUP BY c.set_id, c.set_name, c.language ORDER BY set_meta.release_date IS NULL,set_meta.release_date,c.set_name COLLATE NOCASE,c.set_id,c.language`,
     )
     .bind(ownerId, language ?? null)
     .all<{
@@ -1310,6 +1335,11 @@ export async function createCustomCard(
   const id = newId('custom');
   const now = nowSeconds();
   await db.batch([
+    db
+      .prepare(
+        'INSERT INTO catalogue_sets(set_id,language,set_name,release_date,updated_at) VALUES(?1,?2,?3,NULL,?4) ON CONFLICT(set_id,language) DO NOTHING',
+      )
+      .bind(input.setId, input.language, input.setName, now),
     db
       .prepare(
         `INSERT INTO catalogue_cards
