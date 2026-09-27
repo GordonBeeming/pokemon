@@ -285,7 +285,7 @@ function ShelfCard({
         src={card.imageLowUrl}
         highSrc={card.imageHighUrl}
         alt={`${card.name} card art`}
-        dimmed={(card.collection?.quantity ?? 0) === 0}
+        display={{ context: 'collection', owned: (card.collection?.quantity ?? 0) > 0 }}
       />
       <span>
         <strong>{card.name}</strong>

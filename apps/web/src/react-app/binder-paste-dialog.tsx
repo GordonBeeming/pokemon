@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type { BinderPastePreview, BinderPasteRequest, BinderSlotLocation } from '@pokedex/shared';
 import { api } from './api';
 import { type CardClipboard } from './card-clipboard';
@@ -26,6 +26,7 @@ export function BinderPasteDialog({
   const [confirmed, setConfirmed] = useState(false);
   const [pending, setPending] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const saving = useRef(false);
   useEffect(() => {
     const controller = new AbortController();
     setPreview(null);
@@ -52,7 +53,8 @@ export function BinderPasteDialog({
     return () => controller.abort();
   }, [versionId, revision, at.page, at.row, at.column, mode, clipboard, attempt]);
   async function paste(): Promise<void> {
-    if (!preview || pending) return;
+    if (!preview || saving.current) return;
+    saving.current = true;
     setPending(true);
     setError('');
     try {
@@ -67,13 +69,14 @@ export function BinderPasteDialog({
       )
         onClose();
       else {
-        setError('The paste was not saved. Review the latest binder and try again.');
+        setError('Could not confirm the paste. Check the latest binder before trying again.');
         setPreview(null);
       }
     } catch (cause) {
       setError(userMessage(cause));
       setPreview(null);
     } finally {
+      saving.current = false;
       setPending(false);
     }
   }
@@ -82,11 +85,19 @@ export function BinderPasteDialog({
       anchor={at}
       title={`Paste ${clipboard.cards.length} ${clipboard.cards.length === 1 ? 'card' : 'cards'}`}
       wide
+      closeDisabled={pending}
       onClose={() => {
-        if (!pending) onClose();
+        if (!saving.current) onClose();
       }}
       footer={
         <>
+          {pending ? (
+            <p className="paste-progress" role="status">
+              <span className="paste-spinner" aria-hidden="true" />
+              Saving {clipboard.cards.length} {clipboard.cards.length === 1 ? 'card' : 'cards'} to
+              the binder…
+            </p>
+          ) : null}
           <button
             className="quiet-button tone-accent"
             type="button"
@@ -99,9 +110,7 @@ export function BinderPasteDialog({
           >
             {pending
               ? 'Pasting…'
-              : mode === 'insert'
-                ? 'Insert copied cards'
-                : 'Paste into existing pockets'}
+              : `Paste ${clipboard.cards.length} ${clipboard.cards.length === 1 ? 'card' : 'cards'}`}
           </button>
         </>
       }
@@ -110,26 +119,33 @@ export function BinderPasteDialog({
         Starting at page {at.page + 1}, pocket {at.row + 1}:{at.column + 1}. Cards are pasted in the
         copied order as unplaced targets. Your owned quantities stay unchanged.
       </p>
-      <div className="binder-header-actions">
-        <button
-          className={`quiet-button${mode === 'insert' ? ' tone-accent' : ''}`}
-          type="button"
-          aria-pressed={mode === 'insert'}
-          disabled={pending}
-          onClick={() => setMode('insert')}
-        >
-          Insert here
-        </button>
-        <button
-          className={`quiet-button${mode === 'replace' ? ' tone-accent' : ''}`}
-          type="button"
-          aria-pressed={mode === 'replace'}
-          disabled={pending}
-          onClick={() => setMode('replace')}
-        >
-          Paste over existing pockets
-        </button>
-      </div>
+      <fieldset className="paste-mode-options" disabled={pending}>
+        <legend>Paste method</legend>
+        <label>
+          <input
+            type="radio"
+            name="paste-mode"
+            value="replace"
+            checked={mode === 'replace'}
+            onChange={() => setMode('replace')}
+          />
+          Use existing pockets without shifting
+        </label>
+        <label>
+          <input
+            type="radio"
+            name="paste-mode"
+            value="insert"
+            checked={mode === 'insert'}
+            onChange={() => setMode('insert')}
+          />
+          Insert and shift later targets
+        </label>
+      </fieldset>
+      <p className="paste-method-help">
+        Choosing a method only updates the preview. Use “Paste {clipboard.cards.length}{' '}
+        {clipboard.cards.length === 1 ? 'card' : 'cards'}” below to apply it.
+      </p>
       {error ? (
         <>
           <p role="alert">{error}</p>
@@ -143,7 +159,12 @@ export function BinderPasteDialog({
           </button>
         </>
       ) : null}
-      {!preview && !error ? <p role="status">Checking space and affected targets…</p> : null}
+      {!preview && !error && !pending ? (
+        <p className="paste-progress" role="status">
+          <span className="paste-spinner" aria-hidden="true" />
+          Checking space and affected targets…
+        </p>
+      ) : null}
       {preview ? (
         <section aria-label="Paste preview">
           <p>

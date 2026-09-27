@@ -24,7 +24,7 @@ function RepresentativeArt({
       highSrc={highImage}
       alt=""
       missingText="Card preview unavailable"
-      dimmed={(entry?.ownedCards ?? 0) === 0}
+      display={{ context: 'collection', owned: (entry?.ownedCards ?? 0) > 0 }}
     />
   );
 }
