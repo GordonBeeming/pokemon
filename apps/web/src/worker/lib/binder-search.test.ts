@@ -46,6 +46,12 @@ describe('binder space search', () => {
         (await searchBinderSpaces(db, 'owner', version.id, { q: '#0025' })).matches,
       ).toHaveLength(1);
       expect(
+        (await searchBinderSpaces(db, 'owner', version.id, { q: '#25' })).matches,
+      ).toHaveLength(1);
+      expect((await searchBinderSpaces(db, 'owner', version.id, { q: '25' })).matches).toHaveLength(
+        1,
+      );
+      expect(
         (await searchBinderSpaces(db, 'owner', version.id, { q: 'Base Set' })).matches[0]?.kind,
       ).toBe('exact-card');
       expect(

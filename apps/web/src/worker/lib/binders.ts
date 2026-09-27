@@ -756,10 +756,13 @@ export async function searchBinderSpaces(
         `replace(${sql},json_extract(?8,'$[${index}][0]'),json_extract(?8,'$[${index}][1]'))`,
       `lower(${expression})`,
     );
+  const pokemonNumber = /^#?\d+$/u.test(query) ? Number(query.replace('#', '')) : null;
   const pokemon = NATIONAL_POKEDEX.filter((entry) =>
-    `#${String(entry.number).padStart(4, '0')} ${entry.number} ${entry.name} ${entry.discoveryCategory}`
-      .toLocaleLowerCase('en-AU')
-      .includes(query),
+    pokemonNumber !== null
+      ? entry.number === pokemonNumber
+      : `#${String(entry.number).padStart(4, '0')} ${entry.number} ${entry.name} ${entry.discoveryCategory}`
+          .toLocaleLowerCase('en-AU')
+          .includes(query),
   ).map((entry) => entry.number);
   const result = await db
     .prepare(

@@ -826,7 +826,12 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
         history[historyMode === 'push' ? 'pushState' : 'replaceState'](null, '', hash);
       lastHash.current = location.hash;
     } catch (error) {
-      if (!controller.signal.aborted) onNotice({ kind: 'error', message: userMessage(error) });
+      if (!controller.signal.aborted) {
+        pendingSearchPageFocus.current = null;
+        pendingPocketFocus.current = null;
+        scrollRestoredPocket.current = false;
+        onNotice({ kind: 'error', message: userMessage(error) });
+      }
     } finally {
       if (!controller.signal.aborted && mounted.current) setPending(false);
     }
@@ -854,6 +859,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
     candidateGeneration.current += 1;
     pendingPocketFocus.current = null;
     scrollRestoredPocket.current = false;
+    pendingSearchPageFocus.current = null;
     setPending(false);
     setBinder(null);
     setSelected(null);
