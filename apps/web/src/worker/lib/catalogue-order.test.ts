@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
-import { searchCards } from './catalogue';
+import { searchCards, listSetFacets } from './catalogue';
 import {
   incrementCollectionQuantity,
   patchCollectionNotes,
@@ -35,6 +35,46 @@ function setup(): D1Database {
   return sqliteD1(database);
 }
 describe('catalogue ownership ordering', () => {
+  it('sorts sets by oldest release first, unknown dates last, with stable cursor ties', async () => {
+    const db = setup();
+    for (const [id, set, name, date, number] of [
+      ['card-1', 'old', 'Zulu Old', '2000-01-01', '2'],
+      ['card-2', 'new', 'Alpha New', '2005-01-01', '1'],
+      ['card-3', 'unknown', 'A Unknown', null, '1'],
+      ['card-4', 'old', 'Zulu Old', '2000-01-01', '10'],
+      ['card-5', 'tie', 'Alpha Tie', '2000-01-01', '1'],
+    ])
+      await db
+        .prepare(
+          "UPDATE catalogue_cards SET category='special',set_id=?1,set_name=?2,release_date=?3,number=?4,number_sort=?5 WHERE id=?6",
+        )
+        .bind(set, name, date, number, Number(number), id)
+        .run();
+    const filters = { category: 'special' as const, owned: false, limit: 1, offset: 0 };
+    const ids: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await searchCards(db, 'owner', { ...filters, cursor });
+      ids.push(...page.cards.map((card) => card.id));
+      cursor = page.cursor;
+    } while (cursor);
+    expect(ids).toEqual(['card-5', 'card-1', 'card-4', 'card-2', 'card-3']);
+    expect((await listSetFacets(db, 'owner')).map((set) => set.setId)).toEqual([
+      'tie',
+      'old',
+      'new',
+      'unknown',
+      'base',
+    ]);
+    await incrementCollectionQuantity(db, 'owner', {
+      cardId: cardIdSchema.parse('card-2'),
+      mutationId: crypto.randomUUID(),
+      delta: 1,
+    });
+    expect(
+      (await searchCards(db, 'owner', { category: 'special', limit: 10, offset: 0 })).cards[0]?.id,
+    ).toBe('card-2');
+  });
   it('promotes copy additions but not notes, removals, or retried mutations', async () => {
     const db = setup();
     const card30 = cardIdSchema.parse('card-30'),

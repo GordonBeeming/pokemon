@@ -1,4 +1,5 @@
 import { NavigationLink } from './navigation-link';
+import { collectCardsForClipboard, copyCards, useCardClipboard } from './card-clipboard';
 import { cardRegion } from './card-region';
 import { BinderCopyPrompt } from './binder-copy-prompt';
 import type { BinderCopyChoice } from '@pokedex/shared';
@@ -517,6 +518,10 @@ export function CatalogueView({
   const [customName, setCustomName] = useState('');
   const [cards, setCards] = useState<CatalogueCardView[]>([]);
   const [total, setTotal] = useState(0);
+  const [copying, setCopying] = useState(false);
+  const copied = useCardClipboard();
+  const copyController = useRef<AbortController | null>(null);
+  const displayedFilters = useRef<URLSearchParams | null>(null);
   const [page, setPage] = useState(0);
   const [detail, setDetail] = useState<CatalogueDetailView | null>(null);
   const [selectedCardId, setSelectedCardId] = useState<string | null>(null);
@@ -565,6 +570,9 @@ export function CatalogueView({
     options: { keepDetail?: boolean } = {},
   ): Promise<void> {
     const moved = nextPage !== page;
+    copyController.current?.abort();
+    setCopying(false);
+    displayedFilters.current = null;
     const generation = ++searchGeneration.current;
     searchController.current?.abort();
     const controller = new AbortController();
@@ -585,6 +593,7 @@ export function CatalogueView({
       const result = await api.search(next, controller.signal);
       if (generation !== searchGeneration.current) return;
       setCards(result.cards);
+      displayedFilters.current = new URLSearchParams(next);
       setTotal(result.total);
       setPage(nextPage);
       if (!options.keepDetail) {
@@ -611,8 +620,31 @@ export function CatalogueView({
     return () => {
       searchController.current?.abort();
       detailController.current?.abort();
+      copyController.current?.abort();
     };
   }, [initialParams.toString(), refreshKey]);
+
+  async function copyResults(all: boolean): Promise<void> {
+    if (!displayedFilters.current || copying) return;
+    const controller = new AbortController();
+    copyController.current = controller;
+    setCopying(true);
+    try {
+      const results = all
+        ? await collectCardsForClipboard(displayedFilters.current, controller.signal)
+        : cards;
+      if (controller.signal.aborted) return;
+      copyCards(results);
+      onNotice({
+        kind: 'success',
+        message: `Copied ${results.length} ${results.length === 1 ? 'card' : 'cards'}. Open a binder, select a pocket, and choose Paste cards here.`,
+      });
+    } catch (cause) {
+      if (!controller.signal.aborted) onNotice({ kind: 'error', message: userMessage(cause) });
+    } finally {
+      if (!controller.signal.aborted) setCopying(false);
+    }
+  }
 
   async function openCard(id: string): Promise<void> {
     setSelectedCardId(id);
@@ -1007,6 +1039,43 @@ export function CatalogueView({
           {loading ? 'Searching…' : 'Search'}
         </button>
       </form>
+      <div className="binder-header-actions" aria-label="Copy catalogue cards">
+        <button
+          className="quiet-button tone-accent"
+          type="button"
+          disabled={busy || copying || total === 0 || total > 2000 || !displayedFilters.current}
+          onClick={() => void copyResults(true)}
+        >
+          {copying
+            ? 'Copying…'
+            : `Copy all ${total.toLocaleString('en-AU')} ${total === 1 ? 'card' : 'cards'}`}
+        </button>
+        {total > PAGE_SIZE ? (
+          <button
+            className="quiet-button"
+            type="button"
+            disabled={busy || copying || !cards.length || !displayedFilters.current}
+            onClick={() => void copyResults(false)}
+          >
+            Copy this page
+          </button>
+        ) : null}
+        {total > 2000 ? <span>Narrow the results to 2,000 cards or fewer to copy all.</span> : null}
+        {copied ? (
+          <span>
+            {copied.cards.length} {copied.cards.length === 1 ? 'card' : 'cards'} in binder
+            clipboard.{' '}
+            <NavigationLink
+              href="#binders"
+              onNavigate={() => {
+                window.location.hash = 'binders';
+              }}
+            >
+              Open binders
+            </NavigationLink>
+          </span>
+        ) : null}
+      </div>
       {!speciesName ? (
         <details className="custom-card-tools">
           <summary>Add a card that is not in TCGdex</summary>

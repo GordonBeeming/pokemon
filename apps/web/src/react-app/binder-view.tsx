@@ -31,6 +31,8 @@ import { CardArt } from './card-art';
 import { CardTile } from './card-tile';
 import { PocketPanel, PocketTools, type PocketTool } from './binder-pocket-tools';
 import { BinderInsertDialog } from './binder-insert-dialog';
+import { BinderPasteDialog } from './binder-paste-dialog';
+import { clearCardClipboard, useCardClipboard, type CardClipboard } from './card-clipboard';
 import { binderHash, parseBinderHash } from './binder-navigation';
 
 const layouts: Array<{ kind: BinderLayout['kind']; label: string; rows: number; columns: number }> =
@@ -1309,6 +1311,8 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
 }
 
 export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void }): ReactElement {
+  const clipboard = useCardClipboard();
+  const [pasteClipboard, setPasteClipboard] = useState<CardClipboard | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteName, setDeleteName] = useState('');
   const [tool, setTool] = useState<PocketTool | null>(null);
@@ -1322,6 +1326,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     setPageManagementOpen(false);
     setInsertOpen(false);
     setInsertAt(null);
+    setPasteClipboard(null);
     setDeleteOpen(false);
     setDeleteName('');
   }, []);
@@ -1492,6 +1497,29 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
           </button>
         </div>
       </header>
+      {clipboard ? (
+        <div className="binder-header-actions" role="status">
+          <span>
+            {clipboard.cards.length} {clipboard.cards.length === 1 ? 'card' : 'cards'} copied.
+            Select a pocket and choose “Paste cards here”.
+          </span>
+          <button
+            className="quiet-button"
+            type="button"
+            disabled={pending}
+            onClick={() => {
+              try {
+                clearCardClipboard();
+                setPasteClipboard(null);
+              } catch (cause) {
+                onNotice({ kind: 'error', message: userMessage(cause) });
+              }
+            }}
+          >
+            Clear copied cards
+          </button>
+        </div>
+      ) : null}
       {deleteOpen && currentBinder ? (
         <section
           className="surface binder-delete-confirmation"
@@ -1617,6 +1645,22 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
           />
         </PocketPanel>
       ) : null}
+      {pasteClipboard && version && selected ? (
+        <BinderPasteDialog
+          versionId={version.id}
+          revision={version.revision}
+          at={selected}
+          clipboard={pasteClipboard}
+          onClose={() => setPasteClipboard(null)}
+          onPaste={(request) =>
+            mutate(
+              () => api.pasteCards(version.id, request),
+              `${request.cardIds.length} copied targets pasted.`,
+              request.at,
+            )
+          }
+        />
+      ) : null}
       {insertOpen && version ? (
         <BinderInsertDialog
           versionId={version.id}
@@ -1733,6 +1777,13 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
             setPageManagementOpen(false);
             setManagementOpen(false);
             setInsertOpen(false);
+            setPasteClipboard(null);
+            if (nextTool === 'paste' && clipboard) {
+              setTool(null);
+              setReplacement(null);
+              setPasteClipboard(clipboard);
+              return;
+            }
             if (nextTool === 'move' && selected) {
               setTool(null);
               setMoveSource(selected);

@@ -13,7 +13,9 @@ Production sign-in uses passkeys with required user verification. `ENROLL_SECRET
 
 TCGdex supplies catalogue metadata and source art. Prices retain their source currency and timestamp, then use dated FX rates for conservative A$ estimates.
 
-Owned catalogue printings sort by their latest copy addition. Notes and quantity reductions do not change that order. Historical copies with no recorded addition order retain the catalogue tie-break order. The dashboard shows up to 50 recent owned printings. Its Active shortages button lists missing copies for unfilled targets in active binder plans, including Pokémon placeholders; copies placed elsewhere are unavailable to those targets.
+Owned catalogue printings sort by their latest copy addition. Notes and quantity reductions do not change that order. Other printings sort by set release date, oldest first, then set and collector number; unknown release dates come last. Historical copies with no recorded addition order use that same release-date order. The dashboard shows up to 50 recent owned printings. Its Active shortages button lists missing copies for unfilled targets in active binder plans, including Pokémon placeholders; copies placed elsewhere are unavailable to those targets.
+
+Use **Copy all cards** on any catalogue search or filter to copy up to 2,000 results in their displayed order, including later result pages. **Copy this page** copies only the visible page. The list stays in this browser's local storage across refreshes and tabs until cleared or replaced. In a binder, select a pocket and choose **Paste cards here**. The default fills consecutive existing pockets without shifting later targets. **Insert here** shifts targets and their assignments along instead. Both modes show a preview, respect reserved-page boundaries, and reject changes if the binder revision is stale. Replacing occupied targets requires confirmation and releases their slot assignments; owned quantities remain unchanged.
 
 ### Backfill missing artwork
 

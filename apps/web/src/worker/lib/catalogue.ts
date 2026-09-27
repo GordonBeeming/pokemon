@@ -20,6 +20,7 @@ interface CardRow {
   category: CatalogueBrief['category'];
   set_id: string;
   set_name: string;
+  release_date: string | null;
   number: string;
   number_sort: number | null;
   supertype: string | null;
@@ -71,7 +72,10 @@ const catalogueCursorSchema = z
   .object({
     ownershipRank: z.union([z.literal(0), z.literal(1)]),
     additionRank: z.number().int().nonpositive(),
+    releaseMissing: z.union([z.literal(0), z.literal(1)]),
+    releaseDate: z.string(),
     setName: z.string(),
+    setId: z.string(),
     numberSortMissing: z.union([z.literal(0), z.literal(1)]),
     numberSort: z.number().int(),
     number: z.string(),
@@ -89,7 +93,10 @@ function encodeCatalogueCursor(row: CardRow, filterKey: string, total: number): 
       JSON.stringify({
         ownershipRank: (row.quantity ?? 0) > 0 ? 0 : 1,
         additionRank: (row.quantity ?? 0) > 0 ? -(row.collection_added_order ?? 0) : 0,
+        releaseMissing: row.release_date ? 0 : 1,
+        releaseDate: row.release_date || '',
         setName: row.set_name,
+        setId: row.set_id,
         numberSortMissing: row.number_sort === null ? 1 : 0,
         numberSort: row.number_sort ?? 0,
         number: row.number,
@@ -1038,7 +1045,7 @@ function view(row: CardRow, includePokemonNumber = false): CatalogueCardView {
 
 const cardSelect = `
   SELECT c.pokedex_number, c.id, c.name, c.language, c.category, c.set_id, c.set_name, c.number, c.number_sort,
-    c.supertype, c.subtype, c.species, c.rarity, c.artist, c.is_active, c.is_custom, c.updated_at,
+    c.supertype, c.subtype, c.species, c.rarity, c.artist, c.is_active, c.is_custom, c.updated_at,c.release_date,
     s.provider AS source_provider, s.source_id, s.source_updated_at,
     cc.notes, cc.quantity, cc.updated_at AS collection_updated_at,
     cc.revision AS collection_revision, cc.last_added_order AS collection_added_order,
@@ -1134,6 +1141,7 @@ export async function searchCards(
   const additionOrder =
     'CASE WHEN COALESCE(cc.quantity, 0) > 0 THEN -COALESCE(cc.last_added_order,0) ELSE 0 END';
   const leadingOrder = ownedFirst ? `${ownershipOrder}, ${additionOrder}, ` : '';
+  const releaseOrder = `NULLIF(c.release_date,'') IS NULL,COALESCE(c.release_date,''),c.set_name,c.set_id,c.number_sort IS NULL,COALESCE(c.number_sort,0),c.number,c.name,c.id`;
   const predicate = where.join(' AND ');
   const cursor = decodeCatalogueCursor(filters.cursor);
   if (cursor && filters.offset !== 0) throw new ApplicationError('invalid_catalogue_cursor', 400);
@@ -1147,7 +1155,7 @@ export async function searchCards(
     pokedexNumber: filters.pokedexNumber ?? null,
     owned: filters.owned ?? null,
     ownedFirst,
-    order: 'owned-addition-v1',
+    order: 'owned-addition-release-v2',
   });
   if (cursor && cursor.filterKey !== filterKey)
     throw new ApplicationError('invalid_catalogue_cursor', 400);
@@ -1166,11 +1174,14 @@ export async function searchCards(
     if (ownedFirst) values.push(cursor.ownershipRank, cursor.additionRank);
     const cursorIndex = values.length + 1;
     pageWhere.push(
-      `(${leadingOrder}c.set_name, c.number_sort IS NULL, COALESCE(c.number_sort, 0), c.number, c.name, c.id) >
-       (${ownedFirst ? `?${ownershipIndex}, ?${ownershipIndex + 1}, ` : ''}?${cursorIndex}, ?${cursorIndex + 1}, ?${cursorIndex + 2}, ?${cursorIndex + 3}, ?${cursorIndex + 4}, ?${cursorIndex + 5})`,
+      `(${leadingOrder}${releaseOrder}) >
+       (${ownedFirst ? `?${ownershipIndex}, ?${ownershipIndex + 1}, ` : ''}${Array.from({ length: 9 }, (_, index) => `?${cursorIndex + index}`).join(',')})`,
     );
     values.push(
+      cursor.releaseMissing,
+      cursor.releaseDate,
       cursor.setName,
+      cursor.setId,
       cursor.numberSortMissing,
       cursor.numberSort,
       cursor.number,
@@ -1183,7 +1194,7 @@ export async function searchCards(
   const result = await db
     .prepare(
       `${cardSelect} WHERE ${pageWhere.join(' AND ')}
-       ORDER BY ${leadingOrder}c.set_name, c.number_sort IS NULL, COALESCE(c.number_sort, 0), c.number, c.name, c.id
+       ORDER BY ${leadingOrder}${releaseOrder}
        LIMIT ?${limitIndex} OFFSET ?${offsetIndex}`,
     )
     .bind(...values, filters.limit + 1, cursor ? 0 : filters.offset)
@@ -1225,7 +1236,7 @@ export async function listSetFacets(
       `SELECT c.set_id, c.set_name, c.language, COUNT(*) AS total, COUNT(CASE WHEN COALESCE(cc.quantity, 0) > 0 THEN 1 END) AS owned
     FROM catalogue_cards c LEFT JOIN collection_cards cc ON cc.card_id = c.id AND cc.owner_id = ?1
     WHERE c.is_active = 1 AND (?2 IS NULL OR c.language = ?2)
-    GROUP BY c.set_id, c.set_name, c.language ORDER BY c.set_name COLLATE NOCASE, c.language`,
+    GROUP BY c.set_id, c.set_name, c.language ORDER BY MIN(NULLIF(c.release_date,'')) IS NULL,MIN(NULLIF(c.release_date,'')),c.set_name COLLATE NOCASE,c.set_id,c.language`,
     )
     .bind(ownerId, language ?? null)
     .all<{

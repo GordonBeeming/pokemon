@@ -7,9 +7,19 @@ import {
   type ReactNode,
 } from 'react';
 import type { BinderSlotLocation } from '@pokedex/shared';
+import { useCardClipboard } from './card-clipboard';
 
 export type PocketTool =
-  'same' | 'any' | 'move' | 'shift' | 'remove' | 'placement' | 'insert' | 'reserve' | 'bookmark';
+  | 'same'
+  | 'any'
+  | 'move'
+  | 'shift'
+  | 'remove'
+  | 'placement'
+  | 'insert'
+  | 'paste'
+  | 'reserve'
+  | 'bookmark';
 const tools: Array<{ tool: PocketTool; label: string; path: string }> = [
   { tool: 'move', label: 'Move to another pocket', path: 'M4 12h16m-5-5 5 5-5 5' },
   {
@@ -30,6 +40,7 @@ const tools: Array<{ tool: PocketTool; label: string; path: string }> = [
   },
   { tool: 'placement', label: 'Owned copies and page break', path: 'M5 3v18M5 4h13l-3 5 3 5H5' },
   { tool: 'insert', label: 'Insert targets here', path: 'M4 3h12v18H4zM16 12h6M19 9v6' },
+  { tool: 'paste', label: 'Paste cards here', path: 'M8 4H5v17h14V4h-3M8 2h8v5H8zM8 12h8M8 16h6' },
   { tool: 'reserve', label: 'Reserve sleeve', path: 'M5 3h14v18l-7-5-7 5z' },
   { tool: 'bookmark', label: 'Bookmark pocket', path: 'M6 3h12v18l-6-4-6 4V3z' },
 ];
@@ -50,6 +61,7 @@ export function PocketTools({
   onTool: (tool: PocketTool) => void;
 }): ReactElement {
   const rail = useRef<HTMLDivElement | null>(null);
+  const clipboard = useCardClipboard();
   const [left, setLeft] = useState<number | undefined>(undefined);
   useLayoutEffect(() => {
     const update = () => {
@@ -79,6 +91,7 @@ export function PocketTools({
       : reserved
         ? ['move', 'insert', 'remove', 'bookmark']
         : ['insert', 'reserve', 'bookmark'];
+  if (editable && clipboard) visible.push('paste');
   return (
     <div
       ref={rail}
