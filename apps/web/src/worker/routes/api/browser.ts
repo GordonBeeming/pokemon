@@ -2,8 +2,8 @@ import { binderDestinationsQuerySchema } from './contracts';
 import { deleteBinderBody } from './contracts';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { languageSchema } from '@pokedex/shared';
-import { activeBinderShortages } from '../../lib/binders';
+import { languageSchema, binderSearchQuerySchema } from '@pokedex/shared';
+import { activeBinderShortages, searchBinderSpaces } from '../../lib/binders';
 import { getTcgdexPreviewArtResponse } from '../../lib/art';
 import {
   applyStagedCatalogueRun,
@@ -574,6 +574,18 @@ browserApiRoutes.get('/binders/versions/:id', async (c) => {
       ok: true,
       binder: result,
       ...result,
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.get('/binders/versions/:id/search', async (c) => {
+  const input = binderSearchQuerySchema.safeParse(c.req.query());
+  if (!input.success) return c.json({ ok: false, error: 'invalid_search' }, 400);
+  try {
+    return c.json({
+      ok: true,
+      ...(await searchBinderSpaces(c.env.DB, sessionOwner(c), c.req.param('id'), input.data)),
     });
   } catch (error) {
     return apiFailure(c, error);

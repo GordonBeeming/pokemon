@@ -2677,3 +2677,53 @@ dd {
   padding: 0.6rem;
   font-size: 0.8rem;
 }
+/* A bounded result list leaves the destination page close to the search controls. */
+.binder-space-search {
+  padding: 1rem;
+  margin-block: 1rem;
+}
+.binder-space-search > label {
+  display: block;
+  margin-bottom: 0.65rem;
+}
+.binder-space-query {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+.binder-space-query input {
+  flex: 1;
+  min-width: 0;
+}
+.binder-space-search p {
+  margin-block: 0.5rem;
+}
+.binder-space-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 0.5rem;
+  list-style: none;
+  padding: 0;
+  max-height: 20rem;
+  overflow: auto;
+}
+.binder-space-results button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  align-items: flex-start;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.binder-space-results span {
+  font-size: 0.85rem;
+  font-weight: 400;
+  line-height: 1.5;
+}
+@media print {
+  .binder-space-search {
+    display: none;
+  }
+}

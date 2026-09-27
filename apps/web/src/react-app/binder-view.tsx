@@ -1,4 +1,6 @@
 import { NavigationLink } from './navigation-link';
+import { BinderSpaceSearch } from './binder-space-search';
+import type { BinderSearchMatch } from '@pokedex/shared';
 import { BookmarkEditor, BookmarkJump, PageReservationEditor } from './binder-bookmarks';
 import type { BinderBookmark } from '@pokedex/shared';
 import { cardRegion } from './card-region';
@@ -484,6 +486,7 @@ function BinderGrid({
   return (
     <section
       className={`binder-page ${reservedPage ? 'reserved-binder-page' : ''} ${columns > 4 ? 'binder-page-wide' : ''}`}
+      tabIndex={-1}
       style={{
         width:
           columns > 4
@@ -700,6 +703,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
   const lastHash = useRef<string | null>(null);
   const scrollRestoredPocket = useRef(false);
   const pendingPocketFocus = useRef<BinderSlotLocation | null>(null);
+  const pendingSearchPageFocus = useRef<number | null>(null);
   const candidateController = useRef<AbortController | null>(null);
   const candidateGeneration = useRef(0);
   const version = binder?.version ?? null;
@@ -893,6 +897,16 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
     [],
   );
   useEffect(() => {
+    if (pending) return;
+    if (pendingSearchPageFocus.current === page) {
+      pendingSearchPageFocus.current = null;
+      const frame = requestAnimationFrame(() => {
+        const destination = document.querySelector<HTMLElement>('.binder-page');
+        destination?.focus({ preventScroll: true });
+        destination?.scrollIntoView({ block: 'center' });
+      });
+      return () => cancelAnimationFrame(frame);
+    }
     const at = pendingPocketFocus.current;
     if (!at) {
       scrollRestoredPocket.current = false;
@@ -917,7 +931,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
       } else pocket?.focus();
     });
     return () => cancelAnimationFrame(frame);
-  }, [binder, page]);
+  }, [binder, page, pending]);
   async function mutate(
     action: () => Promise<BinderMutationResult>,
     message: string,
@@ -1140,6 +1154,17 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
       if (stillHere()) setPending(false);
     }
   }
+  async function jumpToSpace(match: BinderSearchMatch): Promise<void> {
+    if (!version || pending) return;
+    const at =
+      match.row !== null && match.column !== null
+        ? { page: match.page, row: match.row, column: match.column }
+        : null;
+    pendingPocketFocus.current = at;
+    scrollRestoredPocket.current = at !== null;
+    pendingSearchPageFocus.current = at === null ? match.page : null;
+    await load(version.id, match.page, at);
+  }
   function startReplacement(mode: 'same' | 'any'): void {
     setReplacement(mode);
     setLegacyQuery('');
@@ -1237,6 +1262,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
     selectedBookmark,
     changeBookmark,
     jumpToBookmark,
+    jumpToSpace,
     legacyQuery,
     setLegacyQuery,
     replacement,
@@ -1316,6 +1342,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     selectedBookmark,
     changeBookmark,
     jumpToBookmark,
+    jumpToSpace,
     legacyQuery,
     setLegacyQuery,
     replacement,
@@ -1597,6 +1624,15 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
         />
       ) : null}
       <BinderUsage summary={summary} counts={counts} capacity={capacity} />
+      {version && (
+        <BinderSpaceSearch
+          key={`space-search-${version.id}`}
+          versionId={version.id}
+          revision={version.revision}
+          pending={pending}
+          onJump={(match) => void jumpToSpace(match)}
+        />
+      )}
       <BinderPageToolbar
         key={version?.id}
         onInsert={() => {

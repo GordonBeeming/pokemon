@@ -3,6 +3,7 @@ import {
   apiErrorSchema,
   artUrlSchema,
   binderLayoutSchema,
+  binderSearchResultSchema,
   binderBookmarkSchema,
   binderBookmarkSetRequestSchema,
   binderInsertDestinationsSchema,
@@ -438,6 +439,12 @@ export const api = {
     }).then((body) => body.state),
   binders: (signal?: AbortSignal): Promise<BinderView[]> =>
     request('/api/binders', bindersSchema, { signal }).then((body) => body.binders),
+  searchBinder: (id: string, q: string, offset = 0, signal?: AbortSignal) =>
+    request(
+      `/api/binders/versions/${encoded(id)}/search?${new URLSearchParams({ q, offset: String(offset) })}`,
+      binderSearchResultSchema,
+      { signal },
+    ),
   binder: (id: string, page = 0, limit = 1, signal?: AbortSignal): Promise<BinderVersionPages> =>
     request(
       `/api/binders/versions/${encoded(id)}?page=${page}&limit=${limit}`,
