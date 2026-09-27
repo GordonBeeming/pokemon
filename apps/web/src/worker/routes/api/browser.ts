@@ -2,8 +2,18 @@ import { binderDestinationsQuerySchema } from './contracts';
 import { deleteBinderBody } from './contracts';
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { languageSchema, binderSearchQuerySchema, NATIONAL_POKEDEX } from '@pokedex/shared';
-import { activeBinderShortages, searchBinderSpaces } from '../../lib/binders';
+import {
+  languageSchema,
+  binderSearchQuerySchema,
+  binderPasteRequestSchema,
+  NATIONAL_POKEDEX,
+} from '@pokedex/shared';
+import {
+  activeBinderShortages,
+  searchBinderSpaces,
+  previewBinderPaste,
+  pasteBinderCards,
+} from '../../lib/binders';
 import { getTcgdexPreviewArtResponse } from '../../lib/art';
 import {
   applyStagedCatalogueRun,
@@ -833,6 +843,30 @@ browserApiRoutes.put('/binders/versions/:id/pages/order', async (c) => {
   }
 });
 
+browserApiRoutes.post('/binders/versions/:id/entries/paste/preview', async (c) => {
+  try {
+    const parsed = binderPasteRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      preview: await previewBinderPaste(c.env.DB, sessionOwner(c), c.req.param('id'), parsed.data),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.post('/binders/versions/:id/entries/paste', async (c) => {
+  try {
+    const parsed = binderPasteRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await pasteBinderCards(c.env.DB, sessionOwner(c), c.req.param('id'), parsed.data),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
 browserApiRoutes.post('/binders/versions/:id/entries/insert', async (c) => {
   try {
     const parsed = binderInsertRequestSchema.safeParse(await parsedJson(c.req.raw));

@@ -414,6 +414,28 @@ export const binderInsertRequestSchema = binderRevisionRequestSchema
 export const binderCompactRemoveRequestSchema = binderRevisionRequestSchema
   .extend({ at: binderSlotLocationSchema })
   .strict();
+export const binderPasteRequestSchema = binderRevisionRequestSchema
+  .extend({
+    at: binderSlotLocationSchema,
+    cardIds: z.array(cardIdSchema).min(1).max(2000),
+    mode: z.enum(['insert', 'replace']),
+    confirmReplace: z.boolean().default(false),
+  })
+  .strict();
+export type BinderPasteRequest = z.infer<typeof binderPasteRequestSchema>;
+export const binderPastePreviewSchema = z
+  .object({
+    revision: z.number().int().positive(),
+    count: z.number().int().positive(),
+    replacedTargets: z.number().int().nonnegative(),
+    unassignedCopies: z.number().int().nonnegative(),
+    shiftedTargets: z.number().int().nonnegative(),
+    at: binderSlotLocationSchema,
+    end: binderSlotLocationSchema,
+    reservedPage: z.boolean(),
+  })
+  .strict();
+export type BinderPastePreview = z.infer<typeof binderPastePreviewSchema>;
 export const binderOffsetMoveRequestSchema = binderRevisionRequestSchema
   .extend({
     from: binderSlotLocationSchema,

@@ -13,6 +13,9 @@ import {
   cardIdSchema,
   NATIONAL_POKEDEX,
   type BinderBookmark,
+  binderPasteRequestSchema,
+  type BinderPasteRequest,
+  type BinderPastePreview,
   type BinderBookmarkSetRequest,
   type BinderCapacityError,
   type BinderCopyChoice,
@@ -175,6 +178,8 @@ export type BinderErrorCode =
   | 'binder_page_contains_targets'
   | 'binder_reserved_page_not_empty'
   | 'reserved_page_full'
+  | 'binder_paste_no_space'
+  | 'binder_paste_confirmation_required'
   | 'binder_bookmark_reserved_page'
   | 'card_not_found';
 
@@ -2375,6 +2380,100 @@ export function insertBinderEntries(
     ...entries.map((entry) => ({ entry, assignedCardId: null })),
     ...current.slice(index + (entries.length > 0 && current[index] === null ? 1 : 0)),
   ]);
+}
+
+async function planBinderPaste(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  input: BinderPasteRequest,
+) {
+  const request = binderPasteRequestSchema.parse(input);
+  const version = await readVersion(db, ownerId, versionId);
+  requireEditable(version);
+  expectedRevision(version, request.expectedRevision);
+  const ids = [...new Set(request.cardIds)];
+  const found = await db
+    .prepare('SELECT id FROM catalogue_cards WHERE id IN (SELECT value FROM json_each(?1))')
+    .bind(JSON.stringify(ids))
+    .all<{ id: string }>();
+  if (found.results.length !== ids.length) domainError('card_not_found');
+  const slots = await materializedSlots(db, versionId);
+  const anchor = slots[locationIndex(version, request.at)];
+  if (!anchor) domainError('binder_slot_not_found');
+  const section = binderSection(slots, request.at.page);
+  const start = section.indexOf(anchor);
+  const entries: ReflowEntry[] = request.cardIds.map((cardId) => ({
+    entry: { kind: 'exact-card', cardId, startsNewPage: false },
+    assignedCardId: null,
+  }));
+  let statements: D1PreparedStatement[];
+  let replacedTargets = 0,
+    unassignedCopies = 0,
+    shiftedTargets = 0;
+  let destinations: MaterializedSlot[];
+  if (request.mode === 'replace') {
+    destinations = section.slice(start, start + entries.length);
+    if (destinations.length !== entries.length) domainError('binder_paste_no_space');
+    replacedTargets = destinations.filter((slot) => slotEntry(slot) !== null).length;
+    unassignedCopies = destinations.filter((slot) => slot.assigned_card_id !== null).length;
+    statements = rewriteSlotsStatements(db, destinations, entries, new Set(), new Set(), true);
+  } else {
+    const physical = physicalEntries(section);
+    const suffix = logicalSuffix(physical, start, manualGapIndices(section, physical)).map(
+      (item) => (item ? { ...item, originalIndex: (item.originalIndex ?? start) - start } : null),
+    );
+    shiftedTargets = suffix.filter((item) => item !== null).length;
+    const changed = [...entries, ...suffix.slice(suffix[0] === null ? 1 : 0)];
+    const plan = planSectionLayout(db, version, slots, section, changed, start);
+    statements = plan.statements;
+    destinations = plan.slots.slice(start, start + entries.length);
+  }
+  const last = destinations.at(-1);
+  if (!last) domainError('binder_slot_not_found');
+  const preview: BinderPastePreview = {
+    revision: version.revision,
+    count: entries.length,
+    replacedTargets,
+    unassignedCopies,
+    shiftedTargets,
+    at: request.at,
+    end: { page: last.page_position, row: last.row_index, column: last.column_index },
+    reservedPage: anchor.page_kind === 'reserved',
+  };
+  return { version, statements, preview, request };
+}
+
+export async function previewBinderPaste(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  input: BinderPasteRequest,
+): Promise<BinderPastePreview> {
+  return (await planBinderPaste(db, ownerId, versionId, input)).preview;
+}
+
+export async function pasteBinderCards(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  input: BinderPasteRequest,
+): Promise<BinderMutationResult> {
+  const plan = await planBinderPaste(db, ownerId, versionId, input);
+  if (
+    plan.request.mode === 'replace' &&
+    plan.preview.replacedTargets > 0 &&
+    !plan.request.confirmReplace
+  )
+    domainError('binder_paste_confirmation_required');
+  await runVersionBatch(db, ownerId, versionId, plan.version.revision, false, [
+    ...plan.statements,
+    ...revisionStatements(db, plan.version, nowSeconds()),
+  ]);
+  return {
+    ...(await mutationResult(db, ownerId, versionId, [plan.request.at.page])),
+    anchor: plan.request.at,
+  };
 }
 
 export function compactRemoveBinderEntry(

@@ -3,6 +3,7 @@ import {
   apiErrorSchema,
   artUrlSchema,
   binderLayoutSchema,
+  binderPastePreviewSchema,
   binderSearchResultSchema,
   binderBookmarkSchema,
   binderBookmarkSetRequestSchema,
@@ -29,6 +30,8 @@ import {
 } from '@pokedex/shared';
 import type {
   BinderLayout,
+  BinderPasteRequest,
+  BinderPastePreview,
   BinderBookmark,
   BinderBookmarkSetRequest,
   BinderEntry,
@@ -568,6 +571,21 @@ export const api = {
       binderAssignmentCandidatesEnvelopeSchema,
       { signal },
     ).then((body) => body.candidates),
+  previewPaste: (
+    id: string,
+    input: BinderPasteRequest,
+    signal?: AbortSignal,
+  ): Promise<BinderPastePreview> =>
+    request(
+      `/api/binders/versions/${encoded(id)}/entries/paste/preview`,
+      successSchema.extend({ preview: binderPastePreviewSchema }),
+      { method: 'POST', body: json(input), signal },
+    ).then((body) => body.preview),
+  pasteCards: (id: string, input: BinderPasteRequest): Promise<BinderMutationResult> =>
+    request(`/api/binders/versions/${encoded(id)}/entries/paste`, binderMutationEnvelopeSchema, {
+      method: 'POST',
+      body: json(input),
+    }).then((body) => body.binder),
   insertEntries: (
     id: string,
     at: BinderSlotLocation,
