@@ -1221,8 +1221,10 @@ async function orderingRows(db: D1Database, cardIds: string[]): Promise<Map<stri
     const placeholders = chunk.map((_id, index) => `?${index + 1}`).join(',');
     const result = await db
       .prepare(
-        `SELECT id, set_name, number, name, language, release_date, pokedex_number
-         FROM catalogue_cards WHERE id IN (${placeholders})`,
+        `SELECT c.id,c.set_name,c.number,c.name,c.language,set_meta.release_date,c.pokedex_number
+         FROM catalogue_cards c LEFT JOIN catalogue_sets set_meta
+           ON set_meta.set_id=c.set_id AND set_meta.language=c.language
+         WHERE c.id IN (${placeholders})`,
       )
       .bind(...chunk)
       .all<OrderingRow>();

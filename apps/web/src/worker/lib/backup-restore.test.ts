@@ -193,6 +193,22 @@ async function seedReferencedArt(art: R2Bucket): Promise<void> {
 }
 
 describe('backup restore', () => {
+  it('backs up set dates and restores them into sets without putting dates on cards', async () => {
+    const { database, db, art } = setup();
+    await seedReferencedArt(art);
+    database.exec("INSERT INTO catalogue_sets VALUES('set-1','en','Set','1999-01-09',1)");
+    await createBackup(db, art, 'owner', { backupId: 'backup_set_dates' });
+    database.exec("DELETE FROM catalogue_sets WHERE set_id='set-1'");
+    await restoreBackup(db, art, 'owner', 'backup_set_dates');
+    expect(
+      database.prepare("SELECT release_date FROM catalogue_sets WHERE set_id='set-1'").get(),
+    ).toEqual({ release_date: '1999-01-09' });
+    expect(
+      database
+        .prepare('SELECT COUNT(*) AS count FROM catalogue_cards WHERE release_date IS NOT NULL')
+        .get(),
+    ).toEqual({ count: 0 });
+  });
   it('preserves copy-addition order across backup and restore', async () => {
     const { database, db, art } = setup();
     await seedReferencedArt(art);

@@ -43,13 +43,20 @@ describe('catalogue ownership ordering', () => {
       ['card-3', 'unknown', 'A Unknown', null, '1'],
       ['card-4', 'old', 'Zulu Old', '2000-01-01', '10'],
       ['card-5', 'tie', 'Alpha Tie', '2000-01-01', '1'],
-    ])
+    ]) {
       await db
         .prepare(
-          "UPDATE catalogue_cards SET category='special',set_id=?1,set_name=?2,release_date=?3,number=?4,number_sort=?5 WHERE id=?6",
+          "UPDATE catalogue_cards SET category='special',set_id=?1,set_name=?2,number=?3,number_sort=?4 WHERE id=?5",
         )
-        .bind(set, name, date, number, Number(number), id)
+        .bind(set, name, number, Number(number), id)
         .run();
+      await db
+        .prepare(
+          "INSERT INTO catalogue_sets(set_id,language,set_name,release_date,updated_at) VALUES(?1,'en',?2,?3,1) ON CONFLICT(set_id,language) DO NOTHING",
+        )
+        .bind(set, name, date)
+        .run();
+    }
     const filters = { category: 'special' as const, owned: false, limit: 1, offset: 0 };
     const ids: string[] = [];
     let cursor: string | null = null;

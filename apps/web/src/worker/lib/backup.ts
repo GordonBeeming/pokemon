@@ -237,9 +237,10 @@ const backupQueries: readonly BackupQuery[] = [
     kind: 'catalogue',
     sql: `SELECT c.rowid AS backup_cursor, c.id, c.name, c.language, c.category, c.set_id,
       c.set_name, c.number, c.supertype, c.subtype, c.species, c.rarity, c.artist,
-      c.release_date, c.pokedex_number, c.number_sort, c.is_custom, c.is_active,
+      set_meta.release_date, c.pokedex_number, c.number_sort, c.is_custom, c.is_active,
       c.created_at, c.updated_at
-     FROM catalogue_cards c WHERE c.rowid > ?2 AND (c.is_custom = 1
+     FROM catalogue_cards c LEFT JOIN catalogue_sets set_meta ON set_meta.set_id=c.set_id AND set_meta.language=c.language
+     WHERE c.rowid > ?2 AND (c.is_custom = 1
        OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
        OR EXISTS (SELECT 1 FROM species_representatives representative
          WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
@@ -794,8 +795,18 @@ export async function restoreBackup(
         db.prepare('DELETE FROM binders WHERE owner_id = ?1').bind(ownerId),
         db
           .prepare(
+            `INSERT INTO catalogue_sets(set_id,language,set_name,release_date,updated_at)
+          SELECT json_extract(j.value,'$.set_id'),json_extract(j.value,'$.language'),MIN(json_extract(j.value,'$.set_name')),
+            MIN(NULLIF(json_extract(j.value,'$.release_date'),'')),MAX(json_extract(j.value,'$.updated_at'))
+          FROM ${jsonRows} AND c.kind='catalogue'
+          GROUP BY json_extract(j.value,'$.set_id'),json_extract(j.value,'$.language')
+          ON CONFLICT(set_id,language) DO UPDATE SET release_date=COALESCE(catalogue_sets.release_date,excluded.release_date)`,
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
             `INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,supertype,subtype,species,rarity,artist,release_date,pokedex_number,number_sort,is_custom,is_active,created_at,updated_at)
-           SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.name'),json_extract(j.value,'$.language'),json_extract(j.value,'$.category'),json_extract(j.value,'$.set_id'),json_extract(j.value,'$.set_name'),json_extract(j.value,'$.number'),json_extract(j.value,'$.supertype'),json_extract(j.value,'$.subtype'),json_extract(j.value,'$.species'),json_extract(j.value,'$.rarity'),json_extract(j.value,'$.artist'),json_extract(j.value,'$.release_date'),json_extract(j.value,'$.pokedex_number'),json_extract(j.value,'$.number_sort'),json_extract(j.value,'$.is_custom'),json_extract(j.value,'$.is_active'),json_extract(j.value,'$.created_at'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='catalogue'
+           SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.name'),json_extract(j.value,'$.language'),json_extract(j.value,'$.category'),json_extract(j.value,'$.set_id'),json_extract(j.value,'$.set_name'),json_extract(j.value,'$.number'),json_extract(j.value,'$.supertype'),json_extract(j.value,'$.subtype'),json_extract(j.value,'$.species'),json_extract(j.value,'$.rarity'),json_extract(j.value,'$.artist'),NULL,json_extract(j.value,'$.pokedex_number'),json_extract(j.value,'$.number_sort'),json_extract(j.value,'$.is_custom'),json_extract(j.value,'$.is_active'),json_extract(j.value,'$.created_at'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='catalogue'
            ON CONFLICT(id) DO NOTHING`,
           )
           .bind(restoreRunId, ownerId),
