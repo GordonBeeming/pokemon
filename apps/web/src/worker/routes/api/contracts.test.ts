@@ -39,6 +39,11 @@ describe('API contracts', () => {
     });
     expect(catalogueFilters({ owned: 'true' }, false).owned).toBeUndefined();
     expect(() => catalogueFilters({ owned: 'sometimes' }, true)).toThrow('invalid_filter');
+    expect(catalogueFilters({ sort: 'release', owned: 'true' }, true)).toMatchObject({
+      sort: 'release',
+      owned: true,
+    });
+    expect(() => catalogueFilters({ sort: 'random' }, true)).toThrow('invalid_filter');
   });
 
   it('defines bounded planner summary and preview response shapes', () => {

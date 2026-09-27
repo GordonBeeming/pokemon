@@ -75,8 +75,10 @@ export const useCardClipboard = (): CardClipboard | null =>
 export async function collectCardsForClipboard(
   filters: URLSearchParams,
   signal: AbortSignal,
+  order: 'displayed' | 'release' = 'displayed',
 ): Promise<CatalogueCardView[]> {
   const params = new URLSearchParams(filters);
+  if (order === 'release') params.set('sort', 'release');
   params.delete('offset');
   params.delete('cursor');
   params.delete('setName');

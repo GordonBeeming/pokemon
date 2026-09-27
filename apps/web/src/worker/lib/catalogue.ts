@@ -55,6 +55,7 @@ export function catalogueSyncLanguage(value: unknown): LanguageCode {
 }
 
 export interface CatalogueFilters {
+  sort?: 'release';
   query?: string;
   language?: LanguageCode;
   category?: CatalogueBrief['category'];
@@ -1131,12 +1132,13 @@ export async function searchCards(
     where.push(filters.owned ? 'COALESCE(cc.quantity, 0) > 0' : 'COALESCE(cc.quantity, 0) = 0');
   }
   const ownedFirst =
-    filters.owned === true ||
-    !filters.setId ||
-    fts !== null ||
-    cardNumber !== null ||
-    Boolean(filters.species) ||
-    filters.pokedexNumber !== undefined;
+    filters.sort !== 'release' &&
+    (filters.owned === true ||
+      !filters.setId ||
+      fts !== null ||
+      cardNumber !== null ||
+      Boolean(filters.species) ||
+      filters.pokedexNumber !== undefined);
   const ownershipOrder = 'CASE WHEN COALESCE(cc.quantity, 0) > 0 THEN 0 ELSE 1 END';
   const additionOrder =
     'CASE WHEN COALESCE(cc.quantity, 0) > 0 THEN -COALESCE(cc.last_added_order,0) ELSE 0 END';
@@ -1155,7 +1157,8 @@ export async function searchCards(
     pokedexNumber: filters.pokedexNumber ?? null,
     owned: filters.owned ?? null,
     ownedFirst,
-    order: 'owned-addition-release-v2',
+    order: 'owned-addition-release-v3',
+    sort: filters.sort ?? null,
   });
   if (cursor && cursor.filterKey !== filterKey)
     throw new ApplicationError('invalid_catalogue_cursor', 400);

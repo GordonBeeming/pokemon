@@ -67,3 +67,28 @@ it('refuses changed or looping search pages instead of silently truncating the c
     collectCardsForClipboard(new URLSearchParams(), new AbortController().signal),
   ).rejects.toThrow('2,000');
 });
+it('requests release-date order for every page without changing the displayed filters', async () => {
+  const received: string[] = [];
+  search.mockImplementation((params: URLSearchParams) => {
+    received.push(params.toString());
+    return Promise.resolve(
+      params.has('cursor')
+        ? { cards: [card('new-owned')], total: 2, cursor: null }
+        : { cards: [card('old')], total: 2, cursor: 'next' },
+    );
+  });
+  const filters = new URLSearchParams({ pokedexNumber: '7', language: 'en', owned: 'true' });
+  expect(
+    (await collectCardsForClipboard(filters, new AbortController().signal, 'release')).map(
+      (card) => card.id,
+    ),
+  ).toEqual(['old', 'new-owned']);
+  expect(received).toHaveLength(2);
+  for (const text of received) {
+    const query = new URLSearchParams(text);
+    expect(query.get('sort')).toBe('release');
+    expect(query.get('owned')).toBe('true');
+    expect(query.get('pokedexNumber')).toBe('7');
+  }
+  expect(filters.has('sort')).toBe(false);
+});

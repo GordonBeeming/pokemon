@@ -55,6 +55,8 @@ export function catalogueFilters(
   query: Record<string, string>,
   includeOwned: boolean,
 ): CatalogueFilters {
+  if (query.sort !== undefined && query.sort !== 'release')
+    throw new ApplicationError('invalid_filter', 400);
   const language = query.language ? languageSchema.safeParse(query.language) : undefined;
   const category = query.category ? cardCategorySchema.safeParse(query.category) : undefined;
   if ((language && !language.success) || (category && !category.success))
@@ -75,6 +77,7 @@ export function catalogueFilters(
   )
     throw new ApplicationError('invalid_filter', 400);
   return {
+    sort: query.sort === 'release' ? 'release' : undefined,
     query: query.q,
     includePokemonNumber: query.includePokemonNumber === 'true',
     language: language?.success ? language.data : undefined,

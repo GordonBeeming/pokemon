@@ -74,6 +74,41 @@ describe('catalogue ownership ordering', () => {
     expect(
       (await searchCards(db, 'owner', { category: 'special', limit: 10, offset: 0 })).cards[0]?.id,
     ).toBe('card-2');
+    const releaseIds: string[] = [];
+    cursor = null;
+    do {
+      const result = await searchCards(db, 'owner', {
+        category: 'special',
+        sort: 'release',
+        limit: 1,
+        offset: 0,
+        cursor,
+      });
+      releaseIds.push(...result.cards.map((card) => card.id));
+      cursor = result.cursor;
+    } while (cursor);
+    expect(releaseIds).toEqual(['card-5', 'card-1', 'card-4', 'card-2', 'card-3']);
+    const displayed = await searchCards(db, 'owner', { category: 'special', limit: 1, offset: 0 });
+    await expect(
+      searchCards(db, 'owner', {
+        category: 'special',
+        sort: 'release',
+        limit: 1,
+        offset: 0,
+        cursor: displayed.cursor,
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_catalogue_cursor' });
+    expect(
+      (
+        await searchCards(db, 'owner', {
+          category: 'special',
+          owned: true,
+          sort: 'release',
+          limit: 10,
+          offset: 0,
+        })
+      ).cards.map((card) => card.id),
+    ).toEqual(['card-2']);
   });
   it('promotes copy additions but not notes, removals, or retried mutations', async () => {
     const db = setup();
