@@ -45,7 +45,12 @@ export function BinderCopyPrompt({
       <Heading ref={heading} tabIndex={-1}>
         Which copy are you placing?
       </Heading>
-      <CardArt src={card.imageLowUrl} highSrc={card.imageHighUrl} alt="" />
+      <CardArt
+        src={card.imageLowUrl}
+        highSrc={card.imageHighUrl}
+        alt=""
+        display={{ context: 'preview' }}
+      />
       <p>
         <strong>{card.name}</strong> · {card.setName} · {card.number} ·{' '}
         {card.language.toUpperCase()}

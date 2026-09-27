@@ -291,7 +291,12 @@ export function BinderInsertDialog({
                   toggle(card.id, { kind: 'exact-card', cardId: card.id, startsNewPage: false })
                 }
               >
-                <CardArt src={card.imageLowUrl} highSrc={card.imageHighUrl} alt="" />
+                <CardArt
+                  src={card.imageLowUrl}
+                  highSrc={card.imageHighUrl}
+                  alt=""
+                  display={{ context: 'preview' }}
+                />
                 {card.name}
                 <small>
                   {card.setName} · {card.number} · {card.language.toUpperCase()}

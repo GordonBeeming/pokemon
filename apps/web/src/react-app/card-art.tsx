@@ -1,5 +1,15 @@
 import { useState, type ReactElement } from 'react';
 
+export type CardArtDisplay =
+  | { context: 'binder'; placed: boolean }
+  | { context: 'collection'; owned: boolean }
+  | { context: 'preview' };
+export function isCardArtDimmed(display: CardArtDisplay): boolean {
+  if (display.context === 'binder') return !display.placed;
+  if (display.context === 'collection') return !display.owned;
+  return false;
+}
+
 export function CardArt({
   src,
   highSrc,
@@ -9,7 +19,7 @@ export function CardArt({
   missingText = 'Art unavailable',
   eager = false,
   announceLoading = false,
-  dimmed = false,
+  display,
 }: {
   src: string | null | undefined;
   highSrc?: string | null;
@@ -19,9 +29,10 @@ export function CardArt({
   missingText?: string;
   eager?: boolean;
   announceLoading?: boolean;
-  dimmed?: boolean;
+  display: CardArtDisplay;
 }): ReactElement {
   const identity = `${src ?? ''}|${highSrc ?? ''}`;
+  const dimmed = isCardArtDimmed(display);
   const [loadedSource, setLoadedSource] = useState<string | null>(null);
   const [failedSource, setFailedSource] = useState<string | null>(null);
   const failed = !src || failedSource === identity;
@@ -31,6 +42,8 @@ export function CardArt({
     <span
       className={`${className} card-art-frame${failed ? ` ${missingClassName}` : ''}${dimmed ? ' card-art-unowned' : ''}`}
       data-image-state={failed ? 'failed' : loading ? 'loading' : 'loaded'}
+      data-art-context={display.context}
+      data-art-dimmed={dimmed}
       aria-busy={loading || undefined}
       {...(failed && alt ? { role: 'img', 'aria-label': `${alt}. Art unavailable.` } : {})}
     >

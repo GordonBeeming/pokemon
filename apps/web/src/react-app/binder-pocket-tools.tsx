@@ -128,6 +128,7 @@ export function PocketPanel({
   children,
   footer,
   onClose,
+  closeDisabled = false,
 }: {
   anchor: BinderSlotLocation | null;
   title: string;
@@ -135,6 +136,7 @@ export function PocketPanel({
   children: ReactNode;
   footer?: ReactNode;
   onClose: () => void;
+  closeDisabled?: boolean;
 }): ReactElement {
   const panel = useRef<HTMLElement | null>(null);
   const close = useRef(onClose);
@@ -250,6 +252,7 @@ export function PocketPanel({
             className="icon-button pocket-panel-close"
             type="button"
             aria-label="Close pocket editor"
+            disabled={closeDisabled}
             onClick={onClose}
           >
             ×

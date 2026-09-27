@@ -586,7 +586,12 @@ function BinderGrid({
                 }}
               >
                 {card ? (
-                  <CardArt src={card.imageLowUrl} highSrc={card.imageHighUrl} alt="" />
+                  <CardArt
+                    src={card.imageLowUrl}
+                    highSrc={card.imageHighUrl}
+                    alt=""
+                    display={{ context: 'binder', placed: Boolean(slot.assignedCardId) }}
+                  />
                 ) : null}
                 <strong title={label(slot, cards)}>{visualLabel(slot, cards)}</strong>
                 <small>
@@ -998,6 +1003,21 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
       if (stillHere()) setPending(false);
     }
   }
+  function deselect(): void {
+    candidateController.current?.abort();
+    candidateGeneration.current += 1;
+    searchController.current?.abort();
+    pendingPocketFocus.current = null;
+    setSelected(null);
+    setReplacement(null);
+    setCopyCard(null);
+    resetPanels();
+    if (version) {
+      const hash = binderHash(version.id, page);
+      history.replaceState(null, '', hash);
+      lastHash.current = hash;
+    }
+  }
   async function select(at: BinderSlotLocation): Promise<void> {
     if (!version) return;
     candidateController.current?.abort();
@@ -1300,6 +1320,7 @@ function useBinderPlanner(onNotice: (notice: Notice) => void, resetPanels: () =>
     load,
     mutate,
     select,
+    deselect,
     selectedSlot,
     target,
     searchLegacyCards,
@@ -1383,6 +1404,7 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     load,
     mutate,
     select,
+    deselect,
     selectedSlot,
     target,
     searchLegacyCards,
@@ -1391,6 +1413,19 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
     reorderCurrentPage,
     insert,
   } = useBinderPlanner(onNotice, resetPanels);
+  useEffect(() => {
+    if (!selected || pending) return;
+    const outside = (event: PointerEvent) => {
+      if (
+        !(event.target instanceof Element) ||
+        event.target.closest('[data-binder-slot],.binder-pocket-tools,[role="dialog"]')
+      )
+        return;
+      deselect();
+    };
+    document.addEventListener('pointerdown', outside);
+    return () => document.removeEventListener('pointerdown', outside);
+  }, [selected, pending, deselect]);
   const currentBinder = binders.find((item) => item.id === version?.binderId);
   if (!binder)
     return (
@@ -1905,7 +1940,12 @@ export function BinderView({ onNotice }: { onNotice: (notice: Notice) => void })
                             disabled={pending}
                             onClick={() => setCopyCard(card)}
                             art={
-                              <CardArt src={card.imageLowUrl} highSrc={card.imageHighUrl} alt="" />
+                              <CardArt
+                                src={card.imageLowUrl}
+                                highSrc={card.imageHighUrl}
+                                alt=""
+                                display={{ context: 'preview' }}
+                              />
                             }
                             title={card.name}
                             subtitle={`${card.setName} · ${card.number}`}

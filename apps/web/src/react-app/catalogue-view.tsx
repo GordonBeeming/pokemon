@@ -51,7 +51,7 @@ function Art({
       alt={decorative ? '' : `${card.name} card art`}
       eager={highResolution}
       announceLoading={highResolution}
-      dimmed={(card.collection?.quantity ?? 0) === 0}
+      display={{ context: 'preview' }}
     />
   );
 }
