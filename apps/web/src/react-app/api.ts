@@ -67,7 +67,29 @@ const dashboardSchema = successSchema.extend({
   binderCount: z.number(),
   activeShortages: z.array(binderShortageSchema),
   activePokemonShortages: z.array(binderPokemonShortageSchema).optional().default([]),
+  activeShortageCount: z.number().optional(),
+  activeShortageEntries: z.number().optional(),
   cards: z.array(catalogueCardViewSchema),
+});
+const activeShortageEntrySchema = z.object({
+  kind: z.enum(['exact-card', 'pokemon']),
+  label: z.string(),
+  cardId: z.string().nullable(),
+  pokemonNumber: z.number().nullable(),
+  setId: z.string().nullable().optional(),
+  number: z.string().nullable().optional(),
+  language: z.string().nullable().optional(),
+  required: z.number(),
+  owned: z.number(),
+  assigned: z.number(),
+  available: z.number(),
+  missing: z.number(),
+});
+const activeShortagesResponseSchema = successSchema.extend({
+  entries: z.array(activeShortageEntrySchema).max(100),
+  totalMissing: z.number(),
+  totalEntries: z.number(),
+  nextOffset: z.number().nullable(),
 });
 const searchSchema = successSchema.extend({
   total: z.number().int().nonnegative(),
@@ -230,6 +252,8 @@ const registrationOptionsSchema = z.custom<PublicKeyCredentialCreationOptionsJSO
 });
 
 export type Dashboard = z.infer<typeof dashboardSchema>;
+export type ActiveShortageEntry = z.infer<typeof activeShortageEntrySchema>;
+export type ActiveShortagesReport = z.infer<typeof activeShortagesResponseSchema>;
 export type DesktopToken = z.infer<typeof tokenSchema>;
 export type PairingCode = z.infer<typeof pairCodeSchema>;
 export type SetFacet = z.infer<typeof setsSchema>['sets'][number];
@@ -353,6 +377,8 @@ export const api = {
     }).then(() => undefined),
   dashboard: (signal?: AbortSignal): Promise<Dashboard> =>
     request('/api/dashboard', dashboardSchema, { signal }),
+  activeShortages: (offset = 0, signal?: AbortSignal): Promise<ActiveShortagesReport> =>
+    request(`/api/dashboard/shortages?offset=${offset}`, activeShortagesResponseSchema, { signal }),
   search: (
     params: URLSearchParams,
     signal?: AbortSignal,

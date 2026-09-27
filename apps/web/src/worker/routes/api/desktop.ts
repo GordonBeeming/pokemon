@@ -120,6 +120,7 @@ desktopApiRoutes.post('/desktop/art/upload-tokens', async (c) => {
       parsed.data.variant,
       parsed.data.sha256,
       parsed.data.maxBytes,
+      parsed.data.onlyIfMissing,
     );
     return c.json(
       {

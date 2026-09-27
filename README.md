@@ -13,6 +13,16 @@ Production sign-in uses passkeys with required user verification. `ENROLL_SECRET
 
 TCGdex supplies catalogue metadata and source art. Prices retain their source currency and timestamp, then use dated FX rates for conservative A$ estimates.
 
+Owned catalogue printings sort by their latest copy addition. Notes and quantity reductions do not change that order. Historical copies with no recorded addition order retain the catalogue tie-break order. The dashboard shows up to 50 recent owned printings. Its Active shortages button lists missing copies for unfilled targets in active binder plans, including Pokémon placeholders; copies placed elsewhere are unavailable to those targets.
+
+### Backfill missing artwork
+
+`pnpm --dir apps/web art:backfill --out /absolute/run-directory` inventories all active English TCGdex-backed cards missing either artwork size and prepares verified source images without uploading them. It requires authenticated Wrangler access, `ffprobe`, and `cwebp`. Add `--source mfb-25,2021swsh-17` or `--limit 10` for a small trial.
+
+For uploads, add `--apply` and inject `POKEDEX_ART_TOKEN` through `op run` using a temporary `art:read`/`art:write` credential. Revoke it after the run. The importer tries TCGdex, product-linked TCGplayer images, the published Pokémon TCG dataset, and TCGCSV metadata. It requires an unambiguous set/card match, caches TCGCSV metadata daily, and never replaces existing artwork. Uploaded WebP bytes are read back and checksum-verified. Re-running inventories only remaining gaps.
+
+Each run writes `progress.jsonl` and `report.json`, including source URLs, unresolved matches, and errors. Applied runs also save their report under `maintenance/art-fallback/` in private R2. A successful run does not mean every card has an available source image; inspect unresolved entries before claiming complete coverage.
+
 ## Development
 
 Requirements: Node.js 22 or newer, pnpm 10, the stable Rust toolchain, and the platform prerequisites listed by Tauri.

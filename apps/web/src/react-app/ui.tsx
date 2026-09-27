@@ -10,6 +10,7 @@ import {
   type PairingCode,
 } from './api';
 import { CardArt } from './card-art';
+import { ActiveShortages } from './active-shortages';
 
 export type Route = 'dashboard' | 'catalogue' | 'sets' | 'species' | 'binders' | 'devices';
 export type Notice = { kind: 'error' | 'success'; message: string } | null;
@@ -293,6 +294,15 @@ function ShelfCard({
   );
 }
 
+export function activeShortageCount(data: Dashboard): number {
+  if (typeof data.activeShortageCount === 'number') {
+    return data.activeShortageCount;
+  }
+  const exact = (data.activeShortages ?? []).reduce((sum, item) => sum + item.missing, 0);
+  const pokemon = (data.activePokemonShortages ?? []).reduce((sum, item) => sum + item.missing, 0);
+  return exact + pokemon;
+}
+
 export function DashboardView({
   data,
   browse,
@@ -304,6 +314,10 @@ export function DashboardView({
   plan: () => void;
   chooseCard: (card: CatalogueCardView) => void;
 }): ReactElement {
+  const [shortagesOpen, setShortagesOpen] = useState(false);
+  const shortageTrigger = useRef<HTMLButtonElement | null>(null);
+  const shortageTotal = activeShortageCount(data);
+
   return (
     <>
       <header className="page-heading">
@@ -324,11 +338,52 @@ export function DashboardView({
           </NavigationLink>
         </div>
       </header>
+      <section className="metric-grid" aria-label="Collection measures">
+        <article className="metric">
+          <p>Owned unique</p>
+          <strong>{data.collection.uniqueOwned}</strong>
+        </article>
+        <article className="metric">
+          <p>Total quantity</p>
+          <strong>{data.collection.totalQuantity}</strong>
+        </article>
+        <article className="metric">
+          <p>Collection estimate</p>
+          <strong>{money(data.pricing.estimateAud)}</strong>
+        </article>
+        <button
+          type="button"
+          className="metric metric-action"
+          ref={shortageTrigger}
+          aria-expanded={shortagesOpen}
+          aria-controls="active-shortages-panel"
+          onClick={() => setShortagesOpen((open) => !open)}
+        >
+          <p>Active shortages</p>
+          <strong>{shortageTotal}</strong>
+          <span className="metric-toggle-hint">
+            {shortagesOpen ? 'Hide shortage report' : 'View shortage report'}
+          </span>
+        </button>
+      </section>
+      {shortagesOpen && (
+        <ActiveShortages
+          id="active-shortages-panel"
+          dashboard={data}
+          onClose={() => {
+            setShortagesOpen(false);
+            requestAnimationFrame(() => shortageTrigger.current?.focus());
+          }}
+        />
+      )}
       <section className="collection-shelf" aria-labelledby="collection-shelf-heading">
         <div className="shelf-heading">
           <div>
-            <h2 id="collection-shelf-heading">In your collection</h2>
-            <p>The cards themselves lead. Open one to find its printing again.</p>
+            <h2 id="collection-shelf-heading">Recently added cards</h2>
+            <p>
+              Showing up to 50 recently added owned printings. Adding another copy moves that card
+              to the front.
+            </p>
           </div>
           <span>{data.collection.uniqueOwned} unique</span>
         </div>
@@ -344,19 +399,6 @@ export function DashboardView({
             <p>Find a card or use the scanner to add the first physical copy.</p>
           </div>
         )}
-      </section>
-      <section className="metric-grid" aria-label="Collection measures">
-        {[
-          ['Owned unique', data.collection.uniqueOwned],
-          ['Total quantity', data.collection.totalQuantity],
-          ['Collection estimate', money(data.pricing.estimateAud)],
-          ['Active shortages', data.activeShortages.reduce((sum, item) => sum + item.missing, 0)],
-        ].map(([label, value]) => (
-          <article className="metric" key={String(label)}>
-            <p>{label}</p>
-            <strong>{value}</strong>
-          </article>
-        ))}
       </section>
     </>
   );

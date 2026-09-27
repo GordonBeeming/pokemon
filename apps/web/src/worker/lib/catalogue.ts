@@ -37,6 +37,7 @@ interface CardRow {
   quantity: number | null;
   collection_updated_at: number | null;
   collection_revision: number | null;
+  collection_added_order: number | null;
   low_key: string | null;
   high_key: string | null;
   price_source: 'tcgplayer' | 'cardmarket' | null;
@@ -69,6 +70,7 @@ export interface CatalogueFilters {
 const catalogueCursorSchema = z
   .object({
     ownershipRank: z.union([z.literal(0), z.literal(1)]),
+    additionRank: z.number().int().nonpositive(),
     setName: z.string(),
     numberSortMissing: z.union([z.literal(0), z.literal(1)]),
     numberSort: z.number().int(),
@@ -86,6 +88,7 @@ function encodeCatalogueCursor(row: CardRow, filterKey: string, total: number): 
     new TextEncoder().encode(
       JSON.stringify({
         ownershipRank: (row.quantity ?? 0) > 0 ? 0 : 1,
+        additionRank: (row.quantity ?? 0) > 0 ? -(row.collection_added_order ?? 0) : 0,
         setName: row.set_name,
         numberSortMissing: row.number_sort === null ? 1 : 0,
         numberSort: row.number_sort ?? 0,
@@ -1038,7 +1041,7 @@ const cardSelect = `
     c.supertype, c.subtype, c.species, c.rarity, c.artist, c.is_active, c.is_custom, c.updated_at,
     s.provider AS source_provider, s.source_id, s.source_updated_at,
     cc.notes, cc.quantity, cc.updated_at AS collection_updated_at,
-    cc.revision AS collection_revision,
+    cc.revision AS collection_revision, cc.last_added_order AS collection_added_order,
     low.object_key AS low_key, high.object_key AS high_key,
     price.source AS price_source, price.native_amount_micros AS price_native_micros,
     price.native_currency AS price_native_currency,
@@ -1121,12 +1124,16 @@ export async function searchCards(
     where.push(filters.owned ? 'COALESCE(cc.quantity, 0) > 0' : 'COALESCE(cc.quantity, 0) = 0');
   }
   const ownedFirst =
+    filters.owned === true ||
     !filters.setId ||
     fts !== null ||
     cardNumber !== null ||
     Boolean(filters.species) ||
     filters.pokedexNumber !== undefined;
   const ownershipOrder = 'CASE WHEN COALESCE(cc.quantity, 0) > 0 THEN 0 ELSE 1 END';
+  const additionOrder =
+    'CASE WHEN COALESCE(cc.quantity, 0) > 0 THEN -COALESCE(cc.last_added_order,0) ELSE 0 END';
+  const leadingOrder = ownedFirst ? `${ownershipOrder}, ${additionOrder}, ` : '';
   const predicate = where.join(' AND ');
   const cursor = decodeCatalogueCursor(filters.cursor);
   if (cursor && filters.offset !== 0) throw new ApplicationError('invalid_catalogue_cursor', 400);
@@ -1140,6 +1147,7 @@ export async function searchCards(
     pokedexNumber: filters.pokedexNumber ?? null,
     owned: filters.owned ?? null,
     ownedFirst,
+    order: 'owned-addition-v1',
   });
   if (cursor && cursor.filterKey !== filterKey)
     throw new ApplicationError('invalid_catalogue_cursor', 400);
@@ -1155,11 +1163,11 @@ export async function searchCards(
   const pageWhere = [...where];
   if (cursor) {
     const ownershipIndex = values.length + 1;
-    if (ownedFirst) values.push(cursor.ownershipRank);
+    if (ownedFirst) values.push(cursor.ownershipRank, cursor.additionRank);
     const cursorIndex = values.length + 1;
     pageWhere.push(
-      `(${ownedFirst ? `${ownershipOrder}, ` : ''}c.set_name, c.number_sort IS NULL, COALESCE(c.number_sort, 0), c.number, c.name, c.id) >
-       (${ownedFirst ? `?${ownershipIndex}, ` : ''}?${cursorIndex}, ?${cursorIndex + 1}, ?${cursorIndex + 2}, ?${cursorIndex + 3}, ?${cursorIndex + 4}, ?${cursorIndex + 5})`,
+      `(${leadingOrder}c.set_name, c.number_sort IS NULL, COALESCE(c.number_sort, 0), c.number, c.name, c.id) >
+       (${ownedFirst ? `?${ownershipIndex}, ?${ownershipIndex + 1}, ` : ''}?${cursorIndex}, ?${cursorIndex + 1}, ?${cursorIndex + 2}, ?${cursorIndex + 3}, ?${cursorIndex + 4}, ?${cursorIndex + 5})`,
     );
     values.push(
       cursor.setName,
@@ -1175,7 +1183,7 @@ export async function searchCards(
   const result = await db
     .prepare(
       `${cardSelect} WHERE ${pageWhere.join(' AND ')}
-       ORDER BY ${ownedFirst ? `${ownershipOrder}, ` : ''}c.set_name, c.number_sort IS NULL, COALESCE(c.number_sort, 0), c.number, c.name, c.id
+       ORDER BY ${leadingOrder}c.set_name, c.number_sort IS NULL, COALESCE(c.number_sort, 0), c.number, c.name, c.id
        LIMIT ?${limitIndex} OFFSET ?${offsetIndex}`,
     )
     .bind(...values, filters.limit + 1, cursor ? 0 : filters.offset)
