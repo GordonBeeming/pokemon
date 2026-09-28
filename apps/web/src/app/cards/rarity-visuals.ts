@@ -20,3 +20,21 @@ export const RARITY_VISUALS: Record<RarityKey, { icon: string; tone: RarityTone 
   ACE: { icon: '◈', tone: 'gold' },
   PR: { icon: '✪', tone: 'ink' },
 };
+
+/** The metal colours a rarity symbol is drawn in: bright on a solid (owned) frame,
+ * deeper on a pale one. Anything else showing a symbol (the Sets legend) uses the
+ * same values so a symbol never looks different off the card. */
+export const RARITY_TONE_COLOURS: Record<
+  Exclude<RarityTone, 'ink'>,
+  { onSolid: string; onLight: string }
+> = {
+  gold: { onSolid: '#fcd34d', onLight: '#a16207' },
+  silver: { onSolid: '#e2e8f0', onLight: '#64748b' },
+};
+
+/** The colour to draw `tone` in; `ink` is whatever text colour the surface uses. */
+export function rarityToneColour(tone: RarityTone, solid: boolean, ink: string): string {
+  if (tone === 'ink') return ink;
+  const colours = RARITY_TONE_COLOURS[tone];
+  return solid ? colours.onSolid : colours.onLight;
+}

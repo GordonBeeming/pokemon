@@ -227,7 +227,7 @@ test.describe('done means closed', () => {
     // dialog's close-then-confirm, not the code itself.
     const edit = page
       .locator('.sets-list li')
-      .filter({ has: page.locator('.set-code', { hasText: /[A-Z0-9]/ }) })
+      .filter({ has: page.locator('.set-code:not(.set-code-suggested)') })
       .first()
       .locator('.set-code-edit-button');
     const setName = ((await edit.getAttribute('aria-label')) ?? '').replace(/^Edit code for /, '');

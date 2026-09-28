@@ -1,13 +1,19 @@
 import { RARITY_KEYS, RARITY_LABELS } from '@pokedex/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { Button, Disclosure, DisclosurePanel, Heading } from 'react-aria-components';
 import { useSession } from '../api/queries/session';
 import { useSetCodes, useSets } from '../api/queries/sets';
-import { RARITY_VISUALS } from '../cards/rarity-visuals';
+import { RARITY_VISUALS, rarityToneColour } from '../cards/rarity-visuals';
 import { catalogueSearch, type SetsSearch } from '../routes/search-params';
 import { EmptyState } from '../ui/EmptyState';
+import { Icon } from '../ui/icons';
+import { useMediaQuery } from './binders/useMediaQuery';
 import { SetCodeEditor } from './sets/SetCodeEditor';
 import './sets/sets.css';
+
+// Wide enough for the legend to sit beside a grid that still has room for its cards.
+const LEGEND_BESIDE_QUERY = '(min-width: 1280px)';
 
 function formatReleaseDate(value: string | null): string {
   if (!value) return 'Release date unknown';
@@ -16,6 +22,30 @@ function formatReleaseDate(value: string | null): string {
     month: 'short',
     day: 'numeric',
   }).format(new Date(value));
+}
+
+/** Every rarity with its symbol drawn exactly as a card frame draws it on a pale
+ * (unowned) frame: same symbol, same metal colour. */
+function RarityLegendList(): ReactElement {
+  return (
+    <ul className="rarity-legend-list">
+      {RARITY_KEYS.map((key) => {
+        const visual = RARITY_VISUALS[key];
+        return (
+          <li key={key}>
+            <span
+              className="rarity-symbol"
+              aria-hidden="true"
+              style={{ color: rarityToneColour(visual.tone, false, 'var(--ink)') }}
+            >
+              {visual.icon}
+            </span>
+            <span className="rarity-name">{RARITY_LABELS[key]}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
 }
 
 export function Sets({ search }: { search: SetsSearch }): ReactElement {
@@ -31,6 +61,7 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
   // setId+language rather than asking ws-data-2 to widen their contract for one row.
   const facets = useSets();
   const [query, setQuery] = useState('');
+  const legendBeside = useMediaQuery(LEGEND_BESIDE_QUERY);
 
   const facetByKey = useMemo(
     () => new Map((facets.data ?? []).map((facet) => [`${facet.setId}:${facet.language}`, facet])),
@@ -49,7 +80,7 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
     (set) =>
       !needle ||
       set.setName.toLocaleLowerCase('en-AU').includes(needle) ||
-      (set.code ?? '').toLocaleLowerCase('en-AU').includes(needle),
+      (set.code ?? set.setId).toLocaleLowerCase('en-AU').includes(needle),
   );
 
   // A set opened from here scrolls back into view on return, matching the same
@@ -86,6 +117,19 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
+        {legendBeside ? null : (
+          <Disclosure className="sets-legend-disclosure">
+            <Heading className="sets-legend-heading">
+              <Button slot="trigger" className="sets-legend-trigger">
+                <Icon name="chevron-down" className="sets-legend-chevron" />
+                Rarity symbols
+              </Button>
+            </Heading>
+            <DisclosurePanel>
+              <RarityLegendList />
+            </DisclosurePanel>
+          </Disclosure>
+        )}
         <p className="sets-status" role="status" aria-live="polite">
           Showing all {filtered.length} matching sets.
         </p>
@@ -104,13 +148,27 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
               const facet = facetByKey.get(`${set.setId}:${set.language}`);
               const total = facet?.total ?? set.cardCount;
               const owned = facet?.owned ?? 0;
+              const clash = clashedIds.has(set.setId);
               return (
-                <li key={`${set.setId}:${set.language}`} id={`set-row-${set.setId}`}>
-                  <span
-                    className={clashedIds.has(set.setId) ? 'set-code set-code-clash' : 'set-code'}
-                  >
-                    {set.code ?? '—'}
-                  </span>
+                <li
+                  key={`${set.setId}:${set.language}`}
+                  id={`set-row-${set.setId}`}
+                  className="set-card"
+                >
+                  {set.code ? (
+                    <span className={clash ? 'set-code set-code-clash' : 'set-code'}>
+                      {set.code}
+                    </span>
+                  ) : (
+                    // What card frames print when a set has no official code.
+                    <span
+                      className="set-code set-code-suggested"
+                      title="No official code; edit to set one"
+                    >
+                      {set.setId.toUpperCase()}
+                      <span className="sr-only"> (no official code)</span>
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="set-row-link"
@@ -120,10 +178,11 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
                     <span className="set-meta">
                       {formatReleaseDate(set.releaseDate)} · {set.language.toUpperCase()}
                     </span>
-                    {clashedIds.has(set.setId) ? (
-                      <span className="set-clash-note">Shares this code with another set.</span>
-                    ) : null}
                   </button>
+                  {isAdmin ? <SetCodeEditor set={set} clash={clash} /> : null}
+                  {clash ? (
+                    <span className="set-clash-note">Shares this code with another set.</span>
+                  ) : null}
                   <span className="set-progress">
                     <span className="set-progress-numbers">
                       {owned} / {total}
@@ -134,7 +193,6 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
                       />
                     </span>
                   </span>
-                  {isAdmin ? <SetCodeEditor set={set} clash={clashedIds.has(set.setId)} /> : null}
                 </li>
               );
             })}
@@ -142,19 +200,12 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
         )}
       </section>
 
-      <aside aria-labelledby="rarity-heading" className="sets-rarity-legend">
-        <h2 id="rarity-heading">Rarity symbols</h2>
-        <ul>
-          {RARITY_KEYS.map((key) => (
-            <li key={key}>
-              <span className="rarity-symbol" aria-hidden="true">
-                {RARITY_VISUALS[key].icon}
-              </span>
-              <span>{RARITY_LABELS[key]}</span>
-            </li>
-          ))}
-        </ul>
-      </aside>
+      {legendBeside ? (
+        <aside aria-labelledby="rarity-heading" className="sets-rarity-legend">
+          <h2 id="rarity-heading">Rarity symbols</h2>
+          <RarityLegendList />
+        </aside>
+      ) : null}
     </div>
   );
 }

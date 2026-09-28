@@ -7,7 +7,7 @@ import {
 } from '@pokedex/shared';
 import type { CSSProperties, ReactElement } from 'react';
 import { bestTextColor, contrastWithDark, contrastWithWhite, mix } from './color';
-import { RARITY_VISUALS } from './rarity-visuals';
+import { RARITY_VISUALS, rarityToneColour } from './rarity-visuals';
 import './CardFrame.css';
 
 // Cards with no computed frame type (custom/manual cards, category 'special') get a
@@ -78,17 +78,7 @@ export function CardFrame({
   const region = card.pokedexNumber ? regionForDex(card.pokedexNumber) : null;
   const rarity = card.rarityKey ? RARITY_VISUALS[card.rarityKey] : null;
   const rarityName = card.rarityKey ? RARITY_LABELS[card.rarityKey] : null;
-  const rarityColor = !rarity
-    ? textColor
-    : rarity.tone === 'gold'
-      ? isSolid
-        ? '#fcd34d'
-        : '#a16207'
-      : rarity.tone === 'silver'
-        ? isSolid
-          ? '#e2e8f0'
-          : '#64748b'
-        : textColor;
+  const rarityColor = rarity ? rarityToneColour(rarity.tone, isSolid, textColor) : textColor;
 
   const codeNum =
     variant === 'any' ? 'ANY' : [card.setCode, card.number].filter(Boolean).join(' · ');

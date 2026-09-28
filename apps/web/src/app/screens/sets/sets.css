@@ -1,6 +1,6 @@
 .sets-screen {
   display: flex;
-  gap: 2.5rem;
+  gap: 2rem;
   align-items: flex-start;
 }
 .sets-list-section {
@@ -18,32 +18,39 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
 }
+
+/* Sets as compact cards: one column on a phone, three or four across on a wide
+   screen, so a desktop page isn't a single long list with empty space beside it. */
 .sets-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(18.75rem, 100%), 1fr));
+  gap: 0.75rem;
   margin: 0;
   padding: 0;
-  overflow: hidden;
   list-style: none;
+}
+.set-card {
+  display: grid;
+  /* A fixed code column, so every card's name starts at the same place. */
+  grid-template-columns: 4.5rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  min-width: 0;
+  padding: 0.75rem;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
 }
-.sets-list li {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.6rem 1rem;
-  border-top: 1px solid var(--line);
-}
-.sets-list li:first-child {
-  border-top: 0;
-}
 .set-code {
-  flex-shrink: 0;
-  width: 4rem;
-  padding: 0.2rem 0;
+  justify-self: start;
+  min-width: 3.25rem;
+  max-width: 100%;
+  padding: 0.2rem 0.45rem;
   font-family: var(--font-mono);
+  font-size: 0.8125rem;
   font-weight: 600;
   text-align: center;
+  overflow-wrap: anywhere;
   background: var(--line);
   border-radius: var(--radius-sm);
 }
@@ -51,15 +58,24 @@
   color: var(--warning-text);
   background: var(--warning-bg);
 }
+/* The set id card frames fall back to: a suggestion, not an official code. */
+.set-code-suggested {
+  font-style: italic;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+}
 .set-row-link {
   display: flex;
   flex-direction: column;
   justify-content: center;
   min-height: 2.75rem;
-  flex-grow: 1;
   min-width: 0;
   gap: 0.15rem;
+  padding: 0;
   text-align: left;
+  color: var(--ink);
   background: none;
   border: 0;
 }
@@ -74,15 +90,15 @@
   color: var(--muted);
 }
 .set-clash-note {
+  grid-column: 1 / -1;
   font-size: 0.75rem;
   color: var(--warning-text);
 }
 .set-progress {
   display: flex;
-  flex-shrink: 0;
+  grid-column: 1 / -1;
   flex-direction: column;
   gap: 0.25rem;
-  width: 9rem;
 }
 .set-progress-numbers {
   font-family: var(--font-mono);
@@ -117,74 +133,92 @@
   border-radius: var(--radius-md);
 }
 
+/* Rarity legend: a column beside the grid on a wide screen, a disclosure above it
+   otherwise. Symbols are drawn as a card frame draws them, in a badge that grows
+   with the symbol, and names are never cut. */
 .sets-rarity-legend {
-  flex-shrink: 0;
-  width: 18rem;
+  flex: 0 0 16rem;
+  min-width: 0;
 }
 .sets-rarity-legend h2 {
   margin: 0 0 0.6rem;
   font-size: 1.1rem;
 }
-.sets-rarity-legend ul {
+.rarity-legend-list {
   margin: 0;
   padding: 0;
-  overflow: hidden;
   list-style: none;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
 }
-.sets-rarity-legend li {
+.rarity-legend-list li {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  min-width: 0;
   padding: 0.5rem 0.75rem;
   border-top: 1px solid var(--line);
 }
-.sets-rarity-legend li:first-child {
+.rarity-legend-list li:first-child {
   border-top: 0;
 }
 .rarity-symbol {
-  display: flex;
+  display: inline-flex;
   flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  width: 2.5rem;
-  padding: 0.15rem 0;
+  /* Wide enough for the widest symbol (three stars), so every name lines up; a
+     wider symbol would still grow the badge rather than overflow it. */
+  min-width: 3.5rem;
+  padding: 0.15rem 0.4rem;
   font-family: var(--font-display);
-  color: #ffffff;
-  background: var(--rail-bg);
+  font-size: 0.9375rem;
+  letter-spacing: -0.06em;
+  white-space: nowrap;
+  background: var(--paper);
+  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
 }
-
-@media (max-width: 768px) {
-  .sets-screen {
-    flex-direction: column;
-  }
-  .sets-rarity-legend {
-    width: 100%;
-  }
+.rarity-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
-
-/* Too narrow for code + name + progress + edit in one row: code, name and edit
-   share the first row and the progress bar takes a second row under the name. */
-@media (max-width: 560px) {
-  .sets-list li {
-    display: grid;
-    grid-template-columns: 3.25rem minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 0.4rem 0.75rem;
-    padding: 0.6rem 0.75rem;
-  }
-  .set-code {
-    width: auto;
-    font-size: 0.8125rem;
-  }
-  .set-progress {
-    grid-column: 2 / -1;
-    grid-row: 2;
-    width: auto;
-  }
+.sets-legend-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.75rem;
+  padding: 0 0.25rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--ink);
+  cursor: pointer;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+}
+.sets-legend-trigger[data-focus-visible] {
+  outline: 3px solid var(--accent-deep);
+  outline-offset: 2px;
+}
+.sets-legend-chevron {
+  transition: transform 0.15s ease-out;
+}
+.sets-legend-disclosure:not([data-expanded]) .sets-legend-chevron {
+  transform: rotate(-90deg);
+}
+.sets-legend-heading {
+  margin: 0;
+  font-size: 1rem;
+}
+.sets-legend-disclosure .rarity-legend-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(12rem, 100%), 1fr));
+  margin-top: 0.5rem;
+}
+.sets-legend-disclosure .rarity-legend-list li {
+  border-top: 0;
 }
 
 .set-code-form {
