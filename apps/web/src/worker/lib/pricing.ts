@@ -549,3 +549,17 @@ export async function prunePricingData(db: D1Database, now = nowSeconds()): Prom
       .bind(runCutoff),
   ]);
 }
+
+// Not strict: Frankfurter also returns `amount` and `base`, and a strict schema once
+// rejected every real response, so no exchange rate was ever stored.
+const frankfurterResponseSchema = z.object({
+  date: z.string().date(),
+  rates: z.record(z.string(), z.number().positive()),
+});
+
+/** The AUD rate and its date from a Frankfurter `latest` response, or null if unusable. */
+export function parseAudRate(raw: unknown): { date: string; aud: number } | null {
+  const parsed = frankfurterResponseSchema.safeParse(raw);
+  const aud = parsed.success ? parsed.data.rates.AUD : undefined;
+  return parsed.success && typeof aud === 'number' ? { date: parsed.data.date, aud } : null;
+}

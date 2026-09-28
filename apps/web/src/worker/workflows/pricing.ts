@@ -7,6 +7,7 @@ import {
   cardSourcePage,
   extractTcgdexPrices,
   inUseCardSourceIds,
+  parseAudRate,
   nextPriceChainLink,
   type PriceChain,
   prunePricingData,
@@ -43,9 +44,6 @@ const stagedPriceSchema = z
       .strict(),
   )
   .min(1);
-const fxResponseSchema = z
-  .object({ date: z.string().date(), rates: z.record(z.string(), z.number().positive()) })
-  .strict();
 
 async function boundedJson(response: Response): Promise<unknown> {
   const declared = response.headers.get('content-length');
@@ -103,14 +101,12 @@ async function ensureFxRates(db: D1Database, currencies: string[]): Promise<stri
   const targets = [...new Set(currencies.filter((currency) => currency !== 'AUD'))].sort();
   if (targets.length === 0) return new Date().toISOString().slice(0, 10);
   const rates = await mapConcurrent(targets, async (currency) => {
-    const parsed = fxResponseSchema.safeParse(
+    const rate = parseAudRate(
       await fetchJson(`https://api.frankfurter.dev/v1/latest?base=${currency}&symbols=AUD`),
     );
-    const aud = parsed.success ? parsed.data.rates.AUD : undefined;
-    if (!parsed.success || typeof aud !== 'number')
-      throw new Error(`fx_response_invalid_${currency}`);
-    await upsertFxRate(db, parsed.data.date, currency, aud);
-    return parsed.data.date;
+    if (!rate) throw new Error(`fx_response_invalid_${currency}`);
+    await upsertFxRate(db, rate.date, currency, rate.aud);
+    return rate.date;
   });
   const dates = [...new Set(rates)];
   if (dates.length !== 1) throw new Error('fx_date_mismatch');

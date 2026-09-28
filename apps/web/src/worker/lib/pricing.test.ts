@@ -8,6 +8,7 @@ import {
   cardSourcePage,
   inUseCardSourceIds,
   nextPriceChainLink,
+  parseAudRate,
   priceForCard,
   stagePrices,
   stagePriceTargets,
@@ -160,5 +161,18 @@ describe('whole-catalogue price refresh chain', () => {
     });
     expect(nextPriceChainLink({ id: 'prices-all-x', page: 7 }, true)).toBeNull();
     expect(nextPriceChainLink({ id: 'prices-all-x', page: 59 }, false)).toBeNull();
+  });
+});
+
+describe('Frankfurter exchange-rate responses', () => {
+  it('reads the AUD rate from a real response, which carries amount and base too', () => {
+    expect(
+      parseAudRate({ amount: 1.0, base: 'USD', date: '2026-09-25', rates: { AUD: 1.4224 } }),
+    ).toEqual({ date: '2026-09-25', aud: 1.4224 });
+  });
+
+  it('refuses a response without an AUD rate', () => {
+    expect(parseAudRate({ date: '2026-09-25', rates: { NZD: 1.1 } })).toBeNull();
+    expect(parseAudRate({ message: 'not found' })).toBeNull();
   });
 });

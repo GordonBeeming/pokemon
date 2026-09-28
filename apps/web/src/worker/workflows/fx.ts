@@ -1,12 +1,7 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
-import { z } from 'zod';
-import { upsertFxRate } from '../lib/pricing';
+import { parseAudRate, upsertFxRate } from '../lib/pricing';
 import { describeError, logInfo } from '../lib/log';
 import { recordWorkflowFailure } from '../lib/workflow-failure';
-
-const responseSchema = z
-  .object({ date: z.string().date(), rates: z.record(z.string(), z.number().positive()) })
-  .strict();
 
 export class FxSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, { currencies?: string[] }> {
   override async run(
@@ -42,11 +37,9 @@ export class FxSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, { currenci
               await response.body?.cancel();
               throw new Error(`fx_fetch_failed_${currency}_${response.status}`);
             }
-            const parsed = responseSchema.safeParse(await response.json());
-            const aud = parsed.success ? parsed.data.rates.AUD : undefined;
-            if (!parsed.success || typeof aud !== 'number')
-              throw new Error(`fx_response_invalid_${currency}`);
-            await upsertFxRate(this.env.DB, parsed.data.date, currency, aud);
+            const rate = parseAudRate(await response.json());
+            if (!rate) throw new Error(`fx_response_invalid_${currency}`);
+            await upsertFxRate(this.env.DB, rate.date, currency, rate.aud);
           }
           logInfo({
             evt: 'workflow.fx.complete',
