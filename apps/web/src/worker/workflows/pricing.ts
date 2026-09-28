@@ -196,8 +196,8 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
         currentStep = 'complete-empty-price-run';
         await step.do('complete-empty-price-run', async () => {
           await this.env.DB.prepare(
-            `UPDATE price_sync_runs SET completed_at = ?1, status = 'complete', row_count = 0
-             WHERE id = ?2 AND status = 'running'`,
+            `UPDATE price_sync_runs SET completed_at = ?1, status = 'complete', row_count = 0, error = NULL
+             WHERE id = ?2 AND status IN ('running', 'failed')`,
           )
             .bind(nowSeconds(), runId)
             .run();

@@ -74,6 +74,32 @@ describe('price source availability', () => {
     ).resolves.toMatchObject({ cardIds: ['card-1'], rows: [{ cardId: 'card-1' }] });
   });
 
+  it('marks a run complete when a replayed step applies after the run was marked failed', async () => {
+    const { database, db } = priceDatabase();
+    await upsertFxRate(db, '2026-08-26', 'USD', 1.5);
+    await beginPriceSyncRun(db, 'run-1');
+    database
+      .prepare("UPDATE price_sync_runs SET status = 'failed', error = 'reset' WHERE id = 'run-1'")
+      .run();
+    await stagePriceTargets(db, 'run-1', ['card-1']);
+    await stagePrices(db, 'run-1', [
+      {
+        cardId: 'card-1',
+        source: 'tcgplayer',
+        nativeAmount: 10,
+        nativeCurrency: 'USD',
+        sourceCapturedAt: 10,
+      },
+    ]);
+    await applyStagedPrices(db, 'run-1', '2026-08-26');
+
+    expect(
+      database
+        .prepare("SELECT status, row_count, error FROM price_sync_runs WHERE id = 'run-1'")
+        .get(),
+    ).toEqual({ status: 'complete', row_count: 1, error: null });
+  });
+
   it('stops displaying a source after a refreshed card no longer has that price', async () => {
     const { database, db } = priceDatabase();
     await upsertFxRate(db, '2026-08-26', 'USD', 1.5);

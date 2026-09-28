@@ -307,8 +307,10 @@ export async function applyStagedPrices(
     db.prepare('DELETE FROM price_stage_targets WHERE run_id = ?1').bind(runId),
     db
       .prepare(
+        // 'failed' too: a Workflows replay (a deploy resets the instance mid-step) runs the
+        // catch that marks the run failed, then retries the step and applies for real.
         `UPDATE price_sync_runs SET completed_at = ?1, status = 'complete', row_count = ?2,
-           fx_date = ?3, error = NULL WHERE id = ?4 AND status = 'running'`,
+           fx_date = ?3, error = NULL WHERE id = ?4 AND status IN ('running', 'failed')`,
       )
       .bind(now, count.count, fxDate, runId),
   ]);
