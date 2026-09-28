@@ -1058,6 +1058,11 @@ export function pokemonDiscoveryCategory(number: number): PokemonDiscoveryCatego
 // "Region" is the catalogue/search-facing name for a Pokemon's discovery category.
 export type Region = PokemonDiscoveryCategory;
 
+/** How a National Pokédex number reads everywhere: at least three digits (#094, #1025). */
+export function formatDexNumber(dex: number): string {
+  return `#${String(dex).padStart(3, '0')}`;
+}
+
 export function regionForDex(dex: number): Region | null {
   const entry = NATIONAL_POKEDEX[dex - 1];
   return entry && entry.number === dex ? entry.discoveryCategory : null;

@@ -1,5 +1,6 @@
 import {
   DEFAULT_FRAME_PALETTE,
+  formatDexNumber,
   NATIONAL_POKEDEX,
   RARITY_LABELS,
   regionForDex,
@@ -179,9 +180,9 @@ export function CardInspector({
           <p>
             {card.setName} · <span className="mono">{card.number}</span>
           </p>
-          {region ? (
+          {region && pokedexNumber ? (
             <p>
-              #{String(pokedexNumber).padStart(4, '0')} · first found in {region}
+              {formatDexNumber(pokedexNumber)} · {region}
             </p>
           ) : null}
           {rarityName ? (
@@ -236,7 +237,9 @@ export function CardInspector({
       </div>
 
       <section aria-labelledby="card-inspector-copies-heading">
-        <h3 id="card-inspector-copies-heading">Your copies</h3>
+        <h3 id="card-inspector-copies-heading" className="sr-only">
+          Your copies
+        </h3>
         {quantity === 0 ? (
           <button
             type="button"
@@ -248,8 +251,16 @@ export function CardInspector({
           </button>
         ) : (
           <div className="card-inspector-copies-row">
-            <span>
-              {placedIn.length} in a binder · {loose} loose
+            <span
+              className="card-inspector-copy-split"
+              title={`${placedIn.length} in a binder · ${loose} loose`}
+            >
+              <span>
+                <Icon name="binder" title="In a binder" /> {placedIn.length}
+              </span>
+              <span>
+                <Icon name="card" title="Loose" /> {loose}
+              </span>
             </span>
             <div className="stepper">
               <button type="button" aria-label="Remove a copy" onClick={() => setRemoveOpen(true)}>

@@ -12,7 +12,7 @@ const MISCOUNT_RADIO = 2;
 
 /**
  * `quantity` (useCardDetail) and `placedIn` (useCardBinderMatches) are two
- * independent queries; the "N in a binder · M loose" line renders the instant
+ * independent queries; the in-a-binder / loose counts render the instant
  * quantity arrives, defaulting `placedIn` to `[]` until its own query resolves —
  * so a plain "does this text exist" wait can catch that premature 0-placed render
  * and open "Remove a copy" a beat too soon (loose+miscount only, never the pocket
@@ -28,7 +28,7 @@ async function openInspector(
   const inspector = page.getByRole('dialog', { name: 'Card' });
   await expect(inspector).toBeVisible();
   await expect(
-    inspector.getByText(new RegExp(`^${expectPlaced} in a binder · ${expectLoose} loose$`)),
+    inspector.locator(`[title="${expectPlaced} in a binder · ${expectLoose} loose"]`),
   ).toBeVisible();
   return inspector;
 }

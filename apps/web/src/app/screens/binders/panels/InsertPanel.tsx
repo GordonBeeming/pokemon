@@ -1,15 +1,16 @@
 import {
-  cardIdSchema,
-  NATIONAL_POKEDEX,
   type BinderEntry,
   type BinderSlotLocation,
+  cardIdSchema,
+  formatDexNumber,
   type FrameType,
+  NATIONAL_POKEDEX,
 } from '@pokedex/shared';
 import { useRef, useState, type ReactElement } from 'react';
 import { ApiError } from '../../../api/client';
 import { useInsertDestinations, type ResolvedCard } from '../../../api/queries/binders';
 import { SegmentedControl } from '../../../ui/SegmentedControl';
-import { binderErrorMessage, INSERT_SELECTION_CAP, pad4 } from '../model';
+import { binderErrorMessage, INSERT_SELECTION_CAP } from '../model';
 import { CardPicker, collectAllCards, type PickerQuery } from './CardPicker';
 import { Panel } from './Panel';
 
@@ -233,7 +234,7 @@ export function InsertPanel({
                   disabled={busy}
                   onClick={() => toggle(String(item.number), pokemonEntry(item.number))}
                 >
-                  <span className="species-option-number">#{pad4(item.number)}</span>
+                  <span className="species-option-number">{formatDexNumber(item.number)}</span>
                   <span>{item.name}</span>
                   <small>{item.discoveryCategory}</small>
                 </button>

@@ -1,7 +1,8 @@
 import {
-  NATIONAL_POKEDEX,
   type BinderLayout,
   type BinderSlotLocation,
+  formatDexNumber,
+  NATIONAL_POKEDEX,
   type PeekColumns,
 } from '@pokedex/shared';
 import { ApiError, isAbortError } from '../../api/client';
@@ -75,10 +76,6 @@ export function isTarget(slot: BinderSlotView | null | undefined): boolean {
   return slot?.entryKind === 'exact-card' || slot?.entryKind === 'pokemon';
 }
 
-export function pad4(value: number): string {
-  return String(value).padStart(4, '0');
-}
-
 export function placeText(at: BinderSlotLocation): string {
   return `page ${at.page + 1}, row ${at.row + 1}, pocket ${at.column + 1}`;
 }
@@ -90,18 +87,20 @@ export function pocketTitle(slot: BinderSlotView, cards: CardLookup): string {
   if (slot.assignedCardId) {
     const placed = cards.get(slot.assignedCardId);
     const dex = placed?.pokedexNumber ?? slot.pokemonNumber;
-    if (placed) return dex ? `#${pad4(dex)} ${placed.name}` : placed.name;
+    if (placed) return dex ? `${formatDexNumber(dex)} ${placed.name}` : placed.name;
   }
   if (slot.entryKind === 'reserved')
     return slot.label ? `Reserved: ${slot.label}` : 'Reserved sleeve';
   if (slot.entryKind === 'pokemon' && slot.pokemonNumber) {
     const pokemon = NATIONAL_POKEDEX[slot.pokemonNumber - 1];
-    return pokemon ? `#${pad4(pokemon.number)} ${pokemon.name}` : `Pokémon #${slot.pokemonNumber}`;
+    return pokemon
+      ? `${formatDexNumber(pokemon.number)} ${pokemon.name}`
+      : `Pokémon #${slot.pokemonNumber}`;
   }
   if (slot.entryKind === 'exact-card' && slot.cardId) {
     const card = cards.get(slot.cardId);
     if (!card) return 'Exact card target';
-    return card.pokedexNumber ? `#${pad4(card.pokedexNumber)} ${card.name}` : card.name;
+    return card.pokedexNumber ? `${formatDexNumber(card.pokedexNumber)} ${card.name}` : card.name;
   }
   return 'Empty pocket';
 }

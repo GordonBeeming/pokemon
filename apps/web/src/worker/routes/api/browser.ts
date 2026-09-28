@@ -3,15 +3,16 @@ import { deleteBinderBody } from './contracts';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import {
-  languageSchema,
-  binderSearchQuerySchema,
-  binderPasteRequestSchema,
   binderDisplayPatchRequestSchema,
-  framePalettePutRequestSchema,
-  collectionRemoveRequestSchema,
+  binderPasteRequestSchema,
+  binderSearchQuerySchema,
   cardPlaceRequestSchema,
-  setCodePatchRequestSchema,
+  collectionRemoveRequestSchema,
+  formatDexNumber,
+  framePalettePutRequestSchema,
+  languageSchema,
   NATIONAL_POKEDEX,
+  setCodePatchRequestSchema,
 } from '@pokedex/shared';
 import { getFramePalette, resetFramePalette, setFramePalette } from '../../lib/settings';
 import { dashboardBinderProgress, dashboardStillToFind } from '../../lib/dashboard';
@@ -226,7 +227,7 @@ browserApiRoutes.get('/dashboard/shortages', async (c) => {
         return {
           ...item,
           kind: 'pokemon' as const,
-          label: `#${String(item.pokemonNumber).padStart(4, '0')} ${pokemon?.name ?? 'Pokémon'}`,
+          label: `${formatDexNumber(item.pokemonNumber)} ${pokemon?.name ?? 'Pokémon'}`,
           cardId: null,
           setId: null,
           number: null,

@@ -1,10 +1,11 @@
 import {
-  NATIONAL_POKEDEX,
   type BinderPokemonShortage,
   type BinderShortage,
   type CardId,
   type DashboardBinderProgress,
   type DashboardStillToFindItem,
+  formatDexNumber,
+  NATIONAL_POKEDEX,
 } from '@pokedex/shared';
 import { getBinderPlannerSummary, listBinders } from './binders';
 import { resolveCatalogueCards } from './catalogue';
@@ -170,7 +171,7 @@ export async function dashboardStillToFind(
     const binder = pokemonBinders.get(item.pokemonNumber);
     return {
       kind: 'pokemon',
-      label: `#${String(item.pokemonNumber).padStart(4, '0')} ${pokemon?.name ?? 'Pokémon'}`,
+      label: `${formatDexNumber(item.pokemonNumber)} ${pokemon?.name ?? 'Pokémon'}`,
       cardId: null,
       pokemonNumber: item.pokemonNumber,
       missing: item.missing,

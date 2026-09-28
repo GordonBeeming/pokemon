@@ -1,3 +1,4 @@
+import { formatDexNumber } from '@pokedex/shared';
 import type { BinderSlotLocation, FrameType } from '@pokedex/shared';
 import { NATIONAL_POKEDEX } from '@pokedex/shared';
 import type { KeyboardEvent, PointerEvent, ReactElement } from 'react';
@@ -6,7 +7,6 @@ import { CardFrame } from '../../cards/CardFrame';
 import {
   anyFrameCard,
   frameCardFrom,
-  pad4,
   pocketAriaLabel,
   pocketState,
   type CardLookup,
@@ -80,7 +80,7 @@ function PocketContent({
     const name = NATIONAL_POKEDEX[slot.pokemonNumber - 1]?.name ?? 'Pokémon';
     return (
       <span className="pocket-any">
-        <span className="pocket-any-number">#{pad4(slot.pokemonNumber)}</span>
+        <span className="pocket-any-number">{formatDexNumber(slot.pokemonNumber)}</span>
         <span>{name}</span>
         <span className="pocket-any-pill">Any</span>
       </span>

@@ -95,7 +95,7 @@ describe('BinderView move mode', () => {
     const source = pocket('0:0:0');
     source.focus();
     await key(source, 'm');
-    expect(container.textContent).toContain('Moving #0001 Bulbasaur');
+    expect(container.textContent).toContain('Moving #001 Bulbasaur');
 
     for (const step of ['ArrowDown', 'ArrowDown', 'ArrowRight', 'ArrowRight'])
       await focusedKey(step);
@@ -109,7 +109,7 @@ describe('BinderView move mode', () => {
       target: { page: 0, row: 2, column: 2 },
       expectedRevision: 3,
     });
-    await waitFor(() => !container.textContent?.includes('Moving #0001'));
+    await waitFor(() => !container.textContent?.includes('Moving #001'));
   });
 
   it('Escape cancels an armed move without writing anything', async () => {
@@ -117,9 +117,9 @@ describe('BinderView move mode', () => {
     const source = pocket('0:0:1');
     source.focus();
     await key(source, 'm');
-    expect(container.textContent).toContain('Moving #0002 Ivysaur');
+    expect(container.textContent).toContain('Moving #002 Ivysaur');
     await focusedKey('Escape');
-    expect(container.textContent).not.toContain('Moving #0002');
+    expect(container.textContent).not.toContain('Moving #002');
     expect(server.count('POST', '/swap')).toBe(0);
   });
 });
@@ -168,7 +168,7 @@ describe('BinderView state that belongs to one binder', () => {
     const source = pocket('0:0:0');
     source.focus();
     await key(source, 'm');
-    expect(container.textContent).toContain('Moving #0001 Bulbasaur');
+    expect(container.textContent).toContain('Moving #001 Bulbasaur');
 
     await step(() => switchBinder('binder_b'));
     await waitFor(() => container.querySelector('h1')?.textContent === 'Beta');

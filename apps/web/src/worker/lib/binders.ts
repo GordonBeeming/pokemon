@@ -1,37 +1,38 @@
 import { createHash } from 'node:crypto';
 import {
-  binderBookmarkSchema,
-  binderLayoutSchema,
-  binderSearchQuerySchema,
-  binderSearchResultSchema,
-  type BinderSearchResult,
+  type BinderAssignmentCandidate,
   binderAssignmentCandidatesSchema,
-  binderMutationResultSchema,
-  binderPageSchema,
-  binderVersionPagesSchema,
-  binderVersionSummarySchema,
-  cardIdSchema,
-  NATIONAL_POKEDEX,
   type BinderBookmark,
-  binderPasteRequestSchema,
-  type BinderPasteRequest,
-  type BinderPastePreview,
+  binderBookmarkSchema,
   type BinderBookmarkSetRequest,
   type BinderCapacityError,
   type BinderCopyChoice,
-  type BinderAssignmentCandidate,
   type BinderEntry,
   type BinderInsertDestinations,
   type BinderLayout,
+  binderLayoutSchema,
   type BinderMutationResult,
+  binderMutationResultSchema,
   type BinderPage,
+  binderPageSchema,
+  type BinderPastePreview,
+  type BinderPasteRequest,
+  binderPasteRequestSchema,
   type BinderPokemonShortage,
   type BinderReadyToPlace,
+  binderSearchQuerySchema,
+  type BinderSearchResult,
+  binderSearchResultSchema,
   type BinderShortage,
   type BinderSlotLocation,
   type BinderVersionPages,
+  binderVersionPagesSchema,
   type BinderVersionSummary,
+  binderVersionSummarySchema,
   type BinderView,
+  cardIdSchema,
+  formatDexNumber,
+  NATIONAL_POKEDEX,
 } from '@pokedex/shared';
 import { decodeSlotId, encodeSlotId, newId, nowSeconds } from './db';
 import {
@@ -857,7 +858,7 @@ export async function searchBinderSpaces(
   const pokemon = NATIONAL_POKEDEX.filter((entry) =>
     pokemonNumber !== null
       ? entry.number === pokemonNumber
-      : `#${String(entry.number).padStart(4, '0')} ${entry.number} ${entry.name} ${entry.discoveryCategory}`
+      : `${formatDexNumber(entry.number)} ${entry.number} ${entry.name} ${entry.discoveryCategory}`
           .toLocaleLowerCase('en-AU')
           .includes(query),
   ).map((entry) => entry.number);
@@ -916,7 +917,7 @@ export async function searchBinderSpaces(
         kind: row.kind,
         placed: row.assigned_card_id !== null,
         label: species
-          ? `#${String(species.number).padStart(4, '0')} ${species.name} · ${species.discoveryCategory}`
+          ? `${formatDexNumber(species.number)} ${species.name} · ${species.discoveryCategory}`
           : row.label,
       };
     }),

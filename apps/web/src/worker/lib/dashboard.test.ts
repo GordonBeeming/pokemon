@@ -91,7 +91,7 @@ it('ranks still-to-find by missing count, resolves labels and the binder each ta
   const byPokemon = new Map(stillToFind.map((item) => [item.pokemonNumber, item]));
   expect(byPokemon.get(25)).toMatchObject({
     kind: 'pokemon',
-    label: '#0025 Pikachu',
+    label: '#025 Pikachu',
     binderId: 'kanto',
     binderName: 'Kanto',
   });

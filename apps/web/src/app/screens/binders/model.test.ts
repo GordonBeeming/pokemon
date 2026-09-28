@@ -42,7 +42,7 @@ describe('pocket labels', () => {
   const base = { pageId: 'p', row: 0, column: 0, cardId: null, label: null, assignedCardId: null };
   it('names an any-printing target by number and species', () => {
     const slot = { ...base, entryKind: 'pokemon' as const, pokemonNumber: 25 };
-    expect(pocketTitle(slot, new Map())).toBe('#0025 Pikachu');
+    expect(pocketTitle(slot, new Map())).toBe('#025 Pikachu');
     expect(pocketState(slot)).toBe('target');
   });
   it('treats a placed copy as placed whatever the target', () => {

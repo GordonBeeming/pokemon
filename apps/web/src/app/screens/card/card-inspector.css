@@ -64,6 +64,20 @@
   justify-content: space-between;
   gap: 1rem;
 }
+.card-inspector-copy-split {
+  display: flex;
+  gap: 1rem;
+  font-variant-numeric: tabular-nums;
+}
+.card-inspector-copy-split > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.card-inspector-copy-split svg {
+  font-size: 1.25rem;
+  color: var(--muted);
+}
 .card-inspector textarea {
   padding: 0.6rem 0.75rem;
   font-family: inherit;
@@ -234,7 +248,7 @@
     flex-direction: column;
   }
   .card-inspector-frame {
-    width: min(16rem, 70%);
+    width: min(13rem, 55%);
     align-self: center;
   }
 }

@@ -1,8 +1,9 @@
 import {
+  formatDexNumber,
   frameTypeFor,
   NATIONAL_POKEDEX,
-  POKEMON_DISCOVERY_CATEGORIES,
   type NationalPokedexEntry,
+  POKEMON_DISCOVERY_CATEGORIES,
 } from '@pokedex/shared';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
@@ -33,7 +34,7 @@ function matches(
   needle: string,
 ): boolean {
   if (!needle) return true;
-  const padded = String(entry.number).padStart(4, '0');
+  const padded = formatDexNumber(entry.number).slice(1);
   return (
     entry.name.toLocaleLowerCase('en-AU').includes(needle) ||
     entry.discoveryCategory.toLocaleLowerCase('en-AU').includes(needle) ||

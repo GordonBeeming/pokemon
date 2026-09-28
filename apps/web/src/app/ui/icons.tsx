@@ -25,6 +25,7 @@ export const ICON_NAMES = [
   'sets',
   'settings',
   'home',
+  'card',
   'copy',
   'key',
   'people',
@@ -69,6 +70,9 @@ const PATHS: Record<IconName, ReactElement> = {
   sets: <path d="m5 7 7-3 7 3-7 3zM5 11l7 3 7-3M5 15l7 3 7-3" />,
   settings: <path d="M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M8 15v4" />,
   home: <path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z" />,
+  card: (
+    <path d="M7 3.5h10a1.5 1.5 0 0 1 1.5 1.5v14a1.5 1.5 0 0 1-1.5 1.5H7A1.5 1.5 0 0 1 5.5 19V5A1.5 1.5 0 0 1 7 3.5ZM8.5 7h7v6h-7z" />
+  ),
   copy: <path d="M9 9h10v10H9zM6 15H5V5h10v1" />,
   key: (
     <>

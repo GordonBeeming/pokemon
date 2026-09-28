@@ -1,9 +1,10 @@
 import {
   DEFAULT_FRAME_PALETTE,
-  RARITY_LABELS,
-  regionForDex,
+  formatDexNumber,
   type FrameType,
+  RARITY_LABELS,
   type RarityKey,
+  regionForDex,
 } from '@pokedex/shared';
 import { useState, type CSSProperties, type ReactElement } from 'react';
 import { bestTextColor, contrastWithDark, contrastWithWhite, mix } from './color';
@@ -92,7 +93,7 @@ export function CardFrame({
   const ariaLabel = [
     card.name,
     variant === 'any' ? 'any printing' : codeNum || null,
-    card.pokedexNumber ? `Pokédex #${String(card.pokedexNumber).padStart(4, '0')}` : null,
+    card.pokedexNumber ? `Pokédex ${formatDexNumber(card.pokedexNumber)}` : null,
     rarityName,
     state === 'unowned' ? 'not owned' : 'owned',
   ]
@@ -141,7 +142,7 @@ export function CardFrame({
     <>
       <span className="card-frame-row">
         <span className="card-frame-dex">
-          {card.pokedexNumber ? `#${String(card.pokedexNumber).padStart(3, '0')}` : ''}
+          {card.pokedexNumber ? formatDexNumber(card.pokedexNumber) : ''}
         </span>
         <span className="card-frame-region">{region ?? ''}</span>
       </span>
