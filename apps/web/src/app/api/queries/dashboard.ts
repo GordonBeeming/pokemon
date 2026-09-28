@@ -2,6 +2,8 @@ import {
   binderPokemonShortageSchema,
   binderShortageSchema,
   catalogueCardViewSchema,
+  dashboardBinderProgressSchema,
+  dashboardStillToFindItemSchema,
 } from '@pokedex/shared';
 import { useQuery } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -19,10 +21,12 @@ const dashboardResponseSchema = z
       .object({ priced: z.number(), missing: z.number(), estimateAud: z.number() })
       .passthrough(),
     binderCount: z.number(),
+    binders: z.array(dashboardBinderProgressSchema).optional().default([]),
     activeShortages: z.array(binderShortageSchema),
     activePokemonShortages: z.array(binderPokemonShortageSchema).optional().default([]),
     activeShortageCount: z.number().optional(),
     activeShortageEntries: z.number().optional(),
+    stillToFind: z.array(dashboardStillToFindItemSchema).optional().default([]),
     cards: z.array(catalogueCardViewSchema),
   })
   .passthrough();

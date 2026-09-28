@@ -14,6 +14,7 @@ import {
   NATIONAL_POKEDEX,
 } from '@pokedex/shared';
 import { getFramePalette, resetFramePalette, setFramePalette } from '../../lib/settings';
+import { dashboardBinderProgress, dashboardStillToFind } from '../../lib/dashboard';
 import { signedBackupWorkflowId, verifyBackupWorkflowOwner } from '../../lib/backup';
 import {
   activeBinderShortages,
@@ -148,29 +149,39 @@ browserApiRoutes.use('/prices*', requireSession);
 browserApiRoutes.get('/dashboard', async (c) => {
   try {
     const ownerId = sessionOwner(c);
-    const [collection, pricing, binders, activeBinderTargets, ownedCards] = await Promise.all([
-      collectionSummary(c.env.DB, ownerId),
-      priceCoverage(c.env.DB, ownerId),
-      ownerOperations(c.env, ownerId).listBinders(),
-      activeBinderShortages(c.env.DB, ownerId),
-      ownerOperations(c.env, ownerId).searchCatalogue({
-        owned: true,
-        limit: 50,
-        offset: 0,
-        cursor: null,
-        // The shelf renders card frames, whose top row is the Pokédex number and region.
-        includePokemonNumber: true,
-      }),
-    ]);
+    const [collection, pricing, binders, activeBinderTargets, ownedCards, binderProgress] =
+      await Promise.all([
+        collectionSummary(c.env.DB, ownerId),
+        priceCoverage(c.env.DB, ownerId),
+        ownerOperations(c.env, ownerId).listBinders(),
+        activeBinderShortages(c.env.DB, ownerId),
+        ownerOperations(c.env, ownerId).searchCatalogue({
+          owned: true,
+          limit: 50,
+          offset: 0,
+          cursor: null,
+          // The shelf renders card frames, whose top row is the Pokédex number and region.
+          includePokemonNumber: true,
+        }),
+        dashboardBinderProgress(c.env.DB, ownerId),
+      ]);
+    const stillToFind = await dashboardStillToFind(
+      c.env.DB,
+      ownerId,
+      activeBinderTargets.shortages,
+      activeBinderTargets.pokemonShortages,
+    );
     return c.json({
       ok: true,
       collection,
       pricing,
       binderCount: binders.length,
+      binders: binderProgress,
       activeShortages: activeBinderTargets.shortages,
       activePokemonShortages: activeBinderTargets.pokemonShortages,
       activeShortageCount: activeBinderTargets.totalMissing,
       activeShortageEntries: activeBinderTargets.totalEntries,
+      stillToFind,
       cards: ownedCards.cards,
     });
   } catch (error) {

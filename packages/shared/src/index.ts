@@ -251,6 +251,33 @@ export const binderPokemonShortageSchema = z
   .strict();
 export type BinderPokemonShortage = z.infer<typeof binderPokemonShortageSchema>;
 
+export const dashboardBinderProgressSchema = z
+  .object({
+    id: z.string().trim().min(1).max(128),
+    name: z.string().trim().min(1).max(120),
+    targets: z.number().int().nonnegative(),
+    placed: z.number().int().nonnegative(),
+    percent: z.number().int().min(0).max(100),
+  })
+  .strict();
+export type DashboardBinderProgress = z.infer<typeof dashboardBinderProgressSchema>;
+
+/** One row in Home's "Still to find" list: an active-binder shortage target,
+ * carrying enough to both display it (label) and link back into the catalogue
+ * (cardId or pokemonNumber) without the client re-deriving either from the label. */
+export const dashboardStillToFindItemSchema = z
+  .object({
+    kind: z.enum(['exact-card', 'pokemon']),
+    label: z.string().trim().min(1).max(200),
+    cardId: cardIdSchema.nullable(),
+    pokemonNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE).nullable(),
+    missing: z.number().int().positive(),
+    binderId: z.string().trim().min(1).max(128).nullable(),
+    binderName: z.string().trim().min(1).max(120).nullable(),
+  })
+  .strict();
+export type DashboardStillToFindItem = z.infer<typeof dashboardStillToFindItemSchema>;
+
 export const binderReadyToPlaceSchema = z
   .object({
     exactTargets: z.number().int().nonnegative(),

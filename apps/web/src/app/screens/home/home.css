@@ -7,24 +7,16 @@
   display: flex;
   gap: 0.6rem;
 }
-.header-actions a,
 .header-actions .primary-button {
   display: flex;
   align-items: center;
   height: 2.75rem;
   padding: 0 1.1rem;
   font-weight: 600;
-  text-decoration: none;
-  border-radius: var(--radius-md);
-}
-.header-actions .primary-button {
   color: #ffffff;
+  text-decoration: none;
   background: var(--accent);
-}
-.header-actions a:not(.primary-button) {
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
 }
 
 .metric-grid {
@@ -51,16 +43,9 @@
   font-family: var(--font-mono);
   font-size: 1.75rem;
 }
-.metric-action {
-  cursor: pointer;
-}
-.metric-action span {
-  font-size: 0.8125rem;
-  color: var(--accent);
-}
 
-/* Phone: the four measures pack two to a row, compact, so the shelf of cards
-   starts on the first screen instead of four screen-wide tiles later. */
+/* Phone: the measures pack two to a row, compact, so the shelf of cards starts on
+   the first screen instead of screen-wide tiles later. */
 @media (max-width: 767px) {
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -79,7 +64,6 @@
   .header-actions {
     width: 100%;
   }
-  .header-actions a,
   .header-actions .primary-button {
     flex: 1 1 0;
     justify-content: center;
@@ -87,10 +71,27 @@
   }
 }
 
+/* Desktop: the shelf takes the remaining width, the binder-progress/still-to-find
+   column holds a fixed width beside it. Phone stacks them (shelf first, per
+   Gordon's "content first" rule) via the single-column fallback below. */
+.home-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22rem;
+  gap: 2rem;
+  align-items: start;
+}
+@media (max-width: 767px) {
+  .home-body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.75rem;
+  }
+}
+
 .collection-shelf {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  min-width: 0;
 }
 .shelf-heading {
   display: flex;
@@ -109,6 +110,120 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   gap: 1rem;
+}
+
+.home-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  min-width: 0;
+}
+.home-binders,
+.home-still-to-find {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.home-binders h2,
+.home-still-to-find h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+.section-heading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.home-column-empty {
+  margin: 0;
+  padding: 1rem 1.1rem;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+
+.binder-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.binder-progress-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.9rem 1.1rem;
+  color: var(--ink);
+  text-decoration: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.binder-progress-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.binder-progress-row-head > span:first-child {
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.binder-progress-row-head > span:last-child {
+  flex-shrink: 0;
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.progress-track {
+  display: flex;
+  height: 0.5rem;
+  overflow: hidden;
+  background: var(--line);
+  border-radius: 999px;
+}
+.progress-fill {
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.still-to-find-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.still-to-find-list li {
+  border-bottom: 1px solid var(--line);
+}
+.still-to-find-list li:last-child {
+  border-bottom: none;
+}
+.still-to-find-list a {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-height: 2.75rem;
+  padding: 0.75rem 1.1rem;
+  color: var(--ink);
+  text-decoration: none;
+  justify-content: center;
+}
+.still-to-find-list a > span:first-child {
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.still-to-find-list a > span:last-child {
+  font-size: 0.8125rem;
+  color: var(--muted);
 }
 
 .active-shortages-panel {
