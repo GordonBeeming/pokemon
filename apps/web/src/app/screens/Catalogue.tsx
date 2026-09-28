@@ -1,13 +1,6 @@
 import { NATIONAL_POKEDEX, RARITY_LABELS, type FrameType, type RarityKey } from '@pokedex/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactElement,
-} from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import { useCatalogueSearch } from '../api/queries/catalogue';
 import { recentlyDiscoveredSpecies, useDiscoverSpecies } from '../api/queries/pokedex';
 import { useSets } from '../api/queries/sets';
@@ -45,6 +38,9 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
   const query = useCatalogueSearch(search);
   const setsFacet = useSets();
   const isDesktop = useIsDesktop();
+  // Phones open straight to the cards; search, filters and the copy/bulk tools sit
+  // behind one summary pill until it's tapped.
+  const [phoneControlsOpen, setPhoneControlsOpen] = useState(false);
   const discover = useDiscoverSpecies();
   const galleryRef = useRef<HTMLDivElement>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -148,21 +144,33 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
     if (next) openCard(next.id);
   }
 
-  function onOverlayKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
-    const target = event.target;
-    const editing =
-      target instanceof HTMLInputElement ||
-      target instanceof HTMLTextAreaElement ||
-      target instanceof HTMLSelectElement;
-    if (editing) return;
-    if (event.key === 'ArrowLeft') {
-      event.preventDefault();
-      moveCard(-1);
-    } else if (event.key === 'ArrowRight') {
-      event.preventDefault();
-      moveCard(1);
+  // Listens on the window rather than the overlay's own element: the panel focuses its
+  // Close button on open, which sits outside the chrome, so an element-level handler
+  // missed the first arrow press after opening a card.
+  const moveCardRef = useRef(moveCard);
+  moveCardRef.current = moveCard;
+  const cardOpen = Boolean(search.card);
+  useEffect(() => {
+    if (!cardOpen) return undefined;
+    function onKeyDown(event: globalThis.KeyboardEvent): void {
+      const target = event.target;
+      const editing =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
+      if (editing || event.altKey || event.ctrlKey || event.metaKey) return;
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        moveCardRef.current(-1);
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        moveCardRef.current(1);
+      }
     }
-  }
+    globalThis.addEventListener('keydown', onKeyDown);
+    return () => globalThis.removeEventListener('keydown', onKeyDown);
+  }, [cardOpen]);
 
   const activeChips: Array<{ key: string; label: string }> = [
     ...search.type.map((type) => ({
@@ -181,6 +189,15 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
   ];
   const activeFilterCount =
     search.type.length + search.rarity.length + search.set.length + (search.region ? 1 : 0);
+  const phoneSummary = [
+    search.q ? `“${search.q}”` : 'Search cards',
+    search.owned === 'owned' ? 'Owned' : search.owned === 'missing' ? 'Missing' : null,
+    activeFilterCount > 0
+      ? `${activeFilterCount} filter${activeFilterCount === 1 ? '' : 's'}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   function removeChip(key: string): void {
     if (key === 'region') return updateSearch({ region: undefined });
@@ -243,60 +260,86 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
         </div>
       </header>
 
-      <form
-        className="catalogue-search-bar"
-        role="search"
-        onSubmit={(event) => {
-          event.preventDefault();
-          updateSearch({ q: queryDraft });
-        }}
-      >
-        <label>
-          Search
-          <input
-            value={queryDraft}
-            maxLength={200}
-            placeholder="Name, set, number or artist"
-            onChange={(event) => setQueryDraft(event.target.value)}
-          />
-        </label>
-        <SegmentedControl<CatalogueOwnedFilter>
-          label="Collection"
-          value={search.owned}
-          options={[
-            { value: 'all', label: 'All' },
-            { value: 'owned', label: 'Owned' },
-            { value: 'missing', label: 'Missing' },
-          ]}
-          onChange={(owned) => updateSearch({ owned })}
-        />
-        <button type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(true)}>
-          <Icon name="filter" /> Filters
-          {activeFilterCount > 0 ? (
-            <span className="filter-count-badge">{activeFilterCount}</span>
-          ) : null}
+      {!isDesktop ? (
+        <button
+          type="button"
+          className="catalogue-summary-pill"
+          aria-expanded={phoneControlsOpen}
+          aria-controls="catalogue-controls"
+          onClick={() => setPhoneControlsOpen((open) => !open)}
+        >
+          <Icon name="magnifier" />
+          <span className="catalogue-summary-text">{phoneSummary}</span>
+          <span className="catalogue-summary-count">{total.toLocaleString('en-AU')}</span>
         </button>
-        <button type="submit" disabled={busy}>
-          {busy ? 'Searching…' : 'Search'}
-        </button>
-      </form>
-
-      {activeChips.length > 0 ? (
-        <div className="catalogue-active-filters">
-          <FilterChips items={activeChips} onRemove={removeChip} />
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => updateSearch({ type: [], rarity: [], set: [], region: undefined })}
+      ) : null}
+      {isDesktop || phoneControlsOpen ? (
+        <div id="catalogue-controls" className="catalogue-controls">
+          <form
+            className="catalogue-search-bar"
+            role="search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              updateSearch({ q: queryDraft });
+            }}
           >
-            Clear all
-          </button>
+            <label>
+              Search
+              <input
+                value={queryDraft}
+                maxLength={200}
+                placeholder="Name, set, number or artist"
+                onChange={(event) => setQueryDraft(event.target.value)}
+              />
+            </label>
+            <SegmentedControl<CatalogueOwnedFilter>
+              label="Collection"
+              value={search.owned}
+              options={[
+                { value: 'all', label: 'All' },
+                { value: 'owned', label: 'Owned' },
+                { value: 'missing', label: 'Missing' },
+              ]}
+              onChange={(owned) => updateSearch({ owned })}
+            />
+            <button type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(true)}>
+              <Icon name="filter" /> Filters
+              {activeFilterCount > 0 ? (
+                <span className="filter-count-badge">{activeFilterCount}</span>
+              ) : null}
+            </button>
+            <button type="submit" disabled={busy}>
+              {busy ? 'Searching…' : 'Search'}
+            </button>
+          </form>
+
+          {activeChips.length > 0 ? (
+            <div className="catalogue-active-filters">
+              <FilterChips items={activeChips} onRemove={removeChip} />
+              <button
+                type="button"
+                className="text-button"
+                onClick={() => updateSearch({ type: [], rarity: [], set: [], region: undefined })}
+              >
+                Clear all
+              </button>
+            </div>
+          ) : null}
+
+          <CopyTools filters={search} cards={cards} total={total} busy={busy} />
+          {!speciesEntry ? <CustomCardForm /> : null}
+          <BulkAddToBinder filters={search} total={total} />
+          {!isDesktop ? (
+            <button
+              type="button"
+              className="catalogue-show-results"
+              onClick={() => setPhoneControlsOpen(false)}
+            >
+              Show {total.toLocaleString('en-AU')}
+            </button>
+          ) : null}
         </div>
       ) : null}
-
-      <CopyTools filters={search} cards={cards} total={total} busy={busy} />
-      {!speciesEntry ? <CustomCardForm /> : null}
-      <BulkAddToBinder filters={search} total={total} />
 
       <div ref={galleryRef}>
         <CatalogueGallery
@@ -328,7 +371,7 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
 
       {search.card ? (
         <SidePanel open onClose={requestCloseCard} title="Card">
-          <div className="card-overlay-chrome" onKeyDown={onOverlayKeyDown}>
+          <div className="card-overlay-chrome">
             <div className="card-overlay-nav">
               <button
                 type="button"

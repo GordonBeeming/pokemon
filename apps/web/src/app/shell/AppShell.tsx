@@ -1,7 +1,9 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { Link, Outlet, useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, type ReactElement } from 'react';
+import { queryKeys } from '../api/keys';
 import { useSession } from '../api/queries/session';
-import { ApiError, RETURN_TO_STORAGE_KEY } from '../api/client';
+import { ApiError, AUTH_LOST_EVENT, RETURN_TO_STORAGE_KEY } from '../api/client';
 import { Icon } from '../ui/icons';
 import { NAV_ITEMS } from './nav-items';
 import { SignIn } from './SignIn';
@@ -39,7 +41,25 @@ function Nav(): ReactElement {
 export function AppShell(): ReactElement {
   const session = useSession();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const restored = useRef(false);
+
+  // apiFetch raises this on any 401 (a revoked session, a restore, a disabled
+  // account). Every other cached query is dropped so the previous user's data leaves
+  // memory, and the session query is reset so it refetches and lands on sign-in.
+  // Once the session itself has no data this is a no-op, so the session check's own
+  // 401 can't set off another reset.
+  useEffect(() => {
+    function onAuthLost(): void {
+      const sessionKey = queryKeys.session();
+      if (queryClient.getQueryData(sessionKey) === undefined) return;
+      restored.current = false;
+      queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== sessionKey[0] });
+      void queryClient.resetQueries({ queryKey: sessionKey });
+    }
+    globalThis.addEventListener(AUTH_LOST_EVENT, onAuthLost);
+    return () => globalThis.removeEventListener(AUTH_LOST_EVENT, onAuthLost);
+  }, [queryClient]);
 
   useEffect(() => {
     if (!session.data || restored.current) return;
@@ -57,7 +77,7 @@ export function AppShell(): ReactElement {
 
   const signedOut =
     session.isError && session.error instanceof ApiError && session.error.status === 401;
-  if (signedOut || !session.data) return <SignIn />;
+  if (signedOut) return <SignIn />;
 
   if (session.isError)
     return (
@@ -73,6 +93,8 @@ export function AppShell(): ReactElement {
         </section>
       </main>
     );
+
+  if (!session.data) return <SignIn />;
 
   return (
     <div className="app-shell">

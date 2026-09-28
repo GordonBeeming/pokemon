@@ -76,7 +76,7 @@ export function BulkAddToBinder({
             {adding
               ? 'Adding in order…'
               : overCap
-                ? `${total.toLocaleString('en-AU')} results exceed the ${CATALOGUE_BULK_CAP.toLocaleString('en-AU')}-card cap`
+                ? `Narrow the results to ${CATALOGUE_BULK_CAP.toLocaleString('en-AU')} cards or fewer to add all.`
                 : `Add all ${total.toLocaleString('en-AU')} results`}
           </button>
         </div>

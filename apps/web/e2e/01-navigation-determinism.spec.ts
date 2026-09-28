@@ -1,7 +1,12 @@
 import { z } from 'zod';
 import { getJson } from './support/api';
 import { expect, test } from './support/fixtures';
-import { goToNav } from './support/nav';
+import {
+  ensureCatalogueControlsOpen,
+  expectActiveFilterCount,
+  expectCatalogueQuery,
+  goToNav,
+} from './support/nav';
 
 test('navigation is deterministic across leave/return, back, and reload', async ({ page }) => {
   const consoleErrors: string[] = [];
@@ -28,8 +33,9 @@ test('navigation is deterministic across leave/return, back, and reload', async 
   );
   expect(total).toBeGreaterThan(50);
 
+  await ensureCatalogueControlsOpen(page);
   await page.getByLabel('Search').fill('e');
-  await page.getByRole('button', { name: 'Search' }).click();
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
   await page.getByRole('button', { name: /Filters/ }).click();
   await page.getByRole('checkbox', { name: 'Common', exact: true }).check();
   // Escape, not a "Close" button click: desktop's SidePanel has an icon button
@@ -37,7 +43,7 @@ test('navigation is deterministic across leave/return, back, and reload', async 
   // button at all (only its drag handle) — Escape is the one dismissal both
   // primitives' shared focus-trap hook actually implements.
   await page.keyboard.press('Escape');
-  await expect(page.locator('.filter-count-badge')).toHaveText('1');
+  await expectActiveFilterCount(page, 1);
   await expect(status).toHaveText(new RegExp(`^Showing 1 to 50 of ${total} cards\\.$`));
 
   // Page 2.
@@ -86,8 +92,8 @@ test('navigation is deterministic across leave/return, back, and reload', async 
   await expect(page).toHaveURL(/\/catalogue\?/);
   expect(new URL(page.url()).searchParams.get('q')).toBe('');
   expect(new URL(page.url()).searchParams.get('page')).toBe('1');
-  await expect(page.locator('.filter-count-badge')).toHaveCount(0);
-  await expect(page.getByLabel('Search')).toHaveValue('');
+  await expectActiveFilterCount(page, 0);
+  await expectCatalogueQuery(page, '');
   await expect(status).toHaveText(/^Showing 1 to 50 of \d+ cards\.$/);
 
   // Back returns to the exact previous URL and state, one history entry at a time:
@@ -104,8 +110,8 @@ test('navigation is deterministic across leave/return, back, and reload', async 
   await expect(status).toHaveText(new RegExp(`^Showing 51 to 100 of ${total} cards\\.$`));
   await page.goBack();
   await expect(page).toHaveURL(catalogueUrl);
-  await expect(page.getByLabel('Search')).toHaveValue('e');
-  await expect(page.locator('.filter-count-badge')).toHaveText('1');
+  await expectCatalogueQuery(page, 'e');
+  await expectActiveFilterCount(page, 1);
   await expect(page.getByRole('dialog', { name: 'Card' })).toBeVisible();
   // Three history pops in a row is faster than any real person clicks Back; give
   // this specific re-settle more room than the suite's default 8s.
@@ -120,7 +126,7 @@ test('navigation is deterministic across leave/return, back, and reload', async 
   // Reload keeps the same state, because it all lives in the URL.
   await page.reload();
   await expect(page).toHaveURL(catalogueUrl);
-  await expect(page.getByLabel('Search')).toHaveValue('e');
+  await expectCatalogueQuery(page, 'e');
   await expect(page.getByRole('dialog', { name: 'Card' })).toBeVisible();
   await expect(status).toHaveText(new RegExp(`^Showing 51 to 100 of ${total} cards\\.$`));
   await expect(page.locator('.catalogue-grid button.card-frame').first()).toHaveAttribute(

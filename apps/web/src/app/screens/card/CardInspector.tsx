@@ -63,20 +63,21 @@ export function CardInspector({
   const [notes, setNotes] = useState(savedNotes);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [removeOpen, setRemoveOpen] = useState(false);
-  const draftCardId = useRef(cardId);
+  // The draft is seeded from the card's saved notes once per card, when its detail
+  // has actually loaded: seeding on the first render would lock in '' for any card
+  // that has a note, show the note as blank, and count it as an unsaved edit.
+  const [seededFor, setSeededFor] = useState<string | null>(null);
   const saveTimer = useRef<number | undefined>(undefined);
 
-  // Switching cards resets the draft to the new card's own saved notes rather than
-  // leaking the previous card's edit — FEATURES.md's "switching card resets draft".
   useEffect(() => {
-    if (draftCardId.current !== cardId) {
-      draftCardId.current = cardId;
-      setNotes(savedNotes);
-      setSaveState('idle');
-    }
-  }, [cardId, savedNotes]);
+    if (!card || seededFor === cardId) return;
+    setSeededFor(cardId);
+    setNotes(savedNotes);
+    setSaveState('idle');
+  }, [card, cardId, savedNotes, seededFor]);
 
-  const dirty = notes.trim() !== savedNotes.trim();
+  const draftNotes = seededFor === cardId ? notes : savedNotes;
+  const dirty = draftNotes.trim() !== savedNotes.trim();
   useEffect(() => {
     onDirtyChange?.(dirty || saveState === 'saving' || saveState === 'error');
   }, [dirty, saveState, onDirtyChange]);
@@ -99,6 +100,7 @@ export function CardInspector({
   );
 
   function onNotesChange(value: string): void {
+    setSeededFor(cardId);
     setNotes(value);
     window.clearTimeout(saveTimer.current);
     saveTimer.current = window.setTimeout(() => void save(value), AUTOSAVE_DEBOUNCE_MS);
@@ -106,7 +108,7 @@ export function CardInspector({
 
   function onNotesBlur(): void {
     window.clearTimeout(saveTimer.current);
-    if (notes.trim() !== savedNotes.trim()) void save(notes);
+    if (dirty) void save(draftNotes);
   }
 
   useEffect(() => () => window.clearTimeout(saveTimer.current), []);
@@ -240,7 +242,7 @@ export function CardInspector({
         </label>
         <textarea
           id="card-inspector-notes"
-          value={notes}
+          value={draftNotes}
           maxLength={NOTES_MAX}
           rows={3}
           placeholder="Where it came from, which sleeve, anything else"
@@ -248,7 +250,8 @@ export function CardInspector({
           onBlur={onNotesBlur}
         />
         <small>
-          {notes.length.toLocaleString('en-AU')} of {NOTES_MAX.toLocaleString('en-AU')} characters
+          {draftNotes.length.toLocaleString('en-AU')} of {NOTES_MAX.toLocaleString('en-AU')}{' '}
+          characters
         </small>
         <p
           className={saveState === 'error' ? 'autosave-status error' : 'autosave-status'}
@@ -257,7 +260,7 @@ export function CardInspector({
           {saveState === 'error' ? (
             <>
               Changes could not be saved.{' '}
-              <button type="button" className="text-button" onClick={() => void save(notes)}>
+              <button type="button" className="text-button" onClick={() => void save(draftNotes)}>
                 Try again
               </button>
             </>

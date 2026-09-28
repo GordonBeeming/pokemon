@@ -1034,7 +1034,9 @@ function frameFields(row: CardRow): FrameFields {
       subtype: row.subtype,
       name: row.name,
     }),
-    setCode: row.set_abbreviation,
+    // Every card shows its set; a set TCGdex gives no abbreviation (mostly promos)
+    // falls back to its id until someone sets a code for it on the Sets page.
+    setCode: row.set_abbreviation ?? row.set_id.toUpperCase(),
     rarityKey: rarityKeyFor(row.rarity),
   };
 }

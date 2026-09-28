@@ -131,6 +131,61 @@ describe('CardInspector — 0 copies', () => {
   });
 });
 
+describe('CardInspector — a card that already has a saved note', () => {
+  it('shows the saved note, is not dirty, and does not save on blur without an edit', async () => {
+    const writes: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: string, init?: RequestInit) => {
+        if (init?.method && init.method !== 'GET') writes.push(`${init.method} ${input}`);
+        if (input.startsWith('/api/catalogue/card-1'))
+          return Promise.resolve(
+            jsonResponse({
+              ...ZERO_COPY_CARD,
+              card: {
+                ...ZERO_COPY_CARD.card,
+                notes: 'From the Sydney league',
+                collection: {
+                  cardId: 'card-1',
+                  quantity: 1,
+                  notes: 'From the Sydney league',
+                  revision: 3,
+                  updatedAt: '2026-01-01T00:00:00.000Z',
+                },
+              },
+            }),
+          );
+        if (input === '/api/cards/card-1/binder-matches')
+          return Promise.resolve(jsonResponse({ ok: true, binders: [] }));
+        throw new Error(`unexpected fetch: ${input}`);
+      }),
+    );
+    const dirtyChanges: boolean[] = [];
+    await step(() =>
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ToastProvider>
+            <CardInspector
+              cardId="card-1"
+              onClose={vi.fn()}
+              onDirtyChange={(dirty) => dirtyChanges.push(dirty)}
+            />
+          </ToastProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await flushUntil(() => container.querySelector('textarea') !== null);
+
+    const textarea = container.querySelector<HTMLTextAreaElement>('textarea');
+    expect(textarea?.value).toBe('From the Sydney league');
+    expect(dirtyChanges.at(-1)).toBe(false);
+    expect(dirtyChanges).not.toContain(true);
+
+    await step(() => textarea?.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+    expect(writes).toEqual([]);
+  });
+});
+
 async function step(action: () => unknown): Promise<void> {
   await act(async () => {
     await action();

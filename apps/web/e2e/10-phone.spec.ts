@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import * as api from './support/api';
 import { expect, test } from './support/fixtures';
+import { ensureCatalogueControlsOpen } from './support/nav';
 import { activeVersionId } from './support/scenarios';
 
 // Playwright only accepts an object pattern as the fixtures argument, even when no
@@ -55,10 +56,28 @@ test('the catalogue filters trigger opens the phone sheet, not the desktop side 
   page,
 }) => {
   await page.goto('/catalogue');
+  await ensureCatalogueControlsOpen(page);
   await page.getByRole('button', { name: /Filters/ }).tap();
   const sheet = page.getByRole('dialog', { name: 'Filters' });
   await expect(sheet).toBeVisible();
   await expect(sheet.locator('.sheet-handle')).toBeVisible();
+});
+
+test('the catalogue opens to its cards with search and filters behind a summary pill', async ({
+  page,
+}) => {
+  await page.goto('/catalogue?q=pikachu&owned=missing');
+  const pill = page.locator('.catalogue-summary-pill');
+  await expect(pill).toBeVisible();
+  await expect(pill).toHaveAttribute('aria-expanded', 'false');
+  await expect(pill).toContainText('“pikachu” · Missing');
+  await expect(page.getByLabel('Search')).toHaveCount(0);
+  await expect(page.locator('.catalogue-grid button.card-frame').first()).toBeVisible();
+
+  await pill.tap();
+  await expect(page.getByLabel('Search')).toHaveValue('pikachu');
+  await page.getByRole('button', { name: /^Show / }).tap();
+  await expect(page.getByLabel('Search')).toHaveCount(0);
 });
 
 test('tapping a binder pocket opens the phone action sheet', async ({ page }) => {

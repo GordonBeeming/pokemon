@@ -44,4 +44,23 @@ describe('catalogue frame metadata', () => {
     const detail = await getCardDetail(db, 'owner', 'card-1');
     expect(detail).toMatchObject({ frameType: 'grass', setCode: 'BS', rarityKey: 'HV' });
   });
+
+  it('falls back to the set id when the set has no code yet', async () => {
+    const db = setup();
+    await db
+      .prepare(
+        `INSERT INTO catalogue_cards
+          (id,name,language,category,set_id,set_name,number,rarity,created_at,updated_at)
+         VALUES ('card-4','Ancient Mew','en','pokemon','np','Nintendo Promos','1','Promo',1,1)`,
+      )
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO card_sources(provider,source_id,card_id,language,source_updated_at,checksum,active,imported_at)
+         VALUES ('tcgdex','np-1','card-4','en',1,'checksum',1,1)`,
+      )
+      .run();
+    const detail = await getCardDetail(db, 'owner', 'card-4');
+    expect(detail).toMatchObject({ setCode: 'NP' });
+  });
 });

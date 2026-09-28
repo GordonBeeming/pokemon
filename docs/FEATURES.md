@@ -424,8 +424,9 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       open — a different binder opened while the delete was in flight is left alone · done when:
       deleting binder A, then quickly opening binder B before the delete finishes, stays on binder B
       once the delete completes.
-- [ ] keep · URL format is `#binders?version=&page=&row=&column=`; `#binders` alone opens the
-      library; an invalid pocket reference is dropped silently while the page itself still opens ·
+- [ ] changed · Binder links are real paths, `/binders/<id>?page=&v=&sel=<pageId>:<row>:<col>`,
+      instead of the old `#binders?…` hash; `/binders` alone opens the library; an invalid pocket
+      reference is dropped silently while the page itself still opens ·
       done when: visiting a binder link with a nonsense row/column still opens the correct page with
       no pocket selected, instead of an error.
 - [ ] keep · Any open pocket dialog or panel traps Tab focus within it and returns focus to whatever
@@ -488,15 +489,14 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       retarget, rather than left silently broken · done when: opening a binder with a target pointing
       at a hidden Pocket card shows that pocket flagged as needing attention, with a path to pick a
       replacement.
-- [ ] dropped · An explicit "add a page" control · dropped because capacity growth remains the only
-      way to add pages; nothing in the research surfaced a need for an empty extra page ahead of
-      content.
+- [ ] new · Manage binder has an "Add a page at the end" control alongside capacity growth · done
+      when: Add a page at the end adds one empty page after the last page and nothing else moves.
 - [ ] dropped · Exposing bulk slot-assignment directly in the UI · dropped because the insert and
       per-pocket assignment flows already cover every bulk scenario the research surfaced; the
       endpoint stays available server-side for scripts.
-- [ ] dropped · A per-binder shortages screen · dropped because the dashboard's cross-binder Active
-      shortages report is the shortages surface actually used; no separate per-binder view is
-      planned.
+- [ ] new · Manage binder shows this binder's shortage count, next to the dashboard's cross-binder
+      Active shortages report · done when: a binder with unfilled targets shows its own count in
+      Manage binder.
 
 ## Settings
 
@@ -713,7 +713,7 @@ readability. Citations use each inventory document's own section/subsection head
 | Keyboard: Escape closes open panel/dialog, focus returns          | Binder page: dialogs/panels trap focus                              |
 | Keyboard: Tab/Shift+Tab focus trap in modal panel                 | Binder page: dialogs/panels trap focus                              |
 | Keyboard: Escape on "Manage page" popover                         | Binder page: manage page popover                                    |
-| URL format `#binders?version=&page=&row=&column=`                 | Binder page: URL hash format                                        |
+| URL format `#binders?version=&page=&row=&column=`                 | Binder page: binder links are real paths (changed)                  |
 | `#binders` alone shows library                                    | Binder page: URL hash format                                        |
 | Parsing validation, invalid pocket dropped silently               | Binder page: URL hash format                                        |
 | `pushState` vs `replaceState` distinction                         | Binder page: pocket selection uses replaceState                     |
