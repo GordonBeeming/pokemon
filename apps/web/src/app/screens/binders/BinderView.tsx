@@ -37,13 +37,16 @@ import { EmptyState } from '../../ui/EmptyState';
 import { Icon } from '../../ui/icons';
 import { MenuButton } from '../../ui/MenuButton';
 import { SegmentedControl } from '../../ui/SegmentedControl';
+import { Sheet } from '../../ui/Sheet';
 import { useRouteAnnounce, useToast } from '../../ui/Toast';
 import { CardInspector } from '../card/CardInspector';
 import { clearCardClipboard, useCardClipboard } from '../catalogue/card-clipboard';
 import {
+  anyFrameCard,
   binderErrorMessage,
   bookmarkDefaultName,
   cardIdsOnPages,
+  frameCardFrom,
   parseSlotId,
   placedStatus,
   pocketState,
@@ -51,7 +54,15 @@ import {
   slotIdOf,
 } from './model';
 import { locationKey, PageTrack, type TrackPage } from './PageTrack';
-import { BookmarkJump, PageMenu, PageStepper } from './PageToolbar';
+import {
+  BookmarkJump,
+  PageActionList,
+  PageJumpForm,
+  PageMenu,
+  PageStepper,
+  PhonePageBar,
+  type PageMenuActions,
+} from './PageToolbar';
 import { ChangeTargetPanel } from './panels/ChangeTargetPanel';
 import { InsertPanel } from './panels/InsertPanel';
 import { FindCardsPanelContainer, ManagePanelContainer } from './panels/containers';
@@ -111,7 +122,9 @@ function focusPocket(at: BinderSlotLocation, scroll: boolean): void {
   const element = document.querySelector<HTMLElement>(`[data-pocket="${locationKey(at)}"]`);
   if (!element) return;
   element.focus({ preventScroll: !scroll });
-  if (scroll) element.scrollIntoView?.({ block: 'center', inline: 'nearest' });
+  // 'nearest' only scrolls when the pocket is off-screen, so a jump within the binder
+  // doesn't move a page that's already in view.
+  if (scroll) element.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
 }
 
 /** Cards the loaded pages reference (targets and placed copies), merged into one map. */
@@ -146,6 +159,8 @@ export function BinderView({
     };
   }, []);
   const phone = useMediaQuery(PHONE_QUERY);
+  // Phone only: the jump sheet (page number, bookmarks) or the tools sheet.
+  const [phoneSheet, setPhoneSheet] = useState<'jump' | 'tools' | null>(null);
   const reducedMotion = useMediaQuery(REDUCED_MOTION_QUERY);
   const { palette } = useFramePalette();
   const clipboard = useCardClipboard();
@@ -331,18 +346,24 @@ export function BinderView({
       const slot = focusAt
         ? page?.slots.find((s) => s.row === focusAt.row && s.column === focusAt.column)
         : undefined;
-      pendingFocus.current = slot ? 'selected' : null;
+      // On a phone the selection is what holds the pocket sheet open, so a finished
+      // action lands back on the binder with nothing selected; on desktop the
+      // changed pocket stays selected with its action bar.
+      const keepSelection = !phone && page !== undefined && slot !== undefined;
+      pendingFocus.current = keepSelection ? 'selected' : null;
+      setPanel(null);
+      setPhoneSheet(null);
       navigate(
         {
           ...search,
           page: target + 1,
-          sel: page && slot ? slotIdOf(page.id, slot.row, slot.column) : undefined,
+          sel: keepSelection ? slotIdOf(page.id, slot.row, slot.column) : undefined,
           mode: undefined,
         },
         true,
       );
     },
-    [queryClient, versionId, navigate, pageIndex, search],
+    [queryClient, versionId, navigate, pageIndex, search, phone],
   );
 
   const writer = useBinderWriter({
@@ -748,6 +769,64 @@ export function BinderView({
     </dl>
   ) : null;
 
+  const meta = (
+    <p className="binder-meta">
+      {layoutLabel} pages · {capacity.toLocaleString('en-AU')} pockets
+      {summary.data
+        ? ` · ${summary.data.targets.toLocaleString('en-AU')} targets · ${summary.data.placed.toLocaleString('en-AU')} placed`
+        : ''}
+    </p>
+  );
+
+  const pageMenuActions: PageMenuActions = {
+    reservedPage,
+    canRemove: pageRemovable,
+    onReservePage: () => setPanel('page-reserve'),
+    onEarlier: () => reorder(-1),
+    onLater: () => reorder(1),
+    onArrange: () => setPanel('manage'),
+    onRemovePage: () => {
+      if (versionId && currentPage)
+        void run(
+          'Page removed.',
+          (revision) => binderApi.deletePage(versionId, currentPage.id, revision),
+          null,
+        );
+    },
+  };
+
+  const displayControls = (
+    <div className="binder-display-controls">
+      <span className="binder-display-label">Show neighbouring pages</span>
+      <SegmentedControl<string>
+        label="Neighbouring columns shown"
+        value={String(peek)}
+        onChange={(value) =>
+          void patchDisplay({
+            peekColumns: Number(value) === 2 ? 2 : Number(value) === 1 ? 1 : 0,
+          })
+        }
+        options={[
+          { value: '0', label: 'None' },
+          { value: '1', label: '1 column' },
+          { value: '2', label: '2 columns' },
+        ]}
+      />
+      <span className="binder-display-label">Card frame</span>
+      <SegmentedControl<string>
+        label="Card frame"
+        value={showFrame ? 'on' : 'off'}
+        onChange={(value) => void patchDisplay({ showFrame: value === 'on' })}
+        options={[
+          { value: 'on', label: 'On' },
+          { value: 'off', label: 'Off' },
+        ]}
+      />
+    </div>
+  );
+
+  const closePhoneSheet = (): void => setPhoneSheet(null);
+
   const selectedTitle = selectedSlot ? pocketTitle(selectedSlot, cards) : '';
   const where = selected
     ? `Page ${selected.page + 1} · row ${selected.row + 1}, pocket ${selected.column + 1}`
@@ -769,18 +848,15 @@ export function BinderView({
             </a>
           </nav>
           <h1 id="binder-heading">{binder.name}</h1>
-          <p className="binder-meta">
-            {layoutLabel} pages · {capacity.toLocaleString('en-AU')} pockets
-            {summary.data
-              ? ` · ${summary.data.targets.toLocaleString('en-AU')} targets · ${summary.data.placed.toLocaleString('en-AU')} placed`
-              : ''}
-          </p>
+          {phone ? null : meta}
         </div>
         <div className="binder-header-actions">
-          <button type="button" onClick={() => setPanel('manage')}>
-            <Icon name="settings" />
-            Manage binder
-          </button>
+          {phone ? null : (
+            <button type="button" onClick={() => setPanel('manage')}>
+              <Icon name="settings" />
+              Manage binder
+            </button>
+          )}
         </div>
       </header>
 
@@ -874,88 +950,134 @@ export function BinderView({
         </div>
       ) : null}
 
-      <div className="binder-toolbar">
-        <PageStepper
+      {phone ? (
+        <PhonePageBar
           pageIndex={pageIndex}
           pageCount={Math.max(pageCount, 1)}
           pending={pending}
           onGo={goToPage}
+          onOpenJump={() => setPhoneSheet('jump')}
+          onOpenTools={() => setPhoneSheet('tools')}
         />
-        <BookmarkJump bookmarks={bookmarks.data ?? []} pending={pending} onJump={jumpToBookmark} />
-        <PageMenu
-          pageIndex={pageIndex}
-          pageCount={pageCount}
-          editable={editable}
-          pending={pending}
-          actions={{
-            reservedPage,
-            canRemove: pageRemovable,
-            onReservePage: () => setPanel('page-reserve'),
-            onEarlier: () => reorder(-1),
-            onLater: () => reorder(1),
-            onArrange: () => setPanel('manage'),
-            onRemovePage: () => {
-              if (versionId && currentPage)
-                void run(
-                  'Page removed.',
-                  (revision) => binderApi.deletePage(versionId, currentPage.id, revision),
-                  null,
-                );
-            },
-          }}
-        />
-        <SpaceSearch
-          key={versionId}
-          versionId={versionId}
-          query={search.q}
-          pending={pending}
-          onQueryChange={(q) => navigate({ ...search, q }, true)}
-          onJump={jumpToSpace}
-        />
-        {/* Peek and frame are set once per binder and rarely touched again, so they
-            sit behind one trigger in the bar instead of a second row of controls. */}
-        <MenuButton
-          kind="dialog"
-          className="binder-display"
-          align="end"
-          menuLabel="Display"
-          label={
-            <>
-              <Icon name="eye" /> <span className="menu-button-text">Display</span>
-            </>
-          }
-        >
-          {() => (
-            <div className="binder-display-controls">
-              <span className="binder-display-label">Show neighbouring pages</span>
-              <SegmentedControl<string>
-                label="Neighbouring columns shown"
-                value={String(peek)}
-                onChange={(value) =>
-                  void patchDisplay({
-                    peekColumns: Number(value) === 2 ? 2 : Number(value) === 1 ? 1 : 0,
-                  })
-                }
-                options={[
-                  { value: '0', label: 'None' },
-                  { value: '1', label: '1 column' },
-                  { value: '2', label: '2 columns' },
-                ]}
+      ) : (
+        <div className="binder-toolbar">
+          <PageStepper
+            pageIndex={pageIndex}
+            pageCount={Math.max(pageCount, 1)}
+            pending={pending}
+            onGo={goToPage}
+          />
+          <BookmarkJump
+            bookmarks={bookmarks.data ?? []}
+            pending={pending}
+            onJump={jumpToBookmark}
+          />
+          <PageMenu
+            pageIndex={pageIndex}
+            pageCount={pageCount}
+            editable={editable}
+            pending={pending}
+            actions={pageMenuActions}
+          />
+          <SpaceSearch
+            key={versionId}
+            versionId={versionId}
+            query={search.q}
+            pending={pending}
+            onQueryChange={(q) => navigate({ ...search, q }, true)}
+            onJump={jumpToSpace}
+          />
+          {/* Peek and frame are set once per binder and rarely touched again, so they
+              sit behind one trigger in the bar instead of a second row of controls. */}
+          <MenuButton
+            kind="dialog"
+            className="binder-display"
+            align="end"
+            menuLabel="Display"
+            label={
+              <>
+                <Icon name="eye" /> <span className="menu-button-text">Display</span>
+              </>
+            }
+          >
+            {() => displayControls}
+          </MenuButton>
+        </div>
+      )}
+
+      {phone ? (
+        <>
+          <Sheet open={phoneSheet === 'jump'} onClose={closePhoneSheet} title="Go to a page">
+            <div className="binder-sheet">
+              <PageJumpForm
+                pageIndex={pageIndex}
+                pageCount={Math.max(pageCount, 1)}
+                pending={pending}
+                onGo={(index) => {
+                  closePhoneSheet();
+                  goToPage(index);
+                }}
               />
-              <span className="binder-display-label">Card frame</span>
-              <SegmentedControl<string>
-                label="Card frame"
-                value={showFrame ? 'on' : 'off'}
-                onChange={(value) => void patchDisplay({ showFrame: value === 'on' })}
-                options={[
-                  { value: 'on', label: 'On' },
-                  { value: 'off', label: 'Off' },
-                ]}
+              <BookmarkJump
+                bookmarks={bookmarks.data ?? []}
+                pending={pending}
+                onJump={(bookmark) => {
+                  closePhoneSheet();
+                  jumpToBookmark(bookmark);
+                }}
               />
             </div>
-          )}
-        </MenuButton>
-      </div>
+          </Sheet>
+          <Sheet open={phoneSheet === 'tools'} onClose={closePhoneSheet} title="Binder tools">
+            <div className="binder-sheet">
+              <SpaceSearch
+                key={versionId}
+                versionId={versionId}
+                query={search.q}
+                pending={pending}
+                onQueryChange={(q) => navigate({ ...search, q }, true)}
+                onJump={(match) => {
+                  closePhoneSheet();
+                  jumpToSpace(match);
+                }}
+              />
+              <BookmarkJump
+                bookmarks={bookmarks.data ?? []}
+                pending={pending}
+                onJump={(bookmark) => {
+                  closePhoneSheet();
+                  jumpToBookmark(bookmark);
+                }}
+              />
+              <section className="binder-sheet-section" aria-labelledby="binder-sheet-page">
+                <h3 id="binder-sheet-page">Manage page {pageIndex + 1}</h3>
+                <PageActionList
+                  pageIndex={pageIndex}
+                  pageCount={pageCount}
+                  editable={editable}
+                  pending={pending}
+                  actions={pageMenuActions}
+                  onDone={closePhoneSheet}
+                />
+              </section>
+              <button
+                type="button"
+                onClick={() => {
+                  closePhoneSheet();
+                  setPanel('manage');
+                }}
+              >
+                <Icon name="settings" />
+                Manage binder
+              </button>
+              <section className="binder-sheet-section binder-display" aria-label="Display">
+                <h3>Display</h3>
+                {displayControls}
+              </section>
+            </div>
+          </Sheet>
+        </>
+      ) : null}
 
       {moveSource ? (
         <div className="binder-banner binder-banner-accent" role="status">
@@ -1023,6 +1145,20 @@ export function BinderView({
             title: selectedTitle,
             where,
             status: placedStatus(selectedSlot, cards),
+            frame: selectedCard
+              ? {
+                  card: frameCardFrom(selectedCard),
+                  variant: 'card',
+                  state: selectedSlot.assignedCardId ? 'placed' : 'unowned',
+                }
+              : selectedSlot.entryKind === 'pokemon' && selectedSlot.pokemonNumber
+                ? {
+                    card: anyFrameCard(selectedSlot.pokemonNumber),
+                    variant: 'any',
+                    state: 'unowned',
+                  }
+                : null,
+            palette,
           }}
           items={actionItems}
           onClose={deselect}
@@ -1247,7 +1383,16 @@ export function BinderView({
         <ManagePanelContainer
           versionId={versionId}
           version={version}
-          usage={usage}
+          usage={
+            phone ? (
+              <>
+                {meta}
+                {usage}
+              </>
+            ) : (
+              usage
+            )
+          }
           editable={editable}
           pending={pending}
           error={writer.error}

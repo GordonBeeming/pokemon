@@ -102,7 +102,10 @@ export function PageTrack(props: PageTrackProps): ReactElement {
     return () => observer.disconnect();
   }, []);
 
-  const geometry = trackGeometry(width || 960, columns, peek);
+  const geometry = trackGeometry(width || 960, columns, peek, {
+    before: currentIndex > 0,
+    after: currentIndex + 1 < props.pageCount,
+  });
 
   useLayoutEffect(() => {
     const element = currentPageRef.current;
@@ -176,7 +179,7 @@ export function PageTrack(props: PageTrackProps): ReactElement {
       const g = geometry;
       if (!viewport) return;
       const leftEdge = viewport.left + Math.max(g.offset, 24);
-      const rightEdge = viewport.right - Math.max(g.offset, 24);
+      const rightEdge = viewport.right - Math.max(g.offsetRight, 24);
       if (event.clientX < leftEdge) armFlip(-1);
       else if (event.clientX > rightEdge) armFlip(1);
       else clearFlip();
@@ -297,7 +300,14 @@ export function PageTrack(props: PageTrackProps): ReactElement {
                 aria-label={
                   direction === 0 ? `Page ${index + 1}` : `Page ${index + 1}, neighbouring`
                 }
-                aria-hidden={direction !== 0 && peek === 0 ? true : undefined}
+                aria-hidden={
+                  direction !== 0 &&
+                  (peek === 0 ||
+                    (direction === -1 && geometry.offset === 0) ||
+                    (direction === 1 && geometry.offsetRight === 0))
+                    ? true
+                    : undefined
+                }
                 style={{
                   left: index * geometry.stride,
                   width: geometry.pageWidth,

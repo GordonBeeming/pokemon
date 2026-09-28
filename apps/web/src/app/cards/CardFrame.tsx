@@ -159,10 +159,12 @@ export function CardFrame({
           {variant === 'any' ? (
             <span>ANY</span>
           ) : (
-            <span>
-              {card.setCode}
-              <span className="card-frame-dot">·</span>
-              {card.number}
+            <span className="card-frame-codenum">
+              <span>
+                {card.setCode}
+                <span className="card-frame-dot">·</span>
+              </span>
+              <span>{card.number}</span>
             </span>
           )}
         </span>

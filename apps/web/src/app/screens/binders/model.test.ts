@@ -88,4 +88,21 @@ describe('trackGeometry', () => {
         expect(geometry.pocketWidth).toBeGreaterThanOrEqual(40);
       }
   });
+
+  it('on a phone, peeks an equal slice each side, and nothing on a side with no page', () => {
+    for (const peek of [1, 2] as const) {
+      const middle = trackGeometry(358, 4, peek);
+      expect(middle.offset).toBe(middle.offsetRight);
+      expect(middle.offset).toBeGreaterThan(0);
+      expect(middle.viewportWidth).toBeLessThanOrEqual(358);
+
+      const first = trackGeometry(358, 4, peek, { before: false, after: true });
+      expect(first.offset).toBe(0);
+      expect(first.offsetRight).toBe(middle.offsetRight);
+      // Same pocket size on every page, so a page turn never resizes the cards.
+      expect(first.pocketWidth).toBe(middle.pocketWidth);
+    }
+    const desktop = trackGeometry(1100, 4, 1, { before: false, after: true });
+    expect(desktop.offset).toBe(desktop.offsetRight);
+  });
 });

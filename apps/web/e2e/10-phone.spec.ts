@@ -100,3 +100,90 @@ test('tapping a binder pocket opens the phone action sheet', async ({ page }) =>
   await expect(sheet).toBeVisible();
   await expect(sheet.locator('.pocket-sheet-actions .action-bar')).toBeVisible();
 });
+
+test('swiping to the next binder page keeps the window where it was', async ({ page }) => {
+  const binders = await api.listBinders(page.request);
+  const binder = binders.find((item) => item.name === 'National Pokedex') ?? binders[0];
+  if (!binder) throw new Error('No binders exist in this database copy.');
+
+  // A short screen (browser chrome, a banner) so the binder page has to scroll.
+  await page.setViewportSize({ width: 390, height: 560 });
+  await page.goto(`/binders/${binder.id}?page=1&q=`);
+  const viewport = page.locator('.page-track-viewport');
+  await expect(viewport).toBeVisible();
+  // Mid-screen: scroll as far as the page allows, up to just above the binder.
+  await page.evaluate(() => {
+    const stage = document.querySelector('.binder-stage');
+    const target = stage ? stage.getBoundingClientRect().top + window.scrollY - 40 : 200;
+    window.scrollTo(0, Math.min(target, document.documentElement.scrollHeight - innerHeight));
+  });
+  const before = await page.evaluate(() => window.scrollY);
+  expect(before, 'the binder page should be tall enough to scroll on a phone').toBeGreaterThan(0);
+
+  // A real right-to-left touch swipe across the page track, sent through CDP so the
+  // app sees touch pointer events rather than a mouse drag.
+  const box = await viewport.boundingBox();
+  if (!box) throw new Error('page track has no box');
+  const y = box.y + box.height / 2;
+  const cdp = await page.context().newCDPSession(page);
+  const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', x: number) =>
+    cdp.send('Input.dispatchTouchEvent', {
+      type,
+      touchPoints: type === 'touchEnd' ? [] : [{ x, y }],
+    });
+  await touch('touchStart', box.x + box.width * 0.8);
+  for (const fraction of [0.65, 0.5, 0.35, 0.2])
+    await touch('touchMove', box.x + box.width * fraction);
+  await touch('touchEnd', box.x + box.width * 0.2);
+
+  await expect(page).toHaveURL(/[?&]page=2(&|$)/u);
+  await expect(page.locator('.phone-page-number')).toContainText('2 /');
+  expect(await page.evaluate(() => window.scrollY)).toBe(before);
+});
+
+test.describe('bottom sheets', () => {
+  async function openFiltersSheet(page: Page) {
+    await page.goto('/catalogue');
+    await ensureCatalogueControlsOpen(page);
+    await page.getByRole('button', { name: /Filters/ }).tap();
+    const sheet = page.getByRole('dialog', { name: 'Filters' });
+    await expect(sheet).toBeVisible();
+    return sheet;
+  }
+
+  test('a tap on the backdrop closes the sheet', async ({ page }) => {
+    const sheet = await openFiltersSheet(page);
+    // The strip above the sheet is backdrop (the sheet tops out at 85% of the screen).
+    await page.touchscreen.tap(195, 20);
+    await expect(sheet).toHaveCount(0);
+  });
+
+  test('the × in the header closes the sheet', async ({ page }) => {
+    const sheet = await openFiltersSheet(page);
+    await sheet.getByRole('button', { name: 'Close' }).tap();
+    await expect(sheet).toHaveCount(0);
+  });
+
+  test('dragging the sheet body down neither dismisses it nor moves the page', async ({ page }) => {
+    const sheet = await openFiltersSheet(page);
+    const scrollBefore = await page.evaluate(() => window.scrollY);
+    const body = sheet.locator('.sheet-body');
+    const box = await body.boundingBox();
+    if (!box) throw new Error('sheet body has no box');
+    const x = box.x + box.width / 2;
+    const cdp = await page.context().newCDPSession(page);
+    const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', y: number) =>
+      cdp.send('Input.dispatchTouchEvent', {
+        type,
+        touchPoints: type === 'touchEnd' ? [] : [{ x, y }],
+      });
+    // A long downward pull from the top of the body: the kind that would pull-to-refresh.
+    const start = box.y + 10;
+    await touch('touchStart', start);
+    for (let step = 1; step <= 8; step++) await touch('touchMove', start + step * 40);
+    await touch('touchEnd', start + 320);
+
+    await expect(sheet).toBeVisible();
+    expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+  });
+});

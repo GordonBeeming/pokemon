@@ -39,6 +39,10 @@ export const binderDetailRoute = createRoute({
           params: { binderId },
           search: next,
           replace: options.replace,
+          // Every change from inside a binder (page turns by swipe, stepper, keys or a
+          // drag at the edge; bookmark and search jumps; selection) stays on this
+          // binder, so the window keeps its scroll instead of jumping to the top.
+          resetScroll: false,
         }),
       [navigate, binderId],
     );

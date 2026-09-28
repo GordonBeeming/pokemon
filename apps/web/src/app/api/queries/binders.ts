@@ -236,6 +236,35 @@ export function useBinderShortages(versionId: string | undefined) {
   });
 }
 
+const assignOwnedEnvelopeSchema = z
+  .object({
+    ok: z.literal(true),
+    count: z.number().int().nonnegative(),
+    locations: z.array(
+      z.object({ page: z.number().int(), row: z.number().int(), column: z.number().int() }),
+    ),
+  })
+  .passthrough();
+
+function assignOwned(versionId: string, expectedRevision: number, apply: boolean) {
+  return apiFetch(versionPath(versionId, '/assign-owned'), assignOwnedEnvelopeSchema, {
+    method: 'POST',
+    body: { expectedRevision, apply },
+  });
+}
+
+/** Pockets holding a card the owner has but that aren't marked as placed (older
+ * placements saved as exact-card targets). A preview only (`apply: false`), keyed by
+ * revision so any write to the binder re-asks. */
+export function useOwnedUnplacedPreview(versionId: string, revision: number | undefined) {
+  return useQuery({
+    queryKey: queryKeys.binders.ownedUnplaced(versionId, revision ?? -1),
+    queryFn: () => assignOwned(versionId, revision ?? 0, false),
+    enabled: versionId.length > 0 && revision !== undefined,
+    retry: false,
+  });
+}
+
 export function useBinderSpaceSearch(versionId: string, query: string, offset: number) {
   const trimmed = query.trim();
   return useQuery({
@@ -371,6 +400,9 @@ function mutate(versionId: string, suffix: string, method: string, body: unknown
 }
 
 export const binderApi = {
+  /** Marks every owned-but-unplaced pocket as placed; returns how many it marked. */
+  assignOwned: (versionId: string, expectedRevision: number) =>
+    assignOwned(versionId, expectedRevision, true),
   create: (name: string, layout: BinderLayout, capacity: number) =>
     apiFetch('/api/binders', mutationEnvelopeSchema, {
       method: 'POST',

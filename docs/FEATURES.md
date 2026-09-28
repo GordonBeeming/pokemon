@@ -316,8 +316,10 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 ## Binder page
 
 - [ ] keep · Page stepper: First/Previous/"Page n of total" jump with Go/Next/Last, all disabled
-      while pending or out of range · done when: typing an out-of-range page number and pressing Go
-      is rejected rather than jumping past the last page.
+      while pending or out of range. On a phone it is one row, "‹ n / total ›" plus Tools; tapping
+      the page number opens the jump field and bookmarks in a sheet, and Tools holds Find, bookmarks,
+      the page actions, Manage binder and Display · done when: typing an out-of-range page number
+      and pressing Go is rejected rather than jumping past the last page.
 - [ ] keep · "Manage page" popover: reserve/edit label, move earlier/later, arrange targets, remove
       this page (disabled if not removable or the only page) · done when: opening this popover on a
       binder's only page shows "Remove this page" disabled.

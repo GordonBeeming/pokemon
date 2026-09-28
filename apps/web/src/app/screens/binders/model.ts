@@ -189,7 +189,10 @@ export interface TrackGeometry {
   spine: number;
   pageWidth: number;
   stride: number;
+  /** Room for the previous page's peek, left of the current page. */
   offset: number;
+  /** Room for the next page's peek, right of the current page. */
+  offsetRight: number;
   viewportWidth: number;
 }
 
@@ -197,6 +200,7 @@ export function trackGeometry(
   availableWidth: number,
   columns: number,
   peek: PeekColumns,
+  neighbours: { before: boolean; after: boolean } = { before: true, after: true },
   maxPocket = 168,
 ): TrackGeometry {
   const compact = availableWidth < 600;
@@ -207,6 +211,8 @@ export function trackGeometry(
   // so only a slice of it shows: enough to see it's there and to drag a card onto it.
   const peekFraction = compact ? 0.35 : 1;
   const peekUnits = peek * peekFraction;
+  // Pocket size assumes both neighbours, so it stays the same on the first and last
+  // page and a page turn never resizes the cards.
   const pocketWidth = Math.max(
     40,
     Math.min(
@@ -222,7 +228,12 @@ export function trackGeometry(
   );
   const pageWidth = columns * pocketWidth + (columns - 1) * gap + 2 * pad;
   const stride = pageWidth + spine;
-  const offset = peek ? Math.round(spine + pad + peekUnits * (pocketWidth + gap)) : 0;
+  const peekWidth = peek ? Math.round(spine + pad + peekUnits * (pocketWidth + gap)) : 0;
+  // A phone has no room to spare for a neighbour that doesn't exist: with no page
+  // before (or after), that side draws nothing instead of an empty strip, and the
+  // stage centres what's left. Desktop keeps both sides so its layout never shifts.
+  const offset = peek && (!compact || neighbours.before) ? peekWidth : 0;
+  const offsetRight = peek && (!compact || neighbours.after) ? peekWidth : 0;
   return {
     pocketWidth,
     gap,
@@ -231,7 +242,8 @@ export function trackGeometry(
     pageWidth,
     stride,
     offset,
-    viewportWidth: pageWidth + 2 * offset,
+    offsetRight,
+    viewportWidth: pageWidth + offset + offsetRight,
   };
 }
 

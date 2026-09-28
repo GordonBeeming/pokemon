@@ -37,6 +37,8 @@ export const queryKeys = {
     candidates: (versionId: string, slotId: string) =>
       ['binders', 'version', versionId, 'candidates', slotId] as const,
     destinations: (versionId: string) => ['binders', 'version', versionId, 'destinations'] as const,
+    ownedUnplaced: (versionId: string, revision: number) =>
+      ['binders', 'version', versionId, 'owned-unplaced', revision] as const,
     inactiveTargets: () => ['binders', 'inactive-targets'] as const,
     resolvedCards: (cardIds: readonly string[]) => ['binders', 'cards', ...cardIds] as const,
   },

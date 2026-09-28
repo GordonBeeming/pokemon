@@ -21,13 +21,30 @@ export async function goToNav(page: Page, label: string): Promise<void> {
 
 /**
  * The binder page's "Display" (peek/frame) controls sit in a popover behind the
- * toolbar's Display trigger on every viewport, so its radios aren't in the
- * interactive tree until the trigger is pressed. Pressing an already-open trigger
- * would toggle it shut, so this only acts when it's actually closed.
+ * toolbar's Display trigger on desktop, and in the Tools sheet on a phone, so their
+ * radios aren't in the interactive tree until that's opened. Pressing an
+ * already-open trigger would toggle it shut, so this only acts when it's closed.
  */
 export async function ensureDisplayPanelOpen(page: Page): Promise<void> {
+  await page
+    .locator('.binder-tools-trigger, .binder-display .menu-button-trigger')
+    .first()
+    .waitFor();
+  const tools = page.locator('.binder-tools-trigger');
+  if ((await tools.count()) > 0) {
+    if ((await page.getByRole('dialog', { name: 'Binder tools' }).count()) === 0)
+      await tools.click();
+    return;
+  }
   const trigger = page.locator('.binder-display .menu-button-trigger');
   if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click();
+}
+
+/** The page-jump field: in the stepper on desktop, behind the page number on a phone. */
+export async function openPageJump(page: Page): Promise<void> {
+  await page.locator('.phone-page-number, .page-stepper').first().waitFor();
+  const number = page.locator('.phone-page-number');
+  if ((await number.count()) > 0) await number.click();
 }
 
 /**

@@ -400,49 +400,10 @@ an action at the end */
   .binder-view .page-jump input {
     width: 3.5rem;
   }
-  .binder-toolbar {
-    gap: 0.5rem;
-  }
-  /* Title and Manage binder share one row, the pager takes the next, then the
-     bookmark jump, page and display triggers share a row, and find closes the bar. */
+  /* The title has the header to itself on a phone; Manage binder lives in Tools. */
   .binder-header {
     flex-wrap: nowrap;
     align-items: flex-start;
-  }
-  .page-stepper {
-    flex-basis: 100%;
-  }
-  .bookmark-jump {
-    flex: 1 1 6rem;
-    min-width: 0;
-  }
-  .bookmark-jump select {
-    width: 100%;
-    max-width: none;
-  }
-  .space-search {
-    order: 2;
-    flex: 1 1 calc(100% - 3.25rem);
-    justify-content: stretch;
-  }
-  .binder-display {
-    order: 3;
-  }
-  /* The eye icon alone on a phone; the word stays for screen readers. */
-  .binder-display .menu-button-text {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-  }
-  .binder-view .binder-display .menu-button-trigger {
-    width: 2.75rem;
-    padding: 0;
-  }
-  .binder-view .space-search input {
-    width: 100%;
   }
 }
 
@@ -665,22 +626,56 @@ an action at the end */
   background: transparent;
   border: 0;
 }
-.pocket-sheet-where {
-  margin: 0 0 0.75rem;
+.pocket-sheet-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  min-width: 0;
+}
+.pocket-sheet-thumb {
+  flex-shrink: 0;
+  width: 4.5rem;
+}
+.pocket-sheet-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
   font-size: 0.875rem;
   color: var(--muted);
 }
+.pocket-sheet-name {
+  font-size: 1.05rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.pocket-sheet-rarity {
+  margin-right: 0.3rem;
+  font-family: var(--font-display);
+}
+.pocket-sheet-where {
+  margin-top: 0.25rem;
+  font-size: 0.8125rem;
+}
+/* Two columns of one-line icon + label actions, each a comfortable 44px target. */
 .pocket-sheet-actions .action-bar {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
 }
 .binder-panel .pocket-sheet-actions .action-bar-item {
-  flex-direction: column;
-  height: 3.75rem;
-  gap: 0.2rem;
-  padding: 0 0.25rem;
-  font-size: 0.75rem;
-  text-align: center;
+  justify-content: flex-start;
+  min-height: 2.75rem;
+  height: auto;
+  gap: 0.5rem;
+  padding: 0 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.2;
+  text-align: left;
+}
+/* Keyboard hints mean nothing on a touch screen and would crowd the label. */
+.pocket-sheet-actions .action-bar-kbd {
+  display: none;
 }
 
 /* Panels (dialogs and sheets) */
@@ -939,4 +934,81 @@ an action at the end */
     height: auto !important;
     overflow: visible;
   }
+}
+
+/* Phone: one compact row above the pages (stepper + Tools), everything else in sheets */
+.phone-page-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.phone-page-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.binder-view .phone-page-bar button {
+  height: 2.75rem;
+  white-space: nowrap;
+}
+.binder-view .phone-page-bar .button-icon {
+  width: 2.75rem;
+}
+.binder-view .phone-page-number {
+  min-width: 6.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.binder-sheet {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+/* In the sheet, find is a plain stacked field: its results list flows below it
+   rather than floating as the desktop dropdown does. */
+.binder-sheet .space-search {
+  flex: none;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.binder-sheet .space-search-results {
+  position: static;
+  width: auto;
+  max-height: none;
+  box-shadow: none;
+}
+.binder-view .binder-sheet .space-search input,
+.binder-view .binder-sheet .bookmark-jump select {
+  width: 100%;
+  max-width: none;
+  height: 2.75rem;
+}
+.binder-view .binder-sheet .page-jump input {
+  width: 5rem;
+  height: 2.75rem;
+}
+.binder-view .binder-sheet button {
+  min-height: 2.75rem;
+}
+.binder-sheet-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.binder-sheet-section h3 {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+.page-action-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.binder-view .page-action-list button {
+  justify-content: flex-start;
+}
+.binder-sheet .binder-display-controls {
+  padding: 0;
 }

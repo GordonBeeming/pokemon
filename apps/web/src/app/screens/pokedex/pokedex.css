@@ -55,3 +55,11 @@
   opacity: 0.6;
   pointer-events: none;
 }
+
+/* Phone: the heading wraps and the count sits under the title, so it shares the
+   title's left edge instead of hanging off the right of its own line. */
+@media (max-width: 767px) {
+  .pokedex-progress {
+    align-items: flex-start;
+  }
+}

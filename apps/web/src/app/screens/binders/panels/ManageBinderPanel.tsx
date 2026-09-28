@@ -8,6 +8,7 @@ import {
   type BinderVersionView,
 } from '../../../api/queries/binders';
 import { binderErrorMessage, capacityDescription } from '../model';
+import { AssignOwnedSection } from './AssignOwnedSection';
 import { Panel } from './Panel';
 
 export const ARRANGE_LABELS: Record<ArrangeMode, { label: string; help: string }> = {
@@ -129,6 +130,8 @@ export function ManageBinderPanel({
           {usage}
         </section>
       ) : null}
+
+      <AssignOwnedSection versionId={version.id} revision={version.revision} editable={editable} />
 
       <section className="panel-section" aria-labelledby="capacity-heading">
         <h3 id="capacity-heading">Binder capacity</h3>

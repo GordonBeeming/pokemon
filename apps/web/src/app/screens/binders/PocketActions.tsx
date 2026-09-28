@@ -1,5 +1,8 @@
+import { RARITY_LABELS, regionForDex, type FrameType } from '@pokedex/shared';
 import type { ReactElement } from 'react';
 import type { BinderSlotView } from '../../api/queries/binders';
+import { CardFrame, type CardFrameCard, type CardFrameState } from '../../cards/CardFrame';
+import { RARITY_VISUALS } from '../../cards/rarity-visuals';
 import { ActionBar, type ActionBarItem } from '../../ui/ActionBar';
 import { Icon } from '../../ui/icons';
 import { Sheet } from '../../ui/Sheet';
@@ -62,11 +65,59 @@ export interface PocketSummary {
   title: string;
   where: string;
   status: string;
+  /** The card (or the ANY frame for an any-printing target) the phone sheet shows. */
+  frame?: { card: CardFrameCard; variant: 'card' | 'any'; state: CardFrameState } | null;
+  palette?: Record<FrameType, string>;
 }
 
-// On phone the sheet shows this many actions before the rest fold behind "More", so
-// the thumb-reachable top rows hold the everyday ones.
-const PHONE_VISIBLE_ACTIONS = 6;
+/** The phone sheet's header: the card itself and everything a small pocket can't
+ * show (name, #dex, region, rarity, set and number), then where it sits. */
+function PocketSheetHeader({ summary }: { summary: PocketSummary }): ReactElement {
+  const frame = summary.frame;
+  const card = frame?.card;
+  const region = card?.pokedexNumber ? regionForDex(card.pokedexNumber) : null;
+  const rarity = card?.rarityKey ? RARITY_VISUALS[card.rarityKey] : null;
+  const rarityName = card?.rarityKey ? RARITY_LABELS[card.rarityKey] : null;
+  const code = card ? [card.setCode, card.number].filter(Boolean).join(' · ') : '';
+  return (
+    <div className="pocket-sheet-card">
+      {frame ? (
+        <span className="pocket-sheet-thumb">
+          <CardFrame
+            card={frame.card}
+            state={frame.state}
+            variant={frame.variant}
+            palette={summary.palette}
+          />
+        </span>
+      ) : null}
+      <div className="pocket-sheet-info">
+        <strong className="pocket-sheet-name">{card?.name ?? summary.title}</strong>
+        {card?.pokedexNumber ? (
+          <span>
+            #{String(card.pokedexNumber).padStart(4, '0')}
+            {region ? ` · ${region}` : ''}
+          </span>
+        ) : null}
+        {frame?.variant === 'any' ? (
+          <span>Any printing</span>
+        ) : rarityName || code ? (
+          <span>
+            {rarity ? (
+              <span className="pocket-sheet-rarity" aria-hidden="true">
+                {rarity.icon}
+              </span>
+            ) : null}
+            {[rarityName, code].filter(Boolean).join(' · ')}
+          </span>
+        ) : null}
+        <span className="pocket-sheet-where">
+          {summary.where} · {summary.status}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 /** The selected pocket's actions: a floating bar under the binder on desktop, a bottom
  * sheet on phone. Same items, same order, same icons in both. */
@@ -83,12 +134,16 @@ export function PocketActions({
 }): ReactElement {
   if (phone)
     return (
-      <Sheet open onClose={onClose} title={summary.title}>
-        <p className="pocket-sheet-where">
-          {summary.where} · {summary.status}
-        </p>
+      <Sheet
+        open
+        onClose={onClose}
+        title={summary.title}
+        header={<PocketSheetHeader summary={summary} />}
+      >
+        {/* Every action shows at once, two to a row: the sheet has the room, and a
+            "More" fold would hide half the choices behind one more tap. */}
         <div className="pocket-sheet-actions binder-panel">
-          <ActionBar items={items} maxVisible={PHONE_VISIBLE_ACTIONS} />
+          <ActionBar items={items} maxVisible={items.length} />
         </div>
       </Sheet>
     );

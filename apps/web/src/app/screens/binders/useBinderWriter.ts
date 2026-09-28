@@ -104,11 +104,13 @@ export function useBinderWriter({
       try {
         const result = await request.run(revision);
         applyMutation(queryClient, result);
-        toast('success', request.label);
+        // Settle first so the screen can close whatever sheet started the write
+        // before the confirmation appears, rather than toasting over it.
         if (stillHere()) {
           setCapacityNeed(null);
           settledRef.current(result, result.anchor ?? request.focusAt ?? null);
         }
+        toast('success', request.label);
         return true;
       } catch (cause) {
         const message = binderErrorMessage(cause);

@@ -64,33 +64,51 @@
   padding: 0 0.15rem;
 }
 .card-frame-dex {
+  flex-shrink: 0;
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: clamp(0.5625rem, 11cqi, 0.8125rem);
   font-weight: 600;
+  white-space: nowrap;
 }
 .card-frame-region {
-  overflow: hidden;
+  flex-shrink: 0;
   font-size: 0.6875rem;
   font-weight: 600;
   letter-spacing: 0.04em;
-  text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
 }
 .card-frame-code {
   display: flex;
-  overflow: hidden;
   flex-shrink: 1;
   align-items: center;
   gap: 0.3rem;
+  min-width: 0;
   font-family: var(--font-mono);
-  font-size: clamp(0.5625rem, 6.5cqi, 0.8125rem);
+  font-size: clamp(0.5rem, 7cqi, 0.8125rem);
   font-weight: 600;
   white-space: nowrap;
 }
-.card-frame-code > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* The set code and number wrap onto two lines at the dot rather than being cut:
+   a frame never shows part of a label. */
+.card-frame-codenum {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* Labels leave whole, narrowest-first, as a frame gets small (binder pockets on a
+   phone): the region goes first (the #dex stays), then the rarity symbol, so the
+   set code and number keep the room. Widths are the frame's own content box. */
+@container (max-width: 104px) {
+  .card-frame-region {
+    display: none;
+  }
+}
+@container (max-width: 76px) {
+  .card-frame-rarity {
+    display: none;
+  }
 }
 .card-frame-dot {
   margin: 0 0.1rem;

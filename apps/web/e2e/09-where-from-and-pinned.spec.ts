@@ -1,5 +1,6 @@
 import * as api from './support/api';
 import { expect, test } from './support/fixtures';
+import { openPageJump } from './support/nav';
 import { findMissingCard, placeLooseCopy } from './support/scenarios';
 
 test('a picked-up card does not carry over when another binder opens', async ({ page }) => {
@@ -24,6 +25,8 @@ test('a picked-up card does not carry over when another binder opens', async ({ 
   await pocket.press('m');
   await expect(page.locator('.binder-banner-accent')).toContainText('Moving');
 
+  // On a phone the jump field sits in a sheet; close it to reach the breadcrumb.
+  if ((await page.locator('.phone-page-number').count()) > 0) await page.keyboard.press('Escape');
   await page.getByRole('link', { name: 'Back to all binders' }).click();
   await expect(page).toHaveURL(/\/binders$/);
   await page.locator('.binder-tile', { hasText: otherBinder.name }).click();
@@ -39,12 +42,16 @@ test('an unsubmitted page-jump value resets when another binder opens', async ({
   if (!binderA || !binderB) throw new Error('Need at least two binders for this scenario.');
 
   await page.goto(`/binders/${binderA.id}?page=1&q=`);
+  await openPageJump(page);
   const jumpInput = page.getByRole('spinbutton', { name: 'Go to page' });
   await jumpInput.fill('3');
   await expect(jumpInput).toHaveValue('3');
 
+  // On a phone the jump field sits in a sheet; close it to reach the breadcrumb.
+  if ((await page.locator('.phone-page-number').count()) > 0) await page.keyboard.press('Escape');
   await page.getByRole('link', { name: 'Back to all binders' }).click();
   await page.locator('.binder-tile', { hasText: binderB.name }).click();
   await expect(page).toHaveURL(new RegExp(`/binders/${binderB.id}`));
+  await openPageJump(page);
   await expect(page.getByRole('spinbutton', { name: 'Go to page' })).toHaveValue('');
 });

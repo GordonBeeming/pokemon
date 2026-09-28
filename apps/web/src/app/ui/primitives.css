@@ -120,33 +120,76 @@
   display: flex;
   align-items: flex-end;
   background: rgb(15 23 42 / 45%);
+  /* A pull on the backdrop does nothing: no page scroll, no pull-to-refresh. */
+  touch-action: none;
+  overscroll-behavior: none;
 }
 .sheet {
+  display: flex;
+  flex-direction: column;
   width: 100%;
   max-height: 85vh;
-  overflow-y: auto;
+  max-height: 85dvh;
   background: var(--surface);
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   transition: transform 0.15s ease-out;
 }
-.sheet-handle-row {
+.sheet-header {
+  flex-shrink: 0;
   display: flex;
-  justify-content: center;
-  padding: 0.6rem 0;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0.5rem 1rem 0.75rem;
+  border-bottom: 1px solid var(--line);
   touch-action: none;
+  user-select: none;
 }
 .sheet-handle {
+  align-self: center;
   width: 2.5rem;
   height: 0.3rem;
+  margin-bottom: 0.5rem;
   background: var(--line-strong);
   border-radius: var(--radius-pill);
 }
+.sheet-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
 .sheet-title {
-  margin: 0 1.25rem 0.75rem;
+  flex-grow: 1;
+  min-width: 0;
+  margin: 0;
+  padding-top: 0.55rem;
   font-size: 1.1rem;
 }
+.sheet-header-content {
+  flex-grow: 1;
+  min-width: 0;
+}
+.sheet .sheet-close {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin-left: auto;
+  padding: 0;
+  font-size: 1.1rem;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+}
 .sheet-body {
-  padding: 0 1.25rem calc(1.25rem + var(--safe-area-bottom));
+  flex: 0 1 auto;
+  min-height: 0;
+  padding: 1rem 1rem calc(1rem + var(--safe-area-bottom));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* ActionBar */

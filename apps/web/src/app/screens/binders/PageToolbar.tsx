@@ -24,12 +24,6 @@ export function PageStepper({
   pending: boolean;
   onGo: (pageIndex: number) => void;
 }): ReactElement {
-  // An unsubmitted jump value is a draft for this binder only; the screen is keyed by
-  // binder, so opening another binder always starts with an empty field.
-  const [draft, setDraft] = useState('');
-  useEffect(() => setDraft(''), [pageIndex]);
-  const value = Number(draft);
-  const valid = draft !== '' && Number.isInteger(value) && value >= 1 && value <= pageCount;
   return (
     <nav className="page-stepper" aria-label="Binder pages">
       <button
@@ -51,32 +45,7 @@ export function PageStepper({
       >
         <Icon name="chevron-left" />
       </button>
-      <form
-        className="page-jump"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (valid) onGo(value - 1);
-        }}
-      >
-        <label>
-          <span>Page</span>
-          <input
-            aria-label="Go to page"
-            type="number"
-            inputMode="numeric"
-            min="1"
-            max={pageCount}
-            value={draft}
-            placeholder={String(pageIndex + 1)}
-            disabled={pending}
-            onChange={(event) => setDraft(event.target.value)}
-          />
-        </label>
-        <span className="page-jump-total">of {pageCount}</span>
-        <button type="submit" disabled={pending || !valid}>
-          Go
-        </button>
-      </form>
+      <PageJumpForm pageIndex={pageIndex} pageCount={pageCount} pending={pending} onGo={onGo} />
       <button
         type="button"
         className="button-icon"
@@ -97,6 +66,111 @@ export function PageStepper({
         <Icon name="chevron-right" />
       </button>
     </nav>
+  );
+}
+
+/** "Page [n] of total  Go": the desktop stepper's middle, and the phone jump sheet. */
+export function PageJumpForm({
+  pageIndex,
+  pageCount,
+  pending,
+  onGo,
+}: {
+  pageIndex: number;
+  pageCount: number;
+  pending: boolean;
+  onGo: (pageIndex: number) => void;
+}): ReactElement {
+  // An unsubmitted jump value is a draft for this binder only; the screen is keyed by
+  // binder, so opening another binder always starts with an empty field.
+  const [draft, setDraft] = useState('');
+  useEffect(() => setDraft(''), [pageIndex]);
+  const value = Number(draft);
+  const valid = draft !== '' && Number.isInteger(value) && value >= 1 && value <= pageCount;
+  return (
+    <form
+      className="page-jump"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (valid) onGo(value - 1);
+      }}
+    >
+      <label>
+        <span>Page</span>
+        <input
+          aria-label="Go to page"
+          type="number"
+          inputMode="numeric"
+          min="1"
+          max={pageCount}
+          value={draft}
+          placeholder={String(pageIndex + 1)}
+          disabled={pending}
+          onChange={(event) => setDraft(event.target.value)}
+        />
+      </label>
+      <span className="page-jump-total">of {pageCount}</span>
+      <button type="submit" disabled={pending || !valid}>
+        Go
+      </button>
+    </form>
+  );
+}
+
+/**
+ * The phone's single control row above the pages: previous, "n / total" (which opens
+ * the jump sheet), next, and one Tools button for everything else, so the binder
+ * starts right under its title.
+ */
+export function PhonePageBar({
+  pageIndex,
+  pageCount,
+  pending,
+  onGo,
+  onOpenJump,
+  onOpenTools,
+}: {
+  pageIndex: number;
+  pageCount: number;
+  pending: boolean;
+  onGo: (pageIndex: number) => void;
+  onOpenJump: () => void;
+  onOpenTools: () => void;
+}): ReactElement {
+  return (
+    <div className="phone-page-bar">
+      <nav className="phone-page-stepper" aria-label="Binder pages">
+        <button
+          type="button"
+          className="button-icon"
+          aria-label="Previous page"
+          disabled={pending || pageIndex === 0}
+          onClick={() => onGo(pageIndex - 1)}
+        >
+          <Icon name="chevron-left" />
+        </button>
+        <button
+          type="button"
+          className="phone-page-number"
+          aria-label={`Page ${pageIndex + 1} of ${pageCount}. Jump to a page or bookmark`}
+          onClick={onOpenJump}
+        >
+          {pageIndex + 1} / {pageCount}
+        </button>
+        <button
+          type="button"
+          className="button-icon"
+          aria-label="Next page"
+          disabled={pending || pageIndex + 1 >= pageCount}
+          onClick={() => onGo(pageIndex + 1)}
+        >
+          <Icon name="chevron-right" />
+        </button>
+      </nav>
+      <button type="button" className="binder-tools-trigger" onClick={onOpenTools}>
+        <Icon name="settings" /> Tools
+      </button>
+    </div>
   );
 }
 
@@ -131,6 +205,45 @@ export function BookmarkJump({
   );
 }
 
+interface PageAction {
+  label: string;
+  disabled: boolean;
+  danger?: boolean;
+  run: () => void;
+}
+
+/** The one list of page actions, shown as a popover on desktop and inline in the
+ * phone tools sheet, so both always offer the same items under the same rules. */
+function pageActions(
+  pageIndex: number,
+  pageCount: number,
+  editable: boolean,
+  pending: boolean,
+  actions: PageMenuActions,
+): PageAction[] {
+  const disabled = !editable || pending;
+  return [
+    {
+      label: actions.reservedPage ? 'Edit page label' : 'Reserve this page',
+      disabled,
+      run: actions.onReservePage,
+    },
+    { label: 'Move page earlier', disabled: disabled || pageIndex === 0, run: actions.onEarlier },
+    {
+      label: 'Move page later',
+      disabled: disabled || pageIndex + 1 >= pageCount,
+      run: actions.onLater,
+    },
+    { label: 'Arrange targets', disabled, run: actions.onArrange },
+    {
+      label: 'Remove this page',
+      danger: true,
+      disabled: disabled || !actions.canRemove || pageCount <= 1,
+      run: actions.onRemovePage,
+    },
+  ];
+}
+
 export function PageMenu({
   pageIndex,
   pageCount,
@@ -144,12 +257,6 @@ export function PageMenu({
   pending: boolean;
   actions: PageMenuActions;
 }): ReactElement {
-  const disabled = !editable || pending;
-  const act = (close: () => void, action: () => void) => () => {
-    close();
-    action();
-  };
-
   return (
     <MenuButton
       className="page-menu"
@@ -161,36 +268,56 @@ export function PageMenu({
         </>
       }
     >
-      {(close) => (
-        <>
+      {(close) =>
+        pageActions(pageIndex, pageCount, editable, pending, actions).map((action) => (
           <MenuItem
-            label={actions.reservedPage ? 'Edit page label' : 'Reserve this page'}
-            disabled={disabled}
-            onSelect={act(close, actions.onReservePage)}
+            key={action.label}
+            label={action.label}
+            tone={action.danger ? 'danger' : undefined}
+            disabled={action.disabled}
+            onSelect={() => {
+              close();
+              action.run();
+            }}
           />
-          <MenuItem
-            label="Move page earlier"
-            disabled={disabled || pageIndex === 0}
-            onSelect={act(close, actions.onEarlier)}
-          />
-          <MenuItem
-            label="Move page later"
-            disabled={disabled || pageIndex + 1 >= pageCount}
-            onSelect={act(close, actions.onLater)}
-          />
-          <MenuItem
-            label="Arrange targets"
-            disabled={disabled}
-            onSelect={act(close, actions.onArrange)}
-          />
-          <MenuItem
-            label="Remove this page"
-            tone="danger"
-            disabled={disabled || !actions.canRemove || pageCount <= 1}
-            onSelect={act(close, actions.onRemovePage)}
-          />
-        </>
-      )}
+        ))
+      }
     </MenuButton>
+  );
+}
+
+/** The same page actions as a plain list, for the phone tools sheet. */
+export function PageActionList({
+  pageIndex,
+  pageCount,
+  editable,
+  pending,
+  actions,
+  onDone,
+}: {
+  pageIndex: number;
+  pageCount: number;
+  editable: boolean;
+  pending: boolean;
+  actions: PageMenuActions;
+  onDone: () => void;
+}): ReactElement {
+  return (
+    <div className="page-action-list" role="group" aria-label="Page actions">
+      {pageActions(pageIndex, pageCount, editable, pending, actions).map((action) => (
+        <button
+          key={action.label}
+          type="button"
+          className={action.danger ? 'button-danger' : undefined}
+          disabled={action.disabled}
+          onClick={() => {
+            onDone();
+            action.run();
+          }}
+        >
+          {action.label}
+        </button>
+      ))}
+    </div>
   );
 }
