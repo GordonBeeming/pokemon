@@ -118,7 +118,6 @@ export function Home(): ReactElement {
                   imageUrl: card.imageLowUrl,
                 }}
                 state="owned"
-                copies={card.collection?.quantity}
                 onView={() =>
                   void navigate({
                     to: '/catalogue',

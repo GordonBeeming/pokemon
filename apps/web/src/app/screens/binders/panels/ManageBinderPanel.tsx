@@ -1,5 +1,5 @@
 import type { BinderFullPokedexPreview, BinderSlotLocation } from '@pokedex/shared';
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useState, type ReactElement, type ReactNode } from 'react';
 import {
   ARRANGE_MODES,
   binderApi,
@@ -33,6 +33,7 @@ export interface DraftState {
 
 export function ManageBinderPanel({
   version,
+  usage,
   editable,
   pending,
   error,
@@ -54,6 +55,8 @@ export function ManageBinderPanel({
   onClose,
 }: {
   version: BinderVersionView;
+  /** The binder's usage numbers (targets, placed, reserved, available), when loaded. */
+  usage?: ReactNode;
   editable: boolean;
   pending: boolean;
   error: string | null;
@@ -119,6 +122,12 @@ export function ManageBinderPanel({
         <p role="alert" className="panel-error">
           {error}
         </p>
+      ) : null}
+
+      {usage ? (
+        <section className="panel-section panel-section-usage" aria-label="Usage">
+          {usage}
+        </section>
       ) : null}
 
       <section className="panel-section" aria-labelledby="capacity-heading">

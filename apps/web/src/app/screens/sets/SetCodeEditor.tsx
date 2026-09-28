@@ -2,6 +2,7 @@ import type { CatalogueSet } from '@pokedex/shared';
 import { useState, type ReactElement } from 'react';
 import { usePatchSetCode } from '../../api/queries/sets';
 import { Dialog } from '../../ui/Dialog';
+import { Icon } from '../../ui/icons';
 import { useToast } from '../../ui/Toast';
 
 /**
@@ -43,7 +44,7 @@ export function SetCodeEditor({ set, clash }: { set: CatalogueSet; clash: boolea
           setOpen(true);
         }}
       >
-        Edit
+        <Icon name="pencil" />
       </button>
       <Dialog open={open} onClose={() => setOpen(false)} title={`Edit code — ${set.setName}`}>
         {clash ? (

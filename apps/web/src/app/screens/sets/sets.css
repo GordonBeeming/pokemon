@@ -96,12 +96,20 @@
   background: var(--accent);
   border-radius: var(--radius-pill);
 }
-.set-code-edit-button {
-  flex-shrink: 0;
-  min-height: 2.5rem;
-  padding: 0 0.9rem;
-  white-space: nowrap;
+.sets-status {
+  margin: 0;
+  font-size: 0.875rem;
   color: var(--muted);
+}
+.set-code-edit-button {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  color: var(--ink-soft);
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
@@ -156,16 +164,23 @@
   }
 }
 
-/* Too narrow for code + name + progress + edit in one row: the progress bar
-   wraps to its own full-width line under the name, indented to line up with it. */
+/* Too narrow for code + name + progress + edit in one row: code, name and edit
+   share the first row and the progress bar takes a second row under the name. */
 @media (max-width: 560px) {
   .sets-list li {
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: 3.25rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.4rem 0.75rem;
+    padding: 0.6rem 0.75rem;
+  }
+  .set-code {
+    width: auto;
+    font-size: 0.8125rem;
   }
   .set-progress {
-    flex-basis: 100%;
-    order: 3;
+    grid-column: 2 / -1;
+    grid-row: 2;
     width: auto;
-    margin-left: calc(4rem + 1rem);
   }
 }

@@ -33,9 +33,9 @@ export type CardFrameState = 'owned' | 'placed' | 'unowned';
 
 export interface CardFrameProps {
   card: CardFrameCard;
+  /** Owned vs not owned is the whole story a frame tells (solid vs pale dashed); the
+   * copy count lives only in the card inspector. */
   state: CardFrameState;
-  /** Chip hides itself at 0 or undefined rather than showing a zero. */
-  copies?: number;
   /** 'any' renders an ANY-printing binder target: the Pokémon, no set/number/rarity. */
   variant?: 'card' | 'any';
   /** false renders raw art only (still at the 245:337 aspect ratio) with no chrome. */
@@ -55,7 +55,6 @@ export interface CardFrameProps {
 export function CardFrame({
   card,
   state,
-  copies,
   variant = 'card',
   frame = true,
   size = '100%',
@@ -76,7 +75,6 @@ export function CardFrame({
 
   const isSolid = forceSolid || state !== 'unowned';
   const textColor = isSolid ? onSolid : ink;
-  const hasCopiesChip = copies !== undefined && copies > 0;
   const region = card.pokedexNumber ? regionForDex(card.pokedexNumber) : null;
   const rarity = card.rarityKey ? RARITY_VISUALS[card.rarityKey] : null;
   const rarityName = card.rarityKey ? RARITY_LABELS[card.rarityKey] : null;
@@ -100,7 +98,7 @@ export function CardFrame({
     variant === 'any' ? 'any printing' : codeNum || null,
     card.pokedexNumber ? `Pokédex #${String(card.pokedexNumber).padStart(4, '0')}` : null,
     rarityName,
-    hasCopiesChip ? `${copies} owned` : state === 'unowned' ? 'not owned' : 'owned',
+    state === 'unowned' ? 'not owned' : 'owned',
   ]
     .filter(Boolean)
     .join(', ');
@@ -168,18 +166,6 @@ export function CardFrame({
             </span>
           )}
         </span>
-        {hasCopiesChip ? (
-          <span
-            className="card-frame-chip"
-            style={{
-              background: isSolid ? (lightFrame ? '#0f172a' : '#ffffff') : 'transparent',
-              color: isSolid ? (lightFrame ? '#ffffff' : '#0f172a') : textColor,
-              borderColor: isSolid ? (lightFrame ? '#0f172a' : '#ffffff') : textColor,
-            }}
-          >
-            ×{copies}
-          </span>
-        ) : null}
       </span>
     </>
   );

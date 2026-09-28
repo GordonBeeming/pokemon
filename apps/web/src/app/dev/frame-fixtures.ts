@@ -101,7 +101,7 @@ export const WRONG_RATIO_FIXTURE: CardFrameCard = cardFor('colorless', {
   imageUrl: eeveeWrongRatioArt,
 });
 
-export const COPIES_FIXTURE = cardFor('lightning', { id: 'copies-fixture' });
+export const LIGHTNING_FIXTURE = cardFor('lightning', { id: 'lightning-fixture' });
 
 export const LONG_NAME_MISSING_ART_FIXTURE = cardFor('psychic', {
   id: 'long-name-fixture',

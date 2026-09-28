@@ -137,15 +137,14 @@ function FrameRow({
         <CardFrame
           card={sampleCard(frameType)}
           state="owned"
-          copies={1}
           palette={previewPalette}
-          size="5.5rem"
+          size="7rem"
         />
         <CardFrame
           card={sampleCard(frameType)}
           state="unowned"
           palette={previewPalette}
-          size="5.5rem"
+          size="7rem"
         />
       </span>
     </li>

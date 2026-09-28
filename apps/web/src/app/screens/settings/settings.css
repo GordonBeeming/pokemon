@@ -92,13 +92,23 @@
   flex-direction: column;
   gap: 1rem;
 }
+/* One way to switch sections at a time: the summary cards beside the open section
+   when there's room for them (the signed-off layout), the tab chips otherwise —
+   never both, and never the cards stacked under the section they'd lead away from. */
+.settings-aside {
+  display: none;
+}
 @media (min-width: 1100px) {
+  .settings-tabs {
+    display: none;
+  }
   .settings-layout {
     flex-direction: row;
     align-items: flex-start;
     gap: 2rem;
   }
   .settings-aside {
+    display: flex;
     flex-shrink: 0;
     width: 22rem;
   }
@@ -143,6 +153,15 @@
 }
 .settings .settings-start {
   align-self: flex-start;
+}
+.settings-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+.settings .settings-card-actions button {
+  white-space: nowrap;
 }
 .settings .panel-error {
   padding: 0.5rem 0.75rem;

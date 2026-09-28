@@ -86,7 +86,7 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-        <p role="status" aria-live="polite">
+        <p className="sets-status" role="status" aria-live="polite">
           Showing all {filtered.length} matching sets.
         </p>
 

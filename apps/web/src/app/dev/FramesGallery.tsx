@@ -3,7 +3,7 @@ import { CardFrame } from '../cards/CardFrame';
 import { RARITY_LABELS } from '@pokedex/shared';
 import {
   ANY_FIXTURE,
-  COPIES_FIXTURE,
+  LIGHTNING_FIXTURE,
   FRAME_TYPE_FIXTURES,
   LONG_NAME_MISSING_ART_FIXTURE,
   RARITY_FIXTURES,
@@ -39,7 +39,7 @@ export function FramesGallery(): ReactElement {
           {FRAME_TYPE_FIXTURES.map(({ frameType, card }) => (
             <div key={frameType} className="frames-gallery-pair">
               <Cell label={`${frameType} · owned`}>
-                <CardFrame card={card} state="owned" copies={1} />
+                <CardFrame card={card} state="owned" />
               </Cell>
               <Cell label={`${frameType} · unowned`}>
                 <CardFrame card={card} state="unowned" />
@@ -54,11 +54,11 @@ export function FramesGallery(): ReactElement {
         <div className="frames-gallery-grid">
           {REAL_ART_FIXTURES.map(({ label, card }) => (
             <Cell key={card.id} label={label}>
-              <CardFrame card={card} state="owned" copies={1} />
+              <CardFrame card={card} state="owned" />
             </Cell>
           ))}
           <Cell label="wrong-ratio source (framed) — letterboxed, not cropped">
-            <CardFrame card={WRONG_RATIO_FIXTURE} state="owned" copies={1} />
+            <CardFrame card={WRONG_RATIO_FIXTURE} state="owned" />
           </Cell>
           <Cell label="wrong-ratio source, frame=false — letterboxed, not stretched">
             <CardFrame card={WRONG_RATIO_FIXTURE} state="owned" frame={false} />
@@ -71,7 +71,7 @@ export function FramesGallery(): ReactElement {
         <div className="frames-gallery-grid">
           {RARITY_FIXTURES.map(({ rarityKey, card }) => (
             <Cell key={rarityKey} label={`${rarityKey} · ${RARITY_LABELS[rarityKey]}`}>
-              <CardFrame card={card} state="owned" copies={1} />
+              <CardFrame card={card} state="owned" />
             </Cell>
           ))}
         </div>
@@ -89,18 +89,15 @@ export function FramesGallery(): ReactElement {
           <Cell label="frame=false, missing art (neutral, not type-tinted)">
             <CardFrame card={{ ...RAW_ART_FIXTURE, imageUrl: null }} state="owned" frame={false} />
           </Cell>
-          <Cell label="copies=3">
-            <CardFrame card={COPIES_FIXTURE} state="owned" copies={3} />
-          </Cell>
-          <Cell label="copies=0 (chip hidden)">
-            <CardFrame card={COPIES_FIXTURE} state="owned" copies={0} />
+          <Cell label="owned (no copy count; the inspector shows it)">
+            <CardFrame card={LIGHTNING_FIXTURE} state="owned" />
           </Cell>
           <Cell label="unowned, forceSolid (inspector)">
-            <CardFrame card={COPIES_FIXTURE} state="unowned" forceSolid />
+            <CardFrame card={LIGHTNING_FIXTURE} state="unowned" forceSolid />
           </Cell>
           <Cell label="selected, peekEdge=left (flat left edge)">
             <CardFrame
-              card={COPIES_FIXTURE}
+              card={LIGHTNING_FIXTURE}
               state="owned"
               selected
               peekEdge="left"
@@ -108,7 +105,7 @@ export function FramesGallery(): ReactElement {
             />
           </Cell>
           <Cell label="long name, missing art">
-            <CardFrame card={LONG_NAME_MISSING_ART_FIXTURE} state="owned" copies={1} />
+            <CardFrame card={LONG_NAME_MISSING_ART_FIXTURE} state="owned" />
           </Cell>
         </div>
       </section>

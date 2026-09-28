@@ -20,16 +20,14 @@ export async function goToNav(page: Page, label: string): Promise<void> {
 }
 
 /**
- * The binder page's "Display" (peek/frame) controls sit inside a native
- * `<details open={!phone}>` — collapsed by default on a phone viewport, so its
- * radios aren't in the interactive tree at all until the `<summary>` is opened.
- * Clicking an already-open `<summary>` would toggle it shut, so this only acts
- * when it's actually closed.
+ * The binder page's "Display" (peek/frame) controls sit in a popover behind the
+ * toolbar's Display trigger on every viewport, so its radios aren't in the
+ * interactive tree until the trigger is pressed. Pressing an already-open trigger
+ * would toggle it shut, so this only acts when it's actually closed.
  */
 export async function ensureDisplayPanelOpen(page: Page): Promise<void> {
-  const details = page.locator('.binder-display');
-  const isOpen = await details.evaluate((element) => (element as HTMLDetailsElement).open);
-  if (!isOpen) await details.locator('summary').click();
+  const trigger = page.locator('.binder-display .menu-button-trigger');
+  if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click();
 }
 
 /**

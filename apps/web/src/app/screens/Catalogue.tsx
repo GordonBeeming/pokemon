@@ -1,6 +1,6 @@
 import { NATIONAL_POKEDEX, RARITY_LABELS, type FrameType, type RarityKey } from '@pokedex/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { useCatalogueSearch } from '../api/queries/catalogue';
 import { recentlyDiscoveredSpecies, useDiscoverSpecies } from '../api/queries/pokedex';
 import { useSets } from '../api/queries/sets';
@@ -11,14 +11,17 @@ import {
   type CatalogueSearch,
 } from '../routes/search-params';
 import { FilterChips } from '../ui/Chip';
+import { Dialog } from '../ui/Dialog';
 import { Icon } from '../ui/icons';
+import { MenuButton, MenuItem } from '../ui/MenuButton';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { Sheet } from '../ui/Sheet';
 import { SidePanel } from '../ui/SidePanel';
+import { SummaryDoneButton, SummaryPill } from '../ui/SummaryPill';
 import { useToast } from '../ui/Toast';
 import { BulkAddToBinder } from './catalogue/BulkAddToBinder';
 import { CatalogueGallery } from './catalogue/CatalogueGallery';
-import { CopyTools } from './catalogue/CopyTools';
+import { CopyMenu } from './catalogue/CopyMenu';
 import { CustomCardForm } from './catalogue/CustomCardForm';
 import { FiltersPanel, FRAME_TYPE_LABELS } from './catalogue/FiltersPanel';
 import { Pagination } from './catalogue/Pagination';
@@ -41,6 +44,7 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
   // Phones open straight to the cards; search, filters and the copy/bulk tools sit
   // behind one summary pill until it's tapped.
   const [phoneControlsOpen, setPhoneControlsOpen] = useState(false);
+  const [rareAction, setRareAction] = useState<'bulk-add' | 'custom-card' | null>(null);
   const discover = useDiscoverSpecies();
   const galleryRef = useRef<HTMLDivElement>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -261,20 +265,20 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
       </header>
 
       {!isDesktop ? (
-        <button
-          type="button"
+        <SummaryPill
           className="catalogue-summary-pill"
-          aria-expanded={phoneControlsOpen}
-          aria-controls="catalogue-controls"
-          onClick={() => setPhoneControlsOpen((open) => !open)}
-        >
-          <Icon name="magnifier" />
-          <span className="catalogue-summary-text">{phoneSummary}</span>
-          <span className="catalogue-summary-count">{total.toLocaleString('en-AU')}</span>
-        </button>
+          summary={phoneSummary}
+          count={total}
+          expanded={phoneControlsOpen}
+          controlsId="catalogue-controls"
+          onToggle={() => setPhoneControlsOpen((open) => !open)}
+        />
       ) : null}
       {isDesktop || phoneControlsOpen ? (
-        <div id="catalogue-controls" className="catalogue-controls">
+        <div
+          id="catalogue-controls"
+          className={isDesktop ? 'catalogue-controls' : 'catalogue-controls summary-panel'}
+        >
           <form
             className="catalogue-search-bar"
             role="search"
@@ -283,7 +287,7 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
               updateSearch({ q: queryDraft });
             }}
           >
-            <label>
+            <label className="catalogue-search-field">
               Search
               <input
                 value={queryDraft}
@@ -292,16 +296,21 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
                 onChange={(event) => setQueryDraft(event.target.value)}
               />
             </label>
-            <SegmentedControl<CatalogueOwnedFilter>
-              label="Collection"
-              value={search.owned}
-              options={[
-                { value: 'all', label: 'All' },
-                { value: 'owned', label: 'Owned' },
-                { value: 'missing', label: 'Missing' },
-              ]}
-              onChange={(owned) => updateSearch({ owned })}
-            />
+            <div className="bar-field">
+              <span className="bar-field-label" aria-hidden="true">
+                Collection
+              </span>
+              <SegmentedControl<CatalogueOwnedFilter>
+                label="Collection"
+                value={search.owned}
+                options={[
+                  { value: 'all', label: 'All' },
+                  { value: 'owned', label: 'Owned' },
+                  { value: 'missing', label: 'Missing' },
+                ]}
+                onChange={(owned) => updateSearch({ owned })}
+              />
+            </div>
             <button type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(true)}>
               <Icon name="filter" /> Filters
               {activeFilterCount > 0 ? (
@@ -311,6 +320,37 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
             <button type="submit" disabled={busy}>
               {busy ? 'Searching…' : 'Search'}
             </button>
+            <CopyMenu filters={search} cards={cards} total={total} busy={busy} />
+            <MenuButton
+              className="catalogue-more-menu"
+              align="end"
+              triggerLabel="More catalogue actions"
+              menuLabel="More catalogue actions"
+              label={<Icon name="more" />}
+            >
+              {(close) => (
+                <>
+                  <MenuItem
+                    label="Add these results to a binder…"
+                    hint="Every result, in catalogue order."
+                    onSelect={() => {
+                      close();
+                      setRareAction('bulk-add');
+                    }}
+                  />
+                  {!speciesEntry ? (
+                    <MenuItem
+                      label="Add a card that is not in TCGdex…"
+                      hint="A custom card with just a name."
+                      onSelect={() => {
+                        close();
+                        setRareAction('custom-card');
+                      }}
+                    />
+                  ) : null}
+                </>
+              )}
+            </MenuButton>
           </form>
 
           {activeChips.length > 0 ? (
@@ -326,17 +366,12 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
             </div>
           ) : null}
 
-          <CopyTools filters={search} cards={cards} total={total} busy={busy} />
-          {!speciesEntry ? <CustomCardForm /> : null}
-          <BulkAddToBinder filters={search} total={total} />
           {!isDesktop ? (
-            <button
-              type="button"
+            <SummaryDoneButton
               className="catalogue-show-results"
-              onClick={() => setPhoneControlsOpen(false)}
-            >
-              Show {total.toLocaleString('en-AU')}
-            </button>
+              count={total}
+              onDone={() => setPhoneControlsOpen(false)}
+            />
           ) : null}
         </div>
       ) : null}
@@ -369,9 +404,29 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
         </Sheet>
       )}
 
+      <RareActionOverlay
+        desktop={isDesktop}
+        open={rareAction === 'bulk-add'}
+        onClose={() => setRareAction(null)}
+        title="Add these results to a binder"
+      >
+        <BulkAddToBinder filters={search} total={total} onClose={() => setRareAction(null)} />
+      </RareActionOverlay>
+      <RareActionOverlay
+        desktop={isDesktop}
+        open={rareAction === 'custom-card'}
+        onClose={() => setRareAction(null)}
+        title="Add a card that is not in TCGdex"
+      >
+        <CustomCardForm onClose={() => setRareAction(null)} />
+      </RareActionOverlay>
+
       {search.card ? (
-        <SidePanel open onClose={requestCloseCard} title="Card">
-          <div className="card-overlay-chrome">
+        <SidePanel
+          open
+          onClose={requestCloseCard}
+          title="Card"
+          toolbar={
             <div className="card-overlay-nav">
               <button
                 type="button"
@@ -395,14 +450,39 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
                 </span>
               ) : null}
             </div>
-            <CardInspector
-              cardId={search.card}
-              onClose={requestCloseCard}
-              onDirtyChange={setDirtyInspector}
-            />
-          </div>
+          }
+        >
+          <CardInspector
+            cardId={search.card}
+            onClose={requestCloseCard}
+            onDirtyChange={setDirtyInspector}
+          />
         </SidePanel>
       ) : null}
     </div>
+  );
+}
+
+function RareActionOverlay({
+  desktop,
+  open,
+  onClose,
+  title,
+  children,
+}: {
+  desktop: boolean;
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+}): ReactElement {
+  return desktop ? (
+    <Dialog open={open} onClose={onClose} title={title}>
+      {children}
+    </Dialog>
+  ) : (
+    <Sheet open={open} onClose={onClose} title={title}>
+      {children}
+    </Sheet>
   );
 }

@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isLowContrast } from '../../cards/color';
 import { ToastProvider } from '../../ui/Toast';
+import { CatalogueSyncTab } from './CatalogueSyncTab';
 import { FrameColoursTab } from './FrameColoursTab';
 import { PeopleTab } from './PeopleTab';
 
@@ -173,5 +174,52 @@ describe('PeopleTab', () => {
     expect(container.textContent).toContain('Gordon (you)');
     expect(container.querySelectorAll('.person-row')).toHaveLength(2);
     expect(container.textContent).toContain('Invite someone');
+  });
+});
+
+describe('CatalogueSyncTab prices', () => {
+  function stubPrices(): void {
+    stubFetch((method, path) => {
+      if (method === 'POST' && path === '/api/prices/refresh')
+        return { status: 200, body: { ok: true, workflowId: 'wf_prices' } };
+      if (path.startsWith('/api/prices/refresh/'))
+        return { status: 200, body: { ok: true, status: 'running' } };
+      return { status: 200, body: { ok: true, lastSyncedAt: null } };
+    });
+  }
+
+  function buttonNamed(name: string): HTMLButtonElement {
+    const button = [...document.querySelectorAll('button')].find(
+      (candidate) => candidate.textContent?.trim() === name,
+    );
+    if (!button) throw new Error(`no "${name}" button`);
+    return button;
+  }
+
+  it('refreshes in-use prices with no body from the main button', async () => {
+    stubPrices();
+    await render(<CatalogueSyncTab />);
+    await step(() => buttonNamed('Refresh prices').click());
+    await flush();
+    const post = requests.find((request) => request.method === 'POST');
+    expect(post?.path).toBe('/api/prices/refresh');
+    expect(post?.body).toBeUndefined();
+  });
+
+  it('asks before refreshing every card, then posts everyCard and confirms with a toast', async () => {
+    stubPrices();
+    await render(<CatalogueSyncTab />);
+    await step(() => buttonNamed('Refresh every card…').click());
+    expect(requests.some((request) => request.method === 'POST')).toBe(false);
+    expect(document.body.textContent).toContain('over about an hour');
+
+    await step(() => buttonNamed('Refresh every card').click());
+    await flush();
+    const post = requests.find((request) => request.method === 'POST');
+    expect(post?.path).toBe('/api/prices/refresh');
+    expect(post?.body).toEqual({ everyCard: true });
+    expect(document.body.textContent).toContain("Refreshing every card's price in the background.");
+    // No progress polling for the whole-catalogue walk.
+    expect(requests.some((request) => request.path.startsWith('/api/prices/refresh/'))).toBe(false);
   });
 });

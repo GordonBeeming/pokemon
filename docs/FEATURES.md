@@ -121,7 +121,8 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] keep · A species indexing status line (checking, result, or inline retry on failure), backed by
       a time-limited re-check cache · done when: opening the same species gallery twice within a few
       hours doesn't re-trigger a fresh TCGdex lookup, but "Try again" still works after a failure.
-- [ ] keep · "Add a card that is not in TCGdex" creates a custom card with fixed language, category,
+- [ ] keep · "Add a card that is not in TCGdex…" (in the control bar's More (⋯) menu, opening a
+      dialog on desktop or a sheet on phone) creates a custom card with fixed language, category,
       and set metadata · done when: submitting a custom card name adds a findable card without
       choosing a language, set, or category.
 - [ ] keep · A live "Showing X to Y of Z cards." status, a card gallery grid with a clear selected
@@ -147,10 +148,11 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] keep · Card art is always shown; when the source genuinely has none, an explicit
       "art unavailable" state renders instead of a blank tile · done when: a card confirmed to have
       no source art shows a labelled placeholder, never a broken-image icon.
-- [ ] keep · Each card or species row carries an accessible ownership mark separate from the art — a
-      filled check for owned, an outlined circle for missing, the quantity when greater than one —
-      with a full text label for screen readers · done when: a screen reader announces the owned
-      state and quantity for a row, not just an icon.
+- [ ] changed · Each card or species tile carries an accessible ownership mark separate from the
+      art (solid frame for owned, pale dashed frame for missing) with a full text label for screen
+      readers; the copy count shows in the card inspector only, never on a tile · done when: a
+      screen reader announces "owned" or "not owned" for a tile, and the number of copies appears
+      only once the card is open in the inspector.
 - [ ] changed · Any art dimmed for a missing or unplaced state also carries its own accessible label,
       not only the nearby badge · done when: a screen reader focused directly on dimmed art still
       announces ownership or placement state.
@@ -217,26 +219,29 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 
 ## Clipboard & bulk actions
 
-- [ ] keep · "Copy displayed order" copies up to 2,000 matching cards in the currently displayed
-      filter and sort order to a shared clipboard · done when: copying a 274-card search then opening
-      a binder shows "274 card(s) copied."
-- [ ] keep · "Copy release-date order" copies the same result set sorted oldest-first, independent of
-      the on-screen sort · done when: copying release-date order for a set copies its earliest print
-      first regardless of the visible sort.
-- [ ] keep · "Copy this page" copies only the 50 loaded cards, and is shown only when there are more
-      than 50 total results · done when: a 40-result search doesn't show "Copy this page", but a
-      120-result search does.
-- [ ] keep · Copy actions are disabled while busy, while copying, at 0 results, above 2,000 results,
-      or before the first search resolves, with a consistent explanatory cap message · done when: a
-      3,000-result search shows the copy buttons disabled with the same wording bulk-add uses.
+- [ ] keep · The control bar's one "Copy" button opens a small menu; its "Displayed order" copies up
+      to 2,000 matching cards in the currently displayed filter and sort order to a shared clipboard
+      · done when: copying a 274-card search then opening a binder shows "274 card(s) copied."
+- [ ] keep · The Copy menu's "Release-date order" copies the same result set sorted oldest-first,
+      independent of the on-screen sort · done when: copying release-date order for a set copies its
+      earliest print first regardless of the visible sort.
+- [ ] keep · The Copy menu's "This page" copies only the 50 loaded cards, and is shown only when
+      there are more than 50 total results · done when: a 40-result search's Copy menu doesn't show
+      "This page", but a 120-result search's does.
+- [ ] keep · Copy menu items are disabled while busy, while copying, at 0 results, above 2,000
+      results, or before the first search resolves; each disabled item says why, and the cap message
+      appears inside the menu only when it applies · done when: a 3,000-result search's Copy menu
+      shows the whole-result items disabled under the same cap wording bulk-add uses.
 - [ ] keep · The clipboard is shared with the binder's "Paste cards here" tool, persists in local
       storage, and stays in sync across open tabs · done when: copying cards in one tab immediately
       shows the copied count in a binder open in a second tab.
-- [ ] keep · A successful copy shows an inline confirmation with an "Open binders" link · done when:
-      copying cards shows a confirmation with a working link into the binder library.
-- [ ] keep · Bulk "Add these results to a binder" adds every matching result in catalogue order to a
-      chosen binder, capped at 2,000 with a consistent explanatory cap message · done when: adding a
-      2,500-result search to a binder is blocked with the same cap wording the copy tools use.
+- [ ] changed · A successful copy closes the menu and shows a toast "N cards copied." with an "Open
+      binders" action, instead of a permanent line in the layout · done when: copying cards shows
+      that toast and its "Open binders" action opens the binder library.
+- [ ] keep · Bulk "Add these results to a binder…" (in the More (⋯) menu, opening a dialog on
+      desktop or a sheet on phone) adds every matching result in catalogue order to a chosen binder,
+      capped at 2,000 with a consistent explanatory cap message · done when: adding a 2,500-result
+      search to a binder is blocked with the same cap wording the copy tools use.
 - [ ] changed · Catalogue's binder picker and the open binder's own binder list share one cache · done
       when: creating a binder from the catalogue's "Add to binder" picker makes it appear in the
       binder library without a manual refresh.

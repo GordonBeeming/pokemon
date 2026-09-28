@@ -52,12 +52,17 @@ export function useRouteAnnounce(): Announce {
 // region above, a toast is allowed to outlive the route it was raised from — the
 // user asked for the confirmation, not the screen.
 
+export interface ToastAction {
+  label: string;
+  onSelect: () => void;
+}
 export interface ToastEntry {
   id: number;
   kind: 'success' | 'error';
   message: string;
+  action?: ToastAction;
 }
-type ShowToast = (kind: ToastEntry['kind'], message: string) => void;
+type ShowToast = (kind: ToastEntry['kind'], message: string, action?: ToastAction) => void;
 const ToastContext = createContext<ShowToast | null>(null);
 
 const TOAST_LIFETIME_MS = 5000;
@@ -71,9 +76,9 @@ export function ToastProvider({ children }: { children: ReactNode }): ReactEleme
   }, []);
 
   const show = useCallback<ShowToast>(
-    (kind, message) => {
+    (kind, message, action) => {
       const id = nextId.current++;
-      setToasts((current) => [...current, { id, kind, message }]);
+      setToasts((current) => [...current, { id, kind, message, action }]);
       setTimeout(() => dismiss(id), TOAST_LIFETIME_MS);
     },
     [dismiss],
@@ -89,8 +94,30 @@ export function ToastProvider({ children }: { children: ReactNode }): ReactEleme
             className={`toast toast-${toast.kind}`}
             role={toast.kind === 'error' ? 'alert' : 'status'}
           >
-            {toast.message}
-            <button type="button" aria-label="Dismiss" onClick={() => dismiss(toast.id)}>
+            <span className="toast-message">
+              {toast.message}
+              {toast.action ? (
+                <>
+                  {' '}
+                  <button
+                    type="button"
+                    className="toast-action"
+                    onClick={() => {
+                      dismiss(toast.id);
+                      toast.action?.onSelect();
+                    }}
+                  >
+                    {toast.action.label}
+                  </button>
+                </>
+              ) : null}
+            </span>
+            <button
+              type="button"
+              className="toast-dismiss"
+              aria-label="Dismiss"
+              onClick={() => dismiss(toast.id)}
+            >
               <Icon name="close" />
             </button>
           </p>

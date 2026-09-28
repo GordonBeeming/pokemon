@@ -37,10 +37,18 @@
   background: var(--danger-soft-bg);
   border-color: #fecaca;
 }
-.toast button {
+.toast-dismiss {
   display: flex;
   flex-shrink: 0;
   background: none;
   border: 0;
   color: inherit;
+}
+.toast-action {
+  padding: 0;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: underline;
+  background: none;
+  border: 0;
 }

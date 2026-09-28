@@ -8,6 +8,7 @@ import {
   useCatalogueSyncProgress,
   usePriceRefreshProgress,
 } from '../../api/queries/settings';
+import { ConfirmDialog } from '../../ui/ConfirmDialog';
 import { Icon } from '../../ui/icons';
 import { useToast } from '../../ui/Toast';
 import { formatDateTime } from './format';
@@ -133,6 +134,8 @@ function PriceRefreshCard(): ReactElement {
   const toast = useToast();
   const [workflowId, setWorkflowId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [everyCardOpen, setEveryCardOpen] = useState(false);
+  const [everyCardStarting, setEveryCardStarting] = useState(false);
   const progress = usePriceRefreshProgress(workflowId);
 
   useEffect(() => {
@@ -148,14 +151,22 @@ function PriceRefreshCard(): ReactElement {
     try {
       setWorkflowId(await startPriceRefresh());
     } catch (cause) {
-      toast(
-        'error',
-        cause instanceof ApiError && cause.code === 'rate_limited'
-          ? 'Prices can be refreshed a few times a day. Try again later.'
-          : 'The price refresh could not be started. Try again.',
-      );
+      toast('error', startFailureMessage(cause));
     } finally {
       setStarting(false);
+    }
+  }
+
+  async function startEveryCard(): Promise<void> {
+    setEveryCardStarting(true);
+    try {
+      await startPriceRefresh({ everyCard: true });
+      toast('success', "Refreshing every card's price in the background.");
+    } catch (cause) {
+      toast('error', startFailureMessage(cause));
+    } finally {
+      setEveryCardStarting(false);
+      setEveryCardOpen(false);
     }
   }
 
@@ -182,15 +193,42 @@ function PriceRefreshCard(): ReactElement {
           The price refresh stopped before it finished. Existing prices were kept. Try again.
         </p>
       ) : null}
-      <button
-        type="button"
-        className="settings-start"
-        disabled={starting || running}
-        onClick={() => void start()}
-      >
-        <Icon name="sync" />
-        {running ? 'Refreshing…' : 'Refresh prices'}
-      </button>
+      <div className="settings-card-actions">
+        <button
+          type="button"
+          className="settings-start"
+          disabled={starting || running}
+          onClick={() => void start()}
+        >
+          <Icon name="sync" />
+          {running ? 'Refreshing…' : 'Refresh prices'}
+        </button>
+        {/* The whole-catalogue walk is rare and long, so it stays a quiet secondary
+            action behind a confirmation rather than a second primary button. */}
+        <button
+          type="button"
+          className="button-text"
+          disabled={everyCardStarting}
+          onClick={() => setEveryCardOpen(true)}
+        >
+          Refresh every card…
+        </button>
+      </div>
+      <ConfirmDialog
+        open={everyCardOpen}
+        title="Refresh every card's price?"
+        description="This prices all ~21,000 cards in the background over about an hour. Refresh prices already covers your own cards; this fills in the rest."
+        confirmLabel="Refresh every card"
+        pending={everyCardStarting}
+        onCancel={() => setEveryCardOpen(false)}
+        onConfirm={() => void startEveryCard()}
+      />
     </section>
   );
+}
+
+function startFailureMessage(cause: unknown): string {
+  return cause instanceof ApiError && cause.code === 'rate_limited'
+    ? 'Prices can be refreshed a few times a day. Try again later.'
+    : 'The price refresh could not be started. Try again.';
 }

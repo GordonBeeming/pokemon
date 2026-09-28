@@ -3,21 +3,6 @@
   flex-direction: column;
   gap: 1.75rem;
 }
-.page-heading {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 1rem;
-}
-.page-heading h1 {
-  margin: 0 0 0.35rem;
-  font-size: 2rem;
-}
-.page-heading p {
-  margin: 0;
-  color: var(--muted);
-}
 .header-actions {
   display: flex;
   gap: 0.6rem;
@@ -72,6 +57,34 @@
 .metric-action span {
   font-size: 0.8125rem;
   color: var(--accent);
+}
+
+/* Phone: the four measures pack two to a row, compact, so the shelf of cards
+   starts on the first screen instead of four screen-wide tiles later. */
+@media (max-width: 767px) {
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.6rem;
+  }
+  .metric {
+    gap: 0.2rem;
+    padding: 0.7rem 0.85rem;
+  }
+  .metric p {
+    font-size: 0.8125rem;
+  }
+  .metric strong {
+    font-size: 1.35rem;
+  }
+  .header-actions {
+    width: 100%;
+  }
+  .header-actions a,
+  .header-actions .primary-button {
+    flex: 1 1 0;
+    justify-content: center;
+    white-space: nowrap;
+  }
 }
 
 .collection-shelf {

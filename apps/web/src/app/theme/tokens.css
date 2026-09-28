@@ -2,6 +2,7 @@
    pass — but every colour is a variable so that pass never touches component CSS. */
 :root {
   --ink: #0f172a;
+  --ink-soft: #334155;
   --muted: #475569;
   --faint: #64748b;
   --paper: #f8fafc;

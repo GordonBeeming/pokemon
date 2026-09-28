@@ -238,7 +238,6 @@ export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
                 }
                 variant={representative ? 'card' : 'any'}
                 state={owned ? 'owned' : 'unowned'}
-                copies={state?.ownedCards}
                 onView={() => openSpecies(entry)}
                 className={pendingNumber === entry.number ? 'pokedex-tile-pending' : undefined}
               />

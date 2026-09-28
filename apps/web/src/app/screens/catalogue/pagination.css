@@ -1,0 +1,62 @@
+/* Pagination is shared by Catalogue and National Pokédex, so its styles travel with
+   the component rather than depending on either screen's CSS having loaded. */
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+.pagination-pages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+}
+.pagination button {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-width: 2.75rem;
+  height: 2.75rem;
+  padding: 0 0.85rem;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+}
+.pagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.pagination button[aria-current='page'] {
+  color: #ffffff;
+  background: var(--accent);
+  border-color: var(--accent);
+  opacity: 1;
+}
+.pagination-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  height: 2.75rem;
+  padding: 0 0.15rem;
+  color: var(--muted);
+}
+
+/* Phone: Previous and Next share the first row, the page numbers take the next. */
+@media (max-width: 480px) {
+  .pagination-pages {
+    order: 2;
+    flex-basis: 100%;
+  }
+  .pagination > button {
+    flex: 1 1 0;
+  }
+}

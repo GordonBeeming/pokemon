@@ -63,7 +63,6 @@ export function CatalogueGallery({
                 key={card.id}
                 card={toFrameCard(card)}
                 state={owned ? 'owned' : 'unowned'}
-                copies={card.collection?.quantity}
                 selected={selectedCardId === card.id}
                 onView={() => onOpen(card.id)}
               />

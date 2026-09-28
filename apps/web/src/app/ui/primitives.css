@@ -27,19 +27,37 @@
   gap: 0.5rem;
   margin-top: 1.25rem;
 }
+.dialog-actions button {
+  height: 2.75rem;
+  padding: 0 1rem;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+}
 .dialog-action-primary,
-.dialog-action-destructive {
+.dialog-action-destructive,
+.dialog-actions .dialog-action-primary,
+.dialog-actions .dialog-action-destructive {
   padding: 0 1rem;
   font-weight: 600;
   color: #ffffff;
   border: 0;
   border-radius: var(--radius-md);
 }
-.dialog-action-primary {
+.dialog-action-primary,
+.dialog-actions .dialog-action-primary {
   background: var(--accent);
 }
-.dialog-action-destructive {
+.dialog-action-destructive,
+.dialog-actions .dialog-action-destructive {
   background: var(--danger);
+}
+.dialog-actions button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .confirm-dialog-typed-guard {
   display: flex;
@@ -81,10 +99,14 @@
   margin: 0;
   font-size: 1.1rem;
 }
-.side-panel-header button {
+.side-panel-header > button {
   display: flex;
   background: none;
   border: 0;
+}
+.side-panel-toolbar {
+  flex-grow: 1;
+  min-width: 0;
 }
 .side-panel-body {
   padding: 1.25rem;
@@ -147,9 +169,13 @@
 }
 
 /* SegmentedControl */
+/* Same height as the search input and every other bar control, so a segmented
+   control never sits lower or reads as a separate, smaller widget in a row. */
 .segmented-control {
   display: flex;
+  flex-shrink: 0;
   gap: 0.25rem;
+  height: 2.75rem;
   padding: 0.25rem;
   background: var(--line);
   border-radius: var(--radius-md);
@@ -158,7 +184,8 @@
   padding: 0 1rem;
   font-size: 0.875rem;
   font-weight: 500;
-  color: var(--muted);
+  white-space: nowrap;
+  color: var(--ink-soft);
   background: transparent;
   border: 0;
   border-radius: var(--radius-sm);
@@ -289,4 +316,158 @@
 }
 .action-bar-danger {
   color: var(--danger);
+}
+
+/* MenuButton: one trigger, a popover of secondary actions */
+.menu-button {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+.menu-button-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  height: 2.75rem;
+  min-width: 2.75rem;
+  padding: 0 1rem;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+}
+.menu-button-trigger-icon {
+  width: 2.75rem;
+  padding: 0;
+  font-size: 1.1rem;
+}
+.menu-button-trigger[aria-expanded='true'] {
+  background: var(--paper);
+  border-color: var(--accent);
+}
+.menu-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.35rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: max-content;
+  min-width: 15rem;
+  max-width: min(22rem, calc(100vw - 2rem));
+  padding: 0.35rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgb(15 23 42 / 18%);
+}
+.menu-popover-start {
+  left: 0;
+}
+.menu-popover-end {
+  right: 0;
+}
+.menu-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+}
+.menu-item:hover:not(:disabled),
+.menu-item:focus-visible {
+  background: var(--paper);
+}
+.menu-item:disabled {
+  cursor: not-allowed;
+}
+.menu-item-label {
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+.menu-item-danger .menu-item-label {
+  color: var(--danger);
+}
+.menu-item:disabled .menu-item-label {
+  color: var(--faint);
+}
+.menu-button-chevron {
+  transition: transform 0.15s ease-out;
+}
+.menu-button-trigger[aria-expanded='true'] .menu-button-chevron {
+  transform: rotate(180deg);
+}
+.menu-item-hint {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.menu-note {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.8125rem;
+  color: var(--warning-text);
+  background: var(--warning-bg);
+  border-radius: var(--radius-sm);
+}
+
+/* A labelled control inside a bar: the label sits above so every control's box
+   still lines up on the bar's shared bottom edge. */
+.bar-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+/* SummaryPill: the phone's collapsed control bar */
+.summary-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  color: var(--ink);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+}
+.summary-pill-text {
+  flex-grow: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 0.9375rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.summary-pill-count {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.summary-panel {
+  padding: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.summary-done {
+  min-height: 2.75rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--accent);
+  border: 0;
+  border-radius: var(--radius-md);
 }

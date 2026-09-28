@@ -1,5 +1,6 @@
-import type { ReactElement } from 'react';
+import { Fragment, type ReactElement } from 'react';
 import { Icon } from '../../ui/icons';
+import './pagination.css';
 
 /** Shared by Catalogue and National Pokédex — both paginate 50 items per page
  * (FEATURES.md: "using the same component as National Pokédex"). */
@@ -30,9 +31,11 @@ export function Pagination({
         {numbered.map((value, index) => {
           const previous = numbered[index - 1];
           return (
-            <span key={value}>
+            <Fragment key={value}>
               {previous !== undefined && value - previous > 1 ? (
-                <span aria-hidden="true">…</span>
+                <span className="pagination-ellipsis" aria-hidden="true">
+                  …
+                </span>
               ) : null}
               <button
                 type="button"
@@ -42,7 +45,7 @@ export function Pagination({
               >
                 {value}
               </button>
-            </span>
+            </Fragment>
           );
         })}
       </div>

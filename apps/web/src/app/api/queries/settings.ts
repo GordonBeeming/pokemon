@@ -180,11 +180,16 @@ export function useCatalogueSyncProgress(workflowId: string | null) {
   });
 }
 
-/** POST /api/prices/refresh — prices the cards people own or hold in binders now. */
-export function startPriceRefresh() {
-  return apiFetch('/api/prices/refresh', syncStartEnvelope, { method: 'POST' }).then(
-    (body) => body.workflowId,
-  );
+/**
+ * POST /api/prices/refresh — prices the cards people own or hold in binders now.
+ * With `everyCard`, it instead starts the background walk over the whole catalogue;
+ * that returns only the first link's workflow id, so it has no progress to poll.
+ */
+export function startPriceRefresh(options: { everyCard?: boolean } = {}) {
+  return apiFetch('/api/prices/refresh', syncStartEnvelope, {
+    method: 'POST',
+    ...(options.everyCard ? { body: { everyCard: true } } : {}),
+  }).then((body) => body.workflowId);
 }
 
 export function usePriceRefreshProgress(workflowId: string | null) {

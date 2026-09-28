@@ -63,15 +63,17 @@ describe('CardFrame', () => {
     expect(container.querySelector('img.card-frame-art')).not.toBeNull();
   });
 
-  it('hides the copies chip at zero and at undefined', async () => {
-    await step(() => root.render(<CardFrame card={pikachu} state="owned" copies={0} />));
-    expect(container.querySelector('.card-frame-chip')).toBeNull();
+  it('shows no copy count, only owned or not owned in its accessible name', async () => {
+    await step(() => root.render(<CardFrame card={pikachu} state="owned" onView={() => {}} />));
+    expect(container.textContent).not.toMatch(/×\d/u);
+    expect(container.querySelector('[aria-label]')?.getAttribute('aria-label')).toMatch(
+      /, owned$/u,
+    );
 
-    await step(() => root.render(<CardFrame card={pikachu} state="owned" />));
-    expect(container.querySelector('.card-frame-chip')).toBeNull();
-
-    await step(() => root.render(<CardFrame card={pikachu} state="owned" copies={2} />));
-    expect(container.querySelector('.card-frame-chip')?.textContent).toBe('×2');
+    await step(() => root.render(<CardFrame card={pikachu} state="unowned" onView={() => {}} />));
+    expect(container.querySelector('[aria-label]')?.getAttribute('aria-label')).toMatch(
+      /, not owned$/u,
+    );
   });
 
   it('picks dark text for a pale frame colour and white text for a dark one', async () => {

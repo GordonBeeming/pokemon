@@ -172,9 +172,22 @@
   border-radius: var(--radius-md);
 }
 
+.card-inspector-meta .text-button {
+  align-self: flex-start;
+}
 .card-inspector-close {
   display: flex;
   justify-content: flex-end;
+}
+.card-inspector-close button {
+  height: 2.75rem;
+  padding: 0 1rem;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
 }
 
 .where-from-option {

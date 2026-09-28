@@ -35,6 +35,7 @@ import type { ActionBarItem } from '../../ui/ActionBar';
 import { ConfirmDialog } from '../../ui/ConfirmDialog';
 import { EmptyState } from '../../ui/EmptyState';
 import { Icon } from '../../ui/icons';
+import { MenuButton } from '../../ui/MenuButton';
 import { SegmentedControl } from '../../ui/SegmentedControl';
 import { useRouteAnnounce, useToast } from '../../ui/Toast';
 import { CardInspector } from '../card/CardInspector';
@@ -525,7 +526,7 @@ export function BinderView({
       if (!(event.target instanceof Element)) return;
       if (
         event.target.closest(
-          '[data-pocket], .pocket-actions, [role="dialog"], .dialog-backdrop, .sheet-backdrop, .page-menu, .toast-viewport',
+          '[data-pocket], .pocket-actions, [role="dialog"], .dialog-backdrop, .sheet-backdrop, .menu-button, .toast-viewport',
         )
       )
         return;
@@ -720,6 +721,33 @@ export function BinderView({
       : null;
   const viewingDraft = version?.status === 'draft';
 
+  // Usage numbers are reference detail for managing capacity, so they sit in the
+  // Manage binder panel rather than in a row between the header and the pages.
+  const usage = summary.data ? (
+    <dl className="binder-usage" aria-label="Binder usage">
+      <div>
+        <dt>Targets</dt>
+        <dd>{summary.data.targets.toLocaleString('en-AU')}</dd>
+      </div>
+      <div>
+        <dt>Placed</dt>
+        <dd>{summary.data.placed.toLocaleString('en-AU')}</dd>
+      </div>
+      <div>
+        <dt>Reserved sleeves</dt>
+        <dd>{summary.data.reservedSleeves.toLocaleString('en-AU')}</dd>
+      </div>
+      <div>
+        <dt>Reserved pages</dt>
+        <dd>{summary.data.reservedPages.toLocaleString('en-AU')}</dd>
+      </div>
+      <div>
+        <dt>{summary.data.reservedPages > 0 ? 'Available outside reserved pages' : 'Available'}</dt>
+        <dd>{summary.data.available.toLocaleString('en-AU')}</dd>
+      </div>
+    </dl>
+  ) : null;
+
   const selectedTitle = selectedSlot ? pocketTitle(selectedSlot, cards) : '';
   const where = selected
     ? `Page ${selected.page + 1} · row ${selected.row + 1}, pocket ${selected.column + 1}`
@@ -846,33 +874,6 @@ export function BinderView({
         </div>
       ) : null}
 
-      {summary.data ? (
-        <dl className="binder-usage" aria-label="Binder usage">
-          <div>
-            <dt>Targets</dt>
-            <dd>{summary.data.targets.toLocaleString('en-AU')}</dd>
-          </div>
-          <div>
-            <dt>Placed</dt>
-            <dd>{summary.data.placed.toLocaleString('en-AU')}</dd>
-          </div>
-          <div>
-            <dt>Reserved sleeves</dt>
-            <dd>{summary.data.reservedSleeves.toLocaleString('en-AU')}</dd>
-          </div>
-          <div>
-            <dt>Reserved pages</dt>
-            <dd>{summary.data.reservedPages.toLocaleString('en-AU')}</dd>
-          </div>
-          <div>
-            <dt>
-              {summary.data.reservedPages > 0 ? 'Available outside reserved pages' : 'Available'}
-            </dt>
-            <dd>{summary.data.available.toLocaleString('en-AU')}</dd>
-          </div>
-        </dl>
-      ) : null}
-
       <div className="binder-toolbar">
         <PageStepper
           pageIndex={pageIndex}
@@ -911,38 +912,50 @@ export function BinderView({
           onQueryChange={(q) => navigate({ ...search, q }, true)}
           onJump={jumpToSpace}
         />
+        {/* Peek and frame are set once per binder and rarely touched again, so they
+            sit behind one trigger in the bar instead of a second row of controls. */}
+        <MenuButton
+          kind="dialog"
+          className="binder-display"
+          align="end"
+          menuLabel="Display"
+          label={
+            <>
+              <Icon name="eye" /> <span className="menu-button-text">Display</span>
+            </>
+          }
+        >
+          {() => (
+            <div className="binder-display-controls">
+              <span className="binder-display-label">Show neighbouring pages</span>
+              <SegmentedControl<string>
+                label="Neighbouring columns shown"
+                value={String(peek)}
+                onChange={(value) =>
+                  void patchDisplay({
+                    peekColumns: Number(value) === 2 ? 2 : Number(value) === 1 ? 1 : 0,
+                  })
+                }
+                options={[
+                  { value: '0', label: 'None' },
+                  { value: '1', label: '1 column' },
+                  { value: '2', label: '2 columns' },
+                ]}
+              />
+              <span className="binder-display-label">Card frame</span>
+              <SegmentedControl<string>
+                label="Card frame"
+                value={showFrame ? 'on' : 'off'}
+                onChange={(value) => void patchDisplay({ showFrame: value === 'on' })}
+                options={[
+                  { value: 'on', label: 'On' },
+                  { value: 'off', label: 'Off' },
+                ]}
+              />
+            </div>
+          )}
+        </MenuButton>
       </div>
-
-      <details className="binder-display" open={!phone}>
-        <summary>Display</summary>
-        <div className="binder-display-controls">
-          <span className="binder-display-label">Show neighbouring pages</span>
-          <SegmentedControl<string>
-            label="Neighbouring columns shown"
-            value={String(peek)}
-            onChange={(value) =>
-              void patchDisplay({
-                peekColumns: Number(value) === 2 ? 2 : Number(value) === 1 ? 1 : 0,
-              })
-            }
-            options={[
-              { value: '0', label: 'None' },
-              { value: '1', label: '1 column' },
-              { value: '2', label: '2 columns' },
-            ]}
-          />
-          <span className="binder-display-label">Card frame</span>
-          <SegmentedControl<string>
-            label="Card frame"
-            value={showFrame ? 'on' : 'off'}
-            onChange={(value) => void patchDisplay({ showFrame: value === 'on' })}
-            options={[
-              { value: 'on', label: 'On' },
-              { value: 'off', label: 'Off' },
-            ]}
-          />
-        </div>
-      </details>
 
       {moveSource ? (
         <div className="binder-banner binder-banner-accent" role="status">
@@ -1234,6 +1247,7 @@ export function BinderView({
         <ManagePanelContainer
           versionId={versionId}
           version={version}
+          usage={usage}
           editable={editable}
           pending={pending}
           error={writer.error}

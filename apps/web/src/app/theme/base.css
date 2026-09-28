@@ -43,3 +43,41 @@ a:hover {
   white-space: nowrap;
   border: 0;
 }
+/* A link-looking button (inline retry, "Show full catalogue"): shared by every
+   screen, so it lives here rather than in whichever screen's CSS loaded first. */
+.text-button {
+  padding: 0;
+  font-weight: 500;
+  text-align: left;
+  color: var(--accent);
+  background: none;
+  border: 0;
+}
+.text-button:hover {
+  color: var(--accent-deep);
+}
+
+/* The one page title style (Home, Catalogue, Pokédex, Sets): defined here once so a
+   title's size never depends on which screen's stylesheet happened to load first. */
+.page-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.page-heading h1 {
+  margin: 0 0 0.35rem;
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.page-heading p {
+  margin: 0;
+  color: var(--muted);
+}
+@media (max-width: 767px) {
+  .page-heading h1 {
+    font-size: 1.75rem;
+  }
+}

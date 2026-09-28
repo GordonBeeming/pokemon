@@ -47,7 +47,6 @@ function PocketContent({
       <CardFrame
         card={frameCardFrom(placed)}
         state="placed"
-        copies={placed.collection?.quantity}
         frame={showFrame}
         peekEdge={peekEdge}
         palette={palette}
@@ -60,7 +59,6 @@ function PocketContent({
         <CardFrame
           card={frameCardFrom(target)}
           state="unowned"
-          copies={target.collection?.quantity}
           frame={showFrame}
           peekEdge={peekEdge}
           palette={palette}
