@@ -20,11 +20,13 @@ fi
 if [ ! -f apps/web/.dev.vars ]; then
   echo "// creating apps/web/.dev.vars with local-only secrets"
   mkdir -p apps/web
+  # PUBLIC_ORIGIN is left empty so passkeys and invite links use the request's own
+  # origin; a fixed value would break WebAuthn on any other local port (e2e runs).
   cat > apps/web/.dev.vars <<'EOF'
 SESSION_SECRET=pokedex-local-session-secret-not-for-production
 SESSION_SECRET_PREV=
 ENROLL_SECRET=pokedex-local-enrol
-PUBLIC_ORIGIN=http://localhost:7741
+PUBLIC_ORIGIN=
 EOF
 fi
 
