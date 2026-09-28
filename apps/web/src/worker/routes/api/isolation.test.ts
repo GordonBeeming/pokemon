@@ -553,3 +553,16 @@ describe('final integrity check', () => {
     expect(await getPasskeys(db, userA)).toHaveLength(1);
   });
 });
+
+describe('catalogue sync rewrites the shared catalogue, so only admins may start it', () => {
+  it.each([
+    '/catalogue/full-sync',
+    '/catalogue/sync',
+    '/catalogue/sync/runs',
+    '/catalogue/sync/runs/any-run/cards',
+    '/catalogue/sync/runs/any-run/finalize',
+  ])('member B gets 403 on POST %s', async (path) => {
+    const response = await apiRoutes.request(path, browserInit(cookieB, 'POST', {}), env);
+    expect(response.status).toBe(403);
+  });
+});

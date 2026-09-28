@@ -363,7 +363,7 @@ browserApiRoutes.post('/catalogue/national/discover', async (c) => {
     return apiFailure(c, error);
   }
 });
-browserApiRoutes.post('/catalogue/full-sync', async (c) => {
+browserApiRoutes.post('/catalogue/full-sync', requireAdmin, async (c) => {
   try {
     const running = await c.env.DB.prepare(
       `SELECT id FROM sync_runs
@@ -522,7 +522,7 @@ browserApiRoutes.get('/catalogue/facets/species', async (c) => {
   }
 });
 
-browserApiRoutes.post('/catalogue/sync', async (c) => {
+browserApiRoutes.post('/catalogue/sync', requireAdmin, async (c) => {
   try {
     const parsed = syncBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
@@ -544,7 +544,7 @@ browserApiRoutes.post('/catalogue/sync', async (c) => {
     return apiFailure(c, error);
   }
 });
-browserApiRoutes.post('/catalogue/sync/runs', async (c) => {
+browserApiRoutes.post('/catalogue/sync/runs', requireAdmin, async (c) => {
   try {
     const parsed = syncRunBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
@@ -556,7 +556,7 @@ browserApiRoutes.post('/catalogue/sync/runs', async (c) => {
     return apiFailure(c, error);
   }
 });
-browserApiRoutes.post('/catalogue/sync/runs/:id/cards', async (c) => {
+browserApiRoutes.post('/catalogue/sync/runs/:id/cards', requireAdmin, async (c) => {
   try {
     const parsed = syncPageBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
@@ -566,7 +566,7 @@ browserApiRoutes.post('/catalogue/sync/runs/:id/cards', async (c) => {
     return apiFailure(c, error);
   }
 });
-browserApiRoutes.post('/catalogue/sync/runs/:id/finalize', async (c) => {
+browserApiRoutes.post('/catalogue/sync/runs/:id/finalize', requireAdmin, async (c) => {
   try {
     const parsed = syncFinalizeBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
