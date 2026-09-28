@@ -129,4 +129,35 @@ describe('listIllustrators', () => {
       'Zed Other',
     ]);
   });
+
+  it('prefers an older card with cached art over a newer one that only has a TCGdex source', async () => {
+    const { database, db } = setup();
+    // card-new-noart is in the newest set; give it a TCGdex source but no cached art,
+    // the way a set looks before TCGdex has scans for it.
+    database.exec(`
+      INSERT INTO card_sources (provider, source_id, card_id, language, source_updated_at, checksum, active, imported_at)
+      VALUES ('tcgdex', 'src-card-new', 'card-new-noart', 'en', 1, 'hash', 1, 1);
+    `);
+    const ada = (await listIllustrators(db, 'owner-b')).find((entry) => entry.name === 'Ada Test');
+    expect(ada?.representative.id).toBe('card-old');
+  });
+
+  it('merges spellings of one illustrator into one entry with summed counts', async () => {
+    const { database, db } = setup();
+    database.exec(`
+      INSERT INTO catalogue_cards
+        (id, name, language, category, set_id, set_name, number, number_sort, artist, is_active, is_custom, created_at, updated_at)
+      VALUES
+        ('card-lower', 'Card Lower', 'en', 'pokemon', 'set-old', 'Set Old', '20', 20, 'zed other', 1, 0, 1, 1),
+        ('card-doubled', 'Card Doubled', 'en', 'pokemon', 'set-old', 'Set Old', '21', 21, 'Zed OtherZed Other', 1, 0, 1, 1);
+      INSERT INTO collection_cards (owner_id, card_id, quantity, notes, revision, updated_at)
+      VALUES ('owner-a', 'card-doubled', 1, NULL, 1, 1);
+    `);
+    const zed = (await listIllustrators(db, 'owner-a')).filter((entry) =>
+      entry.name.toLowerCase().startsWith('zed'),
+    );
+    expect(zed).toHaveLength(1);
+    expect(zed[0]).toMatchObject({ name: 'Zed Other', cardCount: 3, ownedCount: 1 });
+    expect(zed[0]?.representative.id).toBe('card-doubled');
+  });
 });

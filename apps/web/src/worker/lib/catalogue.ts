@@ -19,6 +19,7 @@ import {
   type SetCodeSource,
 } from '@pokedex/shared';
 import { z } from 'zod';
+import { artistSpellings } from './artists';
 import { base64UrlDecode, base64UrlEncode } from './crypto';
 import { escapedFtsQuery, isoFromSeconds, newId, nowSeconds, scalarCount } from './db';
 import { ApplicationError } from './log';
@@ -1345,8 +1346,10 @@ export async function searchCards(
     values.push(filters.species);
   }
   if (filters.artist) {
-    where.push(`c.artist = ?${values.length + 1}`);
-    values.push(filters.artist);
+    const spellings = await artistSpellings(db, filters.artist);
+    const placeholders = spellings.map((_, index) => `?${values.length + index + 1}`);
+    where.push(`c.artist IN (${placeholders.join(',')})`);
+    values.push(...spellings);
   }
   if (filters.pokedexNumber !== undefined) {
     where.push(`c.pokedex_number = ?${values.length + 1}`);
