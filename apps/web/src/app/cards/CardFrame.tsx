@@ -5,7 +5,7 @@ import {
   type FrameType,
   type RarityKey,
 } from '@pokedex/shared';
-import type { CSSProperties, ReactElement } from 'react';
+import { useState, type CSSProperties, type ReactElement } from 'react';
 import { bestTextColor, contrastWithDark, contrastWithWhite, mix } from './color';
 import { RARITY_VISUALS, rarityToneColour } from './rarity-visuals';
 import './CardFrame.css';
@@ -73,6 +73,12 @@ export function CardFrame({
   const onSolid = lightFrame ? '#0f172a' : '#ffffff';
   const ink = lightFrame ? '#334155' : mix(solid, '#000000', 0.25);
 
+  // The art URL is lazy: the server hands one out before it knows whether the
+  // provider has a scan (brand-new sets often don't yet), so a failed load falls
+  // back to the named placeholder instead of the browser's broken-image icon.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const imageUrl = card.imageUrl && card.imageUrl !== failedUrl ? card.imageUrl : null;
+
   const isSolid = forceSolid || state !== 'unowned';
   const textColor = isSolid ? onSolid : ink;
   const region = card.pokedexNumber ? regionForDex(card.pokedexNumber) : null;
@@ -101,11 +107,12 @@ export function CardFrame({
   const placeholderBg = frame ? light : NEUTRAL_PLACEHOLDER_BG;
   const placeholderTextColor = bestTextColor(placeholderBg);
 
-  const art = card.imageUrl ? (
+  const art = imageUrl ? (
     <img
       className="card-frame-art"
-      src={card.imageUrl}
+      src={imageUrl}
       alt=""
+      onError={() => setFailedUrl(imageUrl)}
       style={{ opacity: isSolid ? 1 : 0.45 }}
     />
   ) : (

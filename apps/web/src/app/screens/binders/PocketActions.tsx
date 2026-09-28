@@ -152,9 +152,14 @@ export function PocketActions({
     <div className="pocket-actions" role="toolbar" aria-label="Pocket actions">
       {summary.imageUrl ? (
         <img
+          // Keyed by URL so a thumb hidden after a failed load comes back for the next card.
+          key={summary.imageUrl}
           className="pocket-actions-thumb"
           src={summary.imageUrl}
           alt=""
+          onError={(event) => {
+            event.currentTarget.hidden = true;
+          }}
           style={{ opacity: summary.faded ? 0.45 : 1 }}
         />
       ) : null}
