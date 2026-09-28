@@ -7,6 +7,8 @@ import {
   cardSourcePage,
   extractTcgdexPrices,
   inUseCardSourceIds,
+  nextPriceChainLink,
+  type PriceChain,
   prunePricingData,
   setPriceSyncCursor,
   stagePriceTargets,
@@ -121,6 +123,9 @@ interface PriceWorkflowPayload {
   /** 'in-use' prices the cards people own or hold in binders; otherwise the next page
    * of the whole catalogue, continuing from the stored cursor. */
   scope?: 'in-use' | 'catalogue';
+  /** Set on each run of a "refresh every card" chain; the first link starts over from
+   * the beginning of the catalogue and each run starts the next when it finishes. */
+  chain?: PriceChain;
 }
 
 export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWorkflowPayload> {
@@ -140,6 +145,15 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
       let rows: StagedPriceRow[];
       let targetCardIds: string[];
       let cursor: string | null = null;
+      let lastPage = true;
+      const chain = event.payload.chain;
+      if (chain?.page === 0 && !inUse) {
+        currentStep = 'reset-price-cursor';
+        await step.do('reset-price-cursor', async () => {
+          await setPriceSyncCursor(this.env.DB, null);
+          return null;
+        });
+      }
       if (event.payload.objectKey) {
         currentStep = 'read-price-object';
         rows = await step.do('read-price-object', async () => {
@@ -160,10 +174,12 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
               {
                 ids: (await inUseCardSourceIds(this.env.DB)).slice(0, PRICE_SOURCE_PAGE),
                 cursor: null,
+                last: true,
               }
             : cardSourcePage(this.env.DB, PRICE_SOURCE_PAGE),
         );
         cursor = page.cursor;
+        lastPage = page.last;
         currentStep = 'fetch-price-sources';
         const prices = await step.do('fetch-price-sources', OUTBOUND_STEP_CONFIG, () =>
           mapConcurrent(page.ids, async (sourceId) =>
@@ -192,6 +208,7 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
           if (movesCursor) await setPriceSyncCursor(this.env.DB, cursor);
           return null;
         });
+        await this.continueChain(step, chain, lastPage);
         return;
       }
 
@@ -229,6 +246,8 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
         await prunePricingData(this.env.DB);
         return null;
       });
+      currentStep = 'continue-price-chain';
+      await this.continueChain(step, chain, lastPage);
       logInfo({
         evt: 'workflow.pricing.complete',
         workflowInstanceId: event.instanceId,
@@ -261,5 +280,30 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
       );
       throw error;
     }
+  }
+
+  private async continueChain(
+    step: WorkflowStep,
+    chain: PriceChain | undefined,
+    lastPage: boolean,
+  ): Promise<void> {
+    if (!chain) return;
+    await step.do('continue-price-chain', async () => {
+      const next = nextPriceChainLink(chain, lastPage);
+      if (!next) return null;
+      try {
+        await this.env.PRICE_SYNC.create({
+          id: next.instanceId,
+          params: { scope: 'catalogue', chain: next.chain },
+        });
+      } catch (error) {
+        // A retried step may find the next link already created by its first attempt;
+        // that is success, anything else is a real failure.
+        await (await this.env.PRICE_SYNC.get(next.instanceId)).status().catch(() => {
+          throw error;
+        });
+      }
+      return next.instanceId;
+    });
   }
 }

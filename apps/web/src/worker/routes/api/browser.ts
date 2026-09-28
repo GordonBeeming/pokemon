@@ -426,10 +426,27 @@ browserApiRoutes.post('/prices/refresh', requireAdmin, async (c) => {
       c.header('retry-after', String(rate.retryAfter));
       return c.json({ ok: false, error: 'rate_limited' }, 429);
     }
-    const workflow = await c.env.PRICE_SYNC.create({
-      id: `prices-refresh-${crypto.randomUUID()}`,
-      params: { scope: 'in-use' },
-    });
+    const body = z
+      .object({ everyCard: z.boolean().optional() })
+      .strict()
+      .safeParse(
+        c.req.header('content-length') === '0' || !c.req.header('content-type')
+          ? {}
+          : await parsedJson(c.req.raw),
+      );
+    if (!body.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    // "Every card" walks the whole catalogue as a chain of one-page runs (see
+    // nextPriceChainLink); otherwise just the cards people own or hold in binders.
+    const chainId = `prices-all-${crypto.randomUUID()}`;
+    const workflow = body.data.everyCard
+      ? await c.env.PRICE_SYNC.create({
+          id: `${chainId}-p0`,
+          params: { scope: 'catalogue', chain: { id: chainId, page: 0 } },
+        })
+      : await c.env.PRICE_SYNC.create({
+          id: `prices-refresh-${crypto.randomUUID()}`,
+          params: { scope: 'in-use' },
+        });
     await logAudit(c.env.DB, {
       actor: ownerId,
       action: 'prices.refresh_started',

@@ -7,6 +7,7 @@ import {
   cardRowsForPriceSources,
   cardSourcePage,
   inUseCardSourceIds,
+  nextPriceChainLink,
   priceForCard,
   stagePrices,
   stagePriceTargets,
@@ -53,6 +54,7 @@ describe('price source availability', () => {
     await expect(cardSourcePage(db, 1)).resolves.toEqual({
       ids: ['source-a', 'source-b'],
       cursor: 'card-1',
+      last: false,
     });
     await expect(
       cardRowsForPriceSources(db, [
@@ -147,5 +149,16 @@ describe('in-use price sources', () => {
         ('page-1', 0, 1, 'card-placed', 'exact-card', 'card-placed');
     `);
     expect(await inUseCardSourceIds(db)).toEqual(['src-owned', 'src-placed', 'src-target']);
+  });
+});
+
+describe('whole-catalogue price refresh chain', () => {
+  it('starts the next page until the catalogue ends, and never runs away', () => {
+    expect(nextPriceChainLink({ id: 'prices-all-x', page: 0 }, false)).toEqual({
+      instanceId: 'prices-all-x-p1',
+      chain: { id: 'prices-all-x', page: 1 },
+    });
+    expect(nextPriceChainLink({ id: 'prices-all-x', page: 7 }, true)).toBeNull();
+    expect(nextPriceChainLink({ id: 'prices-all-x', page: 59 }, false)).toBeNull();
   });
 });

@@ -432,7 +432,7 @@ export async function setPriceSyncCursor(db: D1Database, sourceId: string | null
 export async function cardSourcePage(
   db: D1Database,
   limit: number,
-): Promise<{ ids: string[]; cursor: string | null }> {
+): Promise<{ ids: string[]; cursor: string | null; last: boolean }> {
   const existingCursor = await getPriceSyncCursor(db);
   const read = async (cursor: string | null) =>
     db
@@ -447,7 +447,7 @@ export async function cardSourcePage(
   let page = await read(existingCursor);
   if (page.results.length === 0 && existingCursor !== null) page = await read(null);
   const cardIds = page.results.map((row) => row.card_id);
-  if (cardIds.length === 0) return { ids: [], cursor: null };
+  if (cardIds.length === 0) return { ids: [], cursor: null, last: true };
   const sources = await db
     .prepare(
       `SELECT source.source_id FROM card_sources source JOIN json_each(?1) selected
@@ -460,7 +460,33 @@ export async function cardSourcePage(
   return {
     ids: sources.results.map((row) => row.source_id),
     cursor: cardIds.at(-1) ?? null,
+    // A short page means the walk reached the end of the catalogue.
+    last: cardIds.length < limit,
   };
+}
+
+/** One link in a "refresh every card" chain: each run prices one catalogue page. */
+export interface PriceChain {
+  id: string;
+  page: number;
+}
+
+// Far more pages than the catalogue has (about 22 at 1,000 cards each), so a chain
+// always ends at the catalogue's end; the cap only stops a runaway if that check fails.
+const MAX_CHAIN_PAGES = 60;
+
+/**
+ * The next run of a whole-catalogue price refresh, or null when this page was the
+ * last one. Runs are chained one after another because they share the catalogue
+ * cursor, so two running at once would price the same page twice and skip others.
+ */
+export function nextPriceChainLink(
+  chain: PriceChain,
+  lastPage: boolean,
+): { instanceId: string; chain: PriceChain } | null {
+  const page = chain.page + 1;
+  if (lastPage || page >= MAX_CHAIN_PAGES) return null;
+  return { instanceId: `${chain.id}-p${page}`, chain: { id: chain.id, page } };
 }
 
 /**
