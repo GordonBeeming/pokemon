@@ -371,7 +371,21 @@ browserApiRoutes.post('/catalogue/full-sync', requireAdmin, async (c) => {
          AND status = 'running'
        ORDER BY started_at DESC LIMIT 1`,
     ).first<{ id: string }>();
-    if (running) return c.json({ ok: true, workflowId: running.id.replace(/^sync_/u, '') }, 202);
+    if (running) {
+      const workflowId = running.id.replace(/^sync_/u, '');
+      // A run whose workflow errored or was terminated never reaches its own
+      // completion step, so its row would stay 'running' and block every later
+      // sync; retire it here and start a fresh one instead of handing back a dead id.
+      const status = await (await c.env.CATALOGUE_SYNC.get(workflowId)).status();
+      if (status.status !== 'errored' && status.status !== 'terminated')
+        return c.json({ ok: true, workflowId }, 202);
+      await c.env.DB.prepare(
+        `UPDATE sync_runs SET completed_at = ?1, status = 'failed', refusal_reason = ?2
+         WHERE id = ?3 AND status = 'running'`,
+      )
+        .bind(Math.floor(Date.now() / 1000), `workflow_${status.status}`, running.id)
+        .run();
+    }
     const ownerId = sessionOwner(c);
     const rate = await c.env.AUTH_COORDINATOR.getByName(`catalogue:${ownerId}`).rateLimit(
       'full-sync',
