@@ -88,3 +88,22 @@ test('the inspector artist link filters the catalogue and closes the inspector',
   await expect.poll(() => new URL(page.url()).searchParams.get('artist')).toBe(target.name);
   await expect(dialog).toHaveCount(0);
 });
+
+test('a starred illustrator moves into Favourites at the top and stays there after a reload', async ({
+  page,
+}) => {
+  const target = await firstIllustrator(page.request);
+  await page.goto('/illustrators');
+  await page.getByLabel('Find an illustrator').fill(target.name);
+
+  await page.getByRole('button', { name: `Favourite ${target.name}`, exact: true }).click();
+  const favorites = page.getByRole('region', { name: 'Favourites' });
+  await expect(favorites.locator('.illustrator-name', { hasText: target.name })).toBeVisible();
+
+  await page.reload();
+  await page.getByLabel('Find an illustrator').fill(target.name);
+  await expect(favorites.locator('.illustrator-name', { hasText: target.name })).toBeVisible();
+
+  await page.getByRole('button', { name: `Unfavourite ${target.name}`, exact: true }).click();
+  await expect(favorites).toHaveCount(0);
+});

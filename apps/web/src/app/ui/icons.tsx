@@ -33,6 +33,7 @@ export const ICON_NAMES = [
   'more',
   'pencil',
   'illustrator',
+  'star',
 ] as const;
 export type IconName = (typeof ICON_NAMES)[number];
 
@@ -89,6 +90,7 @@ const PATHS: Record<IconName, ReactElement> = {
   // A painter's palette: the outline (with its thumb-hole notch drawn into the
   // silhouette) plus a few paint-dot circles, drawn thick enough at this stroke
   // weight to read as filled blobs rather than rings.
+  star: <path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z" />,
   illustrator: (
     <>
       <path d="M12 3.5C7 3.5 3 7.1 3 11.5c0 3.3 2.4 5.5 5.5 5.5h1c.8 0 1.3.8 1 1.5l-.2.6c-.3.8.3 1.6 1.1 1.4C17 19.5 21 15.8 21 11.5c0-4.4-4-8-9-8Z" />

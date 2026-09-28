@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import { listIllustrators } from './illustrators';
 import { applyAllMigrations, sqliteD1 } from './d1-test-helper';
+import { setIllustratorFavorite } from './settings';
 
 const databases: DatabaseSync[] = [];
 
@@ -102,5 +103,30 @@ describe('listIllustrators', () => {
     const { db } = setup();
     const illustrators = await listIllustrators(db, 'owner-a');
     expect(illustrators.map((entry) => entry.name)).toEqual(['Ada Test', 'Zed Other']);
+  });
+
+  it('marks starred illustrators for their owner only, and unstarring removes just that one', async () => {
+    const { database, db } = setup();
+    await setIllustratorFavorite(db, 'owner-a', 'Ada Test', true);
+    await setIllustratorFavorite(db, 'owner-a', 'Zed Other', true);
+    await setIllustratorFavorite(db, 'owner-a', 'Ada Test', true);
+
+    const starred = (await listIllustrators(db, 'owner-a')).filter((entry) => entry.favorite);
+    expect(starred.map((entry) => entry.name)).toEqual(['Ada Test', 'Zed Other']);
+    expect((await listIllustrators(db, 'owner-b')).some((entry) => entry.favorite)).toBe(false);
+    expect(
+      database
+        .prepare(
+          "SELECT value_json FROM user_settings WHERE owner_id = 'owner-a' AND key = 'favorite-illustrators'",
+        )
+        .get(),
+    ).toEqual({ value_json: '["Ada Test","Zed Other"]' });
+
+    await setIllustratorFavorite(db, 'owner-a', 'Ada Test', false);
+    await setIllustratorFavorite(db, 'owner-b', 'Zed Other', false);
+    const after = await listIllustrators(db, 'owner-a');
+    expect(after.filter((entry) => entry.favorite).map((entry) => entry.name)).toEqual([
+      'Zed Other',
+    ]);
   });
 });

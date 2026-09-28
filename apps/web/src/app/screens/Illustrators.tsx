@@ -1,6 +1,10 @@
 import { useNavigate } from '@tanstack/react-router';
 import { useMemo, type ReactElement } from 'react';
-import { useIllustrators } from '../api/queries/illustrators';
+import {
+  useIllustrators,
+  useSetIllustratorFavorite,
+  type Illustrator,
+} from '../api/queries/illustrators';
 import { CardFrame } from '../cards/CardFrame';
 import {
   catalogueSearch,
@@ -8,6 +12,7 @@ import {
   type IllustratorsSearch,
 } from '../routes/search-params';
 import { EmptyState } from '../ui/EmptyState';
+import { Icon } from '../ui/icons';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { CardFrameSkeleton } from '../ui/Skeleton';
 import './illustrators/illustrators.css';
@@ -15,6 +20,7 @@ import './illustrators/illustrators.css';
 export function Illustrators({ search }: { search: IllustratorsSearch }): ReactElement {
   const navigate = useNavigate({ from: '/illustrators' });
   const illustrators = useIllustrators();
+  const setFavorite = useSetIllustratorFavorite();
 
   function updateSearch(patch: Partial<IllustratorsSearch>): void {
     void navigate({ search: (prev) => ({ ...prev, ...patch }) });
@@ -37,6 +43,48 @@ export function Illustrators({ search }: { search: IllustratorsSearch }): ReactE
           : a.name.localeCompare(b.name, 'en-AU'),
       );
   }, [illustrators.data, needle, search.sort]);
+  const favorites = filtered.filter((entry) => entry.favorite);
+  const others = filtered.filter((entry) => !entry.favorite);
+
+  function tile(entry: Illustrator): ReactElement {
+    return (
+      <li key={entry.name} className="illustrator-tile">
+        <button
+          type="button"
+          className="illustrator-open"
+          onClick={() => openIllustrator(entry.name)}
+        >
+          <CardFrame
+            card={{
+              id: entry.representative.id,
+              name: entry.name,
+              frameType: entry.representative.frameType,
+              setCode: entry.representative.setCode,
+              number: entry.representative.number,
+              rarityKey: entry.representative.rarityKey,
+              pokedexNumber: entry.representative.pokedexNumber,
+              imageUrl: entry.representative.imageLowUrl,
+            }}
+            state={entry.ownedCount > 0 ? 'owned' : 'unowned'}
+          />
+          <span className="illustrator-name">{entry.name}</span>
+          <span className="illustrator-count">
+            {entry.ownedCount.toLocaleString('en-AU')} / {entry.cardCount.toLocaleString('en-AU')}
+          </span>
+        </button>
+        <button
+          type="button"
+          className="illustrator-favorite"
+          aria-pressed={entry.favorite}
+          aria-label={entry.favorite ? `Unfavourite ${entry.name}` : `Favourite ${entry.name}`}
+          title={entry.favorite ? 'Unfavourite' : 'Favourite'}
+          onClick={() => setFavorite.mutate({ name: entry.name, favorite: !entry.favorite })}
+        >
+          <Icon name="star" />
+        </button>
+      </li>
+    );
+  }
 
   return (
     <div className="illustrators-screen">
@@ -91,35 +139,30 @@ export function Illustrators({ search }: { search: IllustratorsSearch }): ReactE
       ) : filtered.length === 0 ? (
         <EmptyState icon="illustrator" title="No illustrators match this search." />
       ) : (
-        <div className="illustrators-grid">
-          {filtered.map((entry) => (
-            <button
-              key={entry.name}
-              type="button"
-              className="illustrator-tile"
-              onClick={() => openIllustrator(entry.name)}
-            >
-              <CardFrame
-                card={{
-                  id: entry.representative.id,
-                  name: entry.name,
-                  frameType: entry.representative.frameType,
-                  setCode: entry.representative.setCode,
-                  number: entry.representative.number,
-                  rarityKey: entry.representative.rarityKey,
-                  pokedexNumber: entry.representative.pokedexNumber,
-                  imageUrl: entry.representative.imageLowUrl,
-                }}
-                state={entry.ownedCount > 0 ? 'owned' : 'unowned'}
-              />
-              <span className="illustrator-name">{entry.name}</span>
-              <span className="illustrator-count">
-                {entry.ownedCount.toLocaleString('en-AU')} /{' '}
-                {entry.cardCount.toLocaleString('en-AU')}
-              </span>
-            </button>
-          ))}
-        </div>
+        <>
+          {favorites.length > 0 ? (
+            <section aria-labelledby="illustrators-favorites-heading">
+              <h2 id="illustrators-favorites-heading" className="illustrators-group-heading">
+                <Icon name="star" /> Favourites
+              </h2>
+              <ul className="illustrators-grid">{favorites.map(tile)}</ul>
+            </section>
+          ) : null}
+          {others.length > 0 ? (
+            <section aria-labelledby="illustrators-all-heading">
+              {favorites.length > 0 ? (
+                <h2 id="illustrators-all-heading" className="illustrators-group-heading">
+                  Everyone else
+                </h2>
+              ) : (
+                <h2 id="illustrators-all-heading" className="sr-only">
+                  All illustrators
+                </h2>
+              )}
+              <ul className="illustrators-grid">{others.map(tile)}</ul>
+            </section>
+          ) : null}
+        </>
       )}
     </div>
   );

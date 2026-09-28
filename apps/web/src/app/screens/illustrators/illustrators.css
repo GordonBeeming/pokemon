@@ -36,9 +36,30 @@
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   gap: 1.25rem 1rem;
 }
+.illustrators-grid {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.illustrators-group-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+.illustrators-group-heading svg {
+  color: #b45309;
+  fill: currentColor;
+}
 .illustrator-tile {
+  position: relative;
+  min-width: 0;
+}
+.illustrator-open {
   display: flex;
   flex-direction: column;
+  width: 100%;
   min-width: 0;
   padding: 0;
   text-align: left;
@@ -46,10 +67,41 @@
   border: 0;
   border-radius: var(--radius-md);
 }
-.illustrator-tile[data-focus-visible],
-.illustrator-tile:focus-visible {
+/* The star sits beside the name and count under the card, not on the card, where
+   it would cover the region or set code. Full 44px target. */
+.illustrator-favorite {
+  position: absolute;
+  right: -0.35rem;
+  bottom: -0.2rem;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  font-size: 1.15rem;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+}
+.illustrator-favorite[aria-pressed='true'] {
+  color: #b45309;
+}
+.illustrator-favorite[aria-pressed='true'] svg {
+  fill: currentColor;
+}
+.illustrator-favorite:focus-visible {
   outline: 3px solid var(--accent-deep);
   outline-offset: 2px;
+}
+.illustrator-open[data-focus-visible],
+.illustrator-open:focus-visible {
+  outline: 3px solid var(--accent-deep);
+  outline-offset: 2px;
+}
+.illustrator-name,
+.illustrator-count {
+  padding-right: 2.25rem;
 }
 .illustrator-name {
   margin-top: 0.4rem;

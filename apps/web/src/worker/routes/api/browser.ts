@@ -10,11 +10,17 @@ import {
   collectionRemoveRequestSchema,
   formatDexNumber,
   framePalettePutRequestSchema,
+  illustratorFavoriteRequestSchema,
   languageSchema,
   NATIONAL_POKEDEX,
   setCodePatchRequestSchema,
 } from '@pokedex/shared';
-import { getFramePalette, resetFramePalette, setFramePalette } from '../../lib/settings';
+import {
+  getFramePalette,
+  resetFramePalette,
+  setFramePalette,
+  setIllustratorFavorite,
+} from '../../lib/settings';
 import { dashboardBinderProgress, dashboardStillToFind } from '../../lib/dashboard';
 import { signedBackupWorkflowId, verifyBackupWorkflowOwner } from '../../lib/backup';
 import {
@@ -561,6 +567,17 @@ browserApiRoutes.patch('/sets/:setId', requireAdmin, async (c) => {
 browserApiRoutes.get('/illustrators', async (c) => {
   try {
     return c.json({ ok: true, illustrators: await listIllustrators(c.env.DB, sessionOwner(c)) });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.put('/illustrators/favorites', async (c) => {
+  try {
+    const parsed = illustratorFavoriteRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    await setIllustratorFavorite(c.env.DB, sessionOwner(c), parsed.data.name, parsed.data.favorite);
+    return c.json({ ok: true });
   } catch (error) {
     return apiFailure(c, error);
   }

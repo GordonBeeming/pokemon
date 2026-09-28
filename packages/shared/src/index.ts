@@ -772,10 +772,16 @@ export const illustratorSchema = z
     name: z.string().trim().min(1).max(200),
     cardCount: z.number().int().positive(),
     ownedCount: z.number().int().nonnegative(),
+    favorite: z.boolean(),
     representative: illustratorRepresentativeSchema,
   })
   .strict();
 export type Illustrator = z.infer<typeof illustratorSchema>;
+
+export const illustratorFavoriteRequestSchema = z
+  .object({ name: z.string().trim().min(1).max(200), favorite: z.boolean() })
+  .strict();
+export type IllustratorFavoriteRequest = z.infer<typeof illustratorFavoriteRequestSchema>;
 
 export const illustratorsResponseSchema = z
   .object({ illustrators: z.array(illustratorSchema) })

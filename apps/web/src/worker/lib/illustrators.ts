@@ -7,6 +7,7 @@ import {
   type Illustrator,
 } from '@pokedex/shared';
 import { cardTypes } from './catalogue';
+import { getFavoriteIllustrators } from './settings';
 
 interface IllustratorRow {
   artist: string;
@@ -42,6 +43,7 @@ function boundedPokedexNumber(value: number | null): number | null {
  * ~21k cards).
  */
 export async function listIllustrators(db: D1Database, ownerId: string): Promise<Illustrator[]> {
+  const favorites = await getFavoriteIllustrators(db, ownerId);
   const result = await db
     .prepare(
       `WITH coverage AS (
@@ -103,6 +105,7 @@ export async function listIllustrators(db: D1Database, ownerId: string): Promise
     name: row.artist,
     cardCount: row.total_cards,
     ownedCount: row.owned_cards,
+    favorite: favorites.has(row.artist),
     representative: {
       id: cardIdSchema.parse(row.id),
       name: row.name,

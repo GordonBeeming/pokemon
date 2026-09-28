@@ -146,8 +146,9 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       shown as removable chips · done when: opening Filters, choosing a set and a type, shows two
       removable chips next to the search bar and the badge reads "2".
 - [ ] new · An exact-match illustrator filter (`?artist=`), reached from the Illustrators page or a
-      card's artist link, shows as a removable "✎ Name" chip · done when: opening an illustrator from
-      the Illustrators page filters the gallery to only their cards and shows that chip.
+      card's artist link, shows as a removable chip with the palette icon (on a phone, the summary pill
+      names the illustrator) · done when: opening an illustrator from the Illustrators page filters
+      the gallery to only their cards and shows that chip.
 - [ ] keep · Card art is always shown; when the source genuinely has none, an explicit
       "art unavailable" state renders instead of a blank tile · done when: a card confirmed to have
       no source art shows a labelled placeholder, never a broken-image icon.
@@ -177,7 +178,7 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] new · Opened from outside the Catalogue (Home, a binder pocket's View card), the inspector
       offers "View all {species}", which opens the Catalogue on every printing of it · done when:
       View card on a Gengar pocket shows "View all Gengar" and it opens that species' gallery.
-- [ ] new · The illustrator's name is a link (a pencil icon, no "Illustrated by" words) to the
+- [ ] new · The illustrator's name is a link (a palette icon, no "Illustrated by" words) to the
       Catalogue filtered to every card by that artist, closing the inspector the same way "View all
       {species}" does · done when: clicking the artist name closes the inspector and shows only that
       artist's cards.
@@ -334,6 +335,9 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       phone the Sets screen offers the same destination.
 - [ ] keep · Empty state "No illustrators match this search." · done when: searching for a name that
       matches nobody shows this text instead of an empty grid.
+- [ ] new · A star on each tile favourites an illustrator; favourites show first in their own
+      "Favourites" group above everyone else, per user, and survive a reload · done when: starring an
+      illustrator moves it into Favourites at the top, and unstarring puts it back.
 
 ## Binders library
 
