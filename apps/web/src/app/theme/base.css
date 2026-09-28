@@ -3,6 +3,13 @@
 * {
   box-sizing: border-box;
 }
+/* Two quick taps on a stepper, pocket or page arrow would otherwise make Safari
+   zoom in and stay zoomed, which strands the fixed tab bar half off screen. Pinch
+   zoom is left alone. */
+html,
+body {
+  touch-action: manipulation;
+}
 body {
   min-width: 320px;
   margin: 0;

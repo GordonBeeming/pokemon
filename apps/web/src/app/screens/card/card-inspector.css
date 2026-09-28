@@ -1,3 +1,8 @@
+/* The default side panel is sized for filters; a card needs room for a readable
+   preview beside its details. */
+.side-panel:has(.card-inspector) {
+  width: min(40rem, 100%);
+}
 .card-inspector {
   display: flex;
   flex-direction: column;
@@ -9,7 +14,7 @@
 }
 .card-inspector-frame {
   flex-shrink: 0;
-  width: 12rem;
+  width: 16rem;
 }
 .card-inspector-meta {
   display: flex;
@@ -223,11 +228,13 @@
   margin-top: 0.2rem;
 }
 
-@media (max-width: 480px) {
+/* Too narrow for the preview and details side by side: stack them. */
+@media (max-width: 640px) {
   .card-inspector-top {
     flex-direction: column;
   }
   .card-inspector-frame {
-    width: 9rem;
+    width: min(16rem, 70%);
+    align-self: center;
   }
 }

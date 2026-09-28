@@ -26,8 +26,7 @@ import './card-inspector.css';
 const NOTES_MAX = 2000;
 const AUTOSAVE_DEBOUNCE_MS = 650;
 
-function formatMoney(amountAud: number | null): string {
-  if (amountAud === null) return 'No price yet';
+function formatMoney(amountAud: number): string {
   return `A$${new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amountAud)}`;
 }
 
@@ -199,7 +198,10 @@ export function CardInspector({
           <span className={quantity > 0 ? 'state-chip state-chip-owned' : 'state-chip'}>
             {quantity > 0 ? `Owned ×${quantity}` : 'Not owned'}
           </span>
-          <p>Market estimate: {formatMoney(card.price.amountAud)}</p>
+          {/* "~" carries "estimate" on screen; the words stay in the hover title. */}
+          <p title={card.price.amountAud === null ? 'No market price yet' : 'Market estimate'}>
+            ~{card.price.amountAud === null ? 'A$ –' : formatMoney(card.price.amountAud)}
+          </p>
           {pokedexNumber ? (
             <button
               type="button"
