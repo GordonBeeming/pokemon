@@ -1,6 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useId, useState, type ReactElement } from 'react';
+import { Button, Disclosure, DisclosurePanel, Heading } from 'react-aria-components';
 import { queryKeys } from '../api/keys';
+import { Icon } from '../ui/icons';
 import {
   authErrorMessage,
   devLogin,
@@ -77,43 +79,50 @@ export function SignIn(): ReactElement {
             Use local development login
           </button>
         ) : null}
-        <details className="sign-in-enrol">
-          <summary>Enrol another device</summary>
-          <form
-            aria-labelledby={`${id}-enrol`}
-            noValidate
-            onSubmit={(event) => {
-              event.preventDefault();
-              enrol();
-            }}
-          >
-            <h2 id={`${id}-enrol`} className="sr-only">
+        <Disclosure className="sign-in-enrol">
+          <Heading className="sign-in-enrol-heading">
+            <Button slot="trigger" className="sign-in-enrol-trigger">
+              <Icon name="chevron-down" className="sign-in-enrol-chevron" />
               Enrol another device
-            </h2>
-            <label>
-              <span>Enrolment secret</span>
-              <input
-                type="password"
-                autoComplete="off"
-                value={enrolSecret}
-                aria-invalid={invalid && !enrolSecret.trim()}
-                onChange={(event) => setEnrolSecret(event.target.value)}
-              />
-            </label>
-            <label>
-              <span>Device name</span>
-              <input
-                value={deviceName}
-                maxLength={60}
-                aria-invalid={invalid && !deviceName.trim()}
-                onChange={(event) => setDeviceName(event.target.value)}
-              />
-            </label>
-            <button type="submit" disabled={pending !== null}>
-              {pending === 'enrol' ? 'Creating passkey…' : 'Enrol this device'}
-            </button>
-          </form>
-        </details>
+            </Button>
+          </Heading>
+          <DisclosurePanel>
+            <form
+              aria-labelledby={`${id}-enrol`}
+              noValidate
+              onSubmit={(event) => {
+                event.preventDefault();
+                enrol();
+              }}
+            >
+              <h2 id={`${id}-enrol`} className="sr-only">
+                Enrol another device
+              </h2>
+              <label>
+                <span>Enrolment secret</span>
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={enrolSecret}
+                  aria-invalid={invalid && !enrolSecret.trim()}
+                  onChange={(event) => setEnrolSecret(event.target.value)}
+                />
+              </label>
+              <label>
+                <span>Device name</span>
+                <input
+                  value={deviceName}
+                  maxLength={60}
+                  aria-invalid={invalid && !deviceName.trim()}
+                  onChange={(event) => setDeviceName(event.target.value)}
+                />
+              </label>
+              <button type="submit" disabled={pending !== null}>
+                {pending === 'enrol' ? 'Creating passkey…' : 'Enrol this device'}
+              </button>
+            </form>
+          </DisclosurePanel>
+        </Disclosure>
       </section>
     </main>
   );

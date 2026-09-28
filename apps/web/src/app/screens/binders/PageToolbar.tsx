@@ -2,11 +2,14 @@ import type { BinderBookmark } from '@pokedex/shared';
 import { useEffect, useState, type ReactElement } from 'react';
 import { Icon } from '../../ui/icons';
 import { MenuButton, MenuItem } from '../../ui/MenuButton';
+import { SelectField } from '../../ui/SelectField';
 
 export interface PageMenuActions {
   reservedPage: boolean;
   canRemove: boolean;
   onReservePage: () => void;
+  onInsertPages: () => void;
+  onMoveTo: () => void;
   onEarlier: () => void;
   onLater: () => void;
   onArrange: () => void;
@@ -174,6 +177,8 @@ export function PhonePageBar({
   );
 }
 
+/** Jump to a bookmark or reserved page: a pick-to-go list, so it always reads its
+ * placeholder rather than the last place it went. */
 export function BookmarkJump({
   bookmarks,
   pending,
@@ -184,24 +189,22 @@ export function BookmarkJump({
   onJump: (bookmark: BinderBookmark) => void;
 }): ReactElement {
   return (
-    <label className="bookmark-jump">
-      <span className="sr-only">Jump to bookmark</span>
-      <select
-        value=""
-        disabled={pending || bookmarks.length === 0}
-        onChange={(event) => {
-          const bookmark = bookmarks.find((item) => item.id === event.target.value);
-          if (bookmark) onJump(bookmark);
-        }}
-      >
-        <option value="">{bookmarks.length ? 'Jump to bookmark…' : 'No bookmarks yet'}</option>
-        {bookmarks.map((bookmark) => (
-          <option key={bookmark.id} value={bookmark.id}>
-            {bookmark.name} · page {bookmark.at.page + 1}
-          </option>
-        ))}
-      </select>
-    </label>
+    <SelectField
+      className="bookmark-jump"
+      label="Jump to bookmark"
+      hideLabel
+      value={null}
+      placeholder={bookmarks.length ? 'Jump to bookmark…' : 'No bookmarks yet'}
+      disabled={pending || bookmarks.length === 0}
+      options={bookmarks.map((bookmark) => ({
+        value: bookmark.id,
+        label: `${bookmark.name} · page ${bookmark.at.page + 1}`,
+      }))}
+      onChange={(id) => {
+        const bookmark = bookmarks.find((item) => item.id === id);
+        if (bookmark) onJump(bookmark);
+      }}
+    />
   );
 }
 
@@ -227,6 +230,12 @@ function pageActions(
       label: actions.reservedPage ? 'Edit page label' : 'Reserve this page',
       disabled,
       run: actions.onReservePage,
+    },
+    { label: 'Add blank pages here…', disabled, run: actions.onInsertPages },
+    {
+      label: 'Move this page to…',
+      disabled: disabled || pageCount <= 1,
+      run: actions.onMoveTo,
     },
     { label: 'Move page earlier', disabled: disabled || pageIndex === 0, run: actions.onEarlier },
     {

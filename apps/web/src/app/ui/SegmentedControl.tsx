@@ -1,6 +1,9 @@
 import type { ReactElement } from 'react';
+import { Radio, RadioGroup } from 'react-aria-components';
 import './primitives.css';
 
+/** A one-of-few choice laid out as a segmented bar: a radio group underneath, so
+ * arrow keys move between options and each option announces as a radio. */
 export function SegmentedControl<Value extends string>({
   label,
   options,
@@ -13,19 +16,29 @@ export function SegmentedControl<Value extends string>({
   onChange: (value: Value) => void;
 }): ReactElement {
   return (
-    <div className="segmented-control" role="radiogroup" aria-label={label}>
+    <RadioGroup
+      className="segmented-control"
+      aria-label={label}
+      orientation="horizontal"
+      value={value}
+      onChange={(next) => {
+        const option = options.find((item) => item.value === next);
+        if (option) onChange(option.value);
+      }}
+    >
       {options.map((option) => (
-        <button
+        <Radio
           key={option.value}
-          type="button"
-          role="radio"
-          aria-checked={option.value === value}
-          className={option.value === value ? 'segmented-control-option-active' : undefined}
-          onClick={() => onChange(option.value)}
+          value={option.value}
+          className={({ isSelected }) =>
+            isSelected
+              ? 'segmented-control-option segmented-control-option-active'
+              : 'segmented-control-option'
+          }
         >
           {option.label}
-        </button>
+        </Radio>
       ))}
-    </div>
+    </RadioGroup>
   );
 }

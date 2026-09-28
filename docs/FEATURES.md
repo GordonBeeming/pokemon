@@ -168,6 +168,12 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] keep · Escape and clicking outside both close the inspector through the same unsaved-changes
       gate · done when: editing notes then pressing Escape shows a save-in-progress state before the
       view actually closes.
+- [ ] changed · One close control: a × in the inspector's header (the standalone card page has the
+      same one); there's no second Close at the bottom · done when: the open inspector has exactly one
+      button named "Close".
+- [ ] new · Opened from outside the Catalogue (Home, a binder pocket's View card), the inspector
+      offers "View all {species}", which opens the Catalogue on every printing of it · done when:
+      View card on a Gengar pocket shows "View all Gengar" and it opens that species' gallery.
 - [ ] keep · Focus is trapped inside the open inspector and page scroll is locked while it's open ·
       done when: pressing Tab repeatedly from the last control cycles back to the first, and the page
       behind it doesn't scroll.
@@ -320,16 +326,26 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       the page number opens the jump field and bookmarks in a sheet, and Tools holds Find, bookmarks,
       the page actions, Manage binder and Display · done when: typing an out-of-range page number
       and pressing Go is rejected rather than jumping past the last page.
-- [ ] keep · "Manage page" popover: reserve/edit label, move earlier/later, arrange targets, remove
-      this page (disabled if not removable or the only page) · done when: opening this popover on a
-      binder's only page shows "Remove this page" disabled.
+- [ ] keep · "Manage page" popover: reserve/edit label, add blank pages here, move this page to
+      page N, move earlier/later, arrange targets, remove this page (disabled if not removable or the
+      only page) · done when: opening this popover on a binder's only page shows "Remove this page"
+      disabled.
+- [ ] new · "Add blank pages here" on every page, reserved ones included: before or after this page,
+      1 to 20 whole empty pages, and every later page moves back with its cards, labels and bookmarks
+      · done when: adding two blank pages before a reserved page moves that page (and its bookmark)
+      back by two.
+- [ ] new · "Move this page to…" on every page, reserved ones included, moves it straight to page N;
+      a binder whose capacity ends part-way through its last page keeps that page last and says so ·
+      done when: moving reserved page 4 to page 2 shows it as page 2.
 - [ ] keep · A bookmark jump dropdown lists every saved bookmark, including auto-generated ones for
       reserved pages · done when: reserving a page adds it to the bookmark dropdown without manually
       bookmarking anything.
 - [ ] keep · Binder space search: a debounced text search across every page, results show
       label/page/row·column/placed state, paginated 50 at a time, and clicking a result jumps to and
-      focuses that pocket · done when: searching a reservation label jumps straight to its page with
-      that pocket focused.
+      focuses that pocket. The results list sits under the field, never wider than it or the screen,
+      and closes on a pick, Escape or a tap outside; a pick closes the list before the jump · done
+      when: searching a reservation label jumps straight to its page with that pocket focused, and no
+      results list is left open.
 - [ ] keep · An unsubmitted "go to page" value is discarded when switching to a different binder via
       a direct link · done when: typing "45" in the page-jump field without pressing Go, then opening
       a different binder by URL, shows an empty jump field, not the leftover "45".
@@ -545,6 +561,21 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       Change target, Insert/shift, Paste here, Bookmark, Remove) is reachable on phone through the
       same floating action bar, sized for touch · done when: at a phone-width viewport, selecting a
       filled pocket shows the same set of actions as desktop, laid out for touch.
+- [ ] new · Done means closed: a sheet, dialog, panel or menu that performs an action closes itself
+      when it succeeds, and only then confirms with a toast; a failure keeps it open with the reason
+      inside it · done when: Change target on a phone lands back on the binder with the toast showing
+      and no sheet open.
+- [ ] new · One layer at a time: a toast never draws over an open sheet or dialog; it sits above the
+      sheet's top edge, or inside a surface that fills the screen, and always above the tab bar and
+      the home indicator · done when: a toast raised while a sheet is open shows above the sheet.
+- [ ] new · Every overlay has a visible ×, closes on a backdrop tap and on Escape, returns focus to
+      what opened it, and leaves the page scrolled where it was; dragging a sheet never pulls the page
+      to refresh · done when: closing Binder tools on a phone puts focus back on Tools with the page
+      unmoved.
+- [ ] new · No page or overlay scrolls sideways at 320, 360, 375, 390, 393, 414 or 430px wide; fields
+      are 16px (no iOS zoom on focus), tap targets at least 44px, and sheets size to the dynamic
+      viewport with room for the home indicator · done when: the phone width sweep reports no
+      horizontal overflow on any page or overlay.
 
 ---
 

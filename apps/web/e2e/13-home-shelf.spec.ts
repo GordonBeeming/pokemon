@@ -35,6 +35,28 @@ test('desktop: clicking a recently added shelf card opens the card inspector ove
   await expect(page).toHaveURL(/\/$/);
 });
 
+test('desktop: "View all {species}" closes the inspector and goes to the catalogue', async ({
+  page,
+}) => {
+  test.skip(test.info().project.name !== 'desktop', 'desktop side-panel flow');
+  const { cards } = await getJson(page.request, '/api/dashboard', dashboardShelfSchema);
+  test.skip(cards.length === 0, 'nothing on the shelf in this dataset');
+  const first = cards[0];
+  if (!first) return;
+
+  await page.goto('/');
+  await page.locator('.shelf-cards button').first().click();
+  const dialog = page.getByRole('dialog', { name: 'Card' });
+  await expect(dialog).toBeVisible();
+
+  const viewAll = dialog.getByRole('link', { name: /^View all/ });
+  await expect(viewAll).toBeVisible();
+  await viewAll.click();
+
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL(/\/catalogue\?/);
+});
+
 test('phone: clicking a recently added shelf card goes to the standalone card route, not a panel', async ({
   page,
 }) => {

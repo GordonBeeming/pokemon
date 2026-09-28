@@ -35,19 +35,24 @@ binder page and its tools. Tokens come from theme/tokens.css. */
 .binder-breadcrumb {
   font-size: 0.875rem;
 }
+.binder-breadcrumb a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+}
 .binder-meta {
   margin: 0;
   font-size: 0.875rem;
   color: var(--muted);
 } /* Shared buttons for these screens */
-.binder-view button,
+.binder-scope button,
 .binders-library button,
 .binder-panel button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.4rem;
-  min-height: 2.5rem;
+  min-height: 2.75rem;
   padding: 0 0.9rem;
   font-size: 0.875rem;
   font-weight: 500;
@@ -56,13 +61,13 @@ binder page and its tools. Tokens come from theme/tokens.css. */
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
 }
-.binder-view button:disabled,
+.binder-scope button:disabled,
 .binders-library button:disabled,
 .binder-panel button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
-.binder-view .button-primary,
+.binder-scope .button-primary,
 .binders-library .button-primary,
 .binder-panel .button-primary {
   font-weight: 600;
@@ -70,32 +75,32 @@ binder page and its tools. Tokens come from theme/tokens.css. */
   background: var(--accent);
   border-color: var(--accent);
 }
-.binder-view .button-danger,
+.binder-scope .button-danger,
 .binder-panel .button-danger {
   color: var(--danger);
   border-color: #fecdd3;
 }
-.binder-view .button-text,
+.binder-scope .button-text,
 .binders-library .button-text,
 .binder-panel .button-text {
   color: var(--accent-deep);
   background: transparent;
   border-color: transparent;
 }
-.binder-view .button-icon {
+.binder-scope .button-icon {
   width: 2.75rem;
   padding: 0;
   gap: 0;
 }
-.binder-view input[type='search'],
-.binder-view input[type='number'],
-.binder-view select,
+.binder-scope input[type='search'],
+.binder-scope input[type='number'],
+.binder-scope select,
 .binder-panel input:not([type='checkbox'], [type='radio']),
 .binders-library input {
   min-width: 0;
-  height: 2.5rem;
+  height: 2.75rem;
   padding: 0 0.75rem;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   background: var(--surface);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
@@ -255,17 +260,14 @@ an action at the end */
   align-items: center;
   gap: 0.75rem;
 }
-.binder-view .binder-toolbar button,
-.binder-view .binder-toolbar select,
-.binder-view .binder-toolbar input,
-.binder-view .binder-header-actions button {
+.binder-scope .binder-toolbar button,
+.binder-scope .binder-toolbar select,
+.binder-scope .binder-toolbar input,
+.binder-scope .binder-header-actions button {
   height: 2.75rem;
   white-space: nowrap;
 }
-.binder-view .binder-toolbar .menu-popover button {
-  height: auto;
-}
-.binder-view .menu-button-trigger {
+.binder-scope .menu-button-trigger {
   font-size: 0.875rem;
 }
 .page-stepper {
@@ -284,7 +286,7 @@ an action at the end */
   gap: 0.4rem;
   font-weight: 600;
 }
-.binder-view .page-jump input {
+.binder-scope .page-jump input {
   width: 4.5rem;
 }
 .page-jump-total {
@@ -294,22 +296,6 @@ an action at the end */
 .bookmark-jump select {
   max-width: 14rem;
 }
-/* Popover rows inside the binder screen: undo the screen's bordered-button look. */
-.binder-view .menu-item {
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: flex-start;
-  min-height: 0;
-  padding: 0.55rem 0.7rem;
-  background: transparent;
-  border: 0;
-}
-.binder-view .menu-item:hover:not(:disabled) {
-  background: var(--paper);
-}
-.binder-view .menu-item:disabled {
-  opacity: 1;
-}
 .space-search {
   position: relative;
   flex: 1 1 14rem;
@@ -317,41 +303,64 @@ an action at the end */
   justify-content: flex-end;
   min-width: 0;
 }
-.binder-view .space-search input {
+.binder-scope .space-search input {
   width: min(100%, 16rem);
 }
-.space-search-results {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 0.35rem);
-  right: 0;
-  width: min(26rem, 90vw);
-  max-height: 24rem;
-  padding: 0.5rem;
+/* The results list is anchored to the field and never wider than it (or the
+   screen): React Aria places it and keeps it inside the viewport. */
+.space-search-popover {
+  width: var(--trigger-width);
+  max-width: calc(100vw - 1rem);
+  max-height: min(24rem, var(--popover-max-height, 24rem));
+  padding: 0.35rem;
   overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   box-shadow: 0 12px 32px rgb(15 23 42 / 18%);
+  outline: none;
 }
-.space-search-results ul {
+.space-search-list {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  padding: 0;
-  margin: 0;
-  list-style: none;
+  gap: 0.15rem;
+  outline: none;
 }
-.binder-view .space-search-results li button {
+.space-search-option {
+  display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  width: 100%;
-  padding: 0.4rem 0.6rem;
-  text-align: left;
-  border: 0;
+  justify-content: center;
+  gap: 0.1rem;
+  min-height: 2.75rem;
+  padding: 0.45rem 0.7rem;
+  color: var(--ink);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  outline: none;
+  overflow-wrap: anywhere;
 }
-.space-search-results li button span {
-  font-size: 0.75rem;
+.space-search-option[data-focused],
+.space-search-option[data-hovered] {
+  background: var(--paper);
+}
+.space-search-option[data-pressed] {
+  background: var(--line);
+}
+.space-search-option[data-focus-visible] {
+  box-shadow: inset 0 0 0 2px var(--accent-deep);
+}
+.space-search-option-detail {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+.space-search-more {
+  font-weight: 600;
+  color: var(--accent-deep);
+}
+.space-search-status {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  font-size: 0.875rem;
   color: var(--muted);
 }
 
@@ -370,14 +379,6 @@ an action at the end */
 .binder-display-label:not(:first-child) {
   margin-top: 0.5rem;
 }
-.binder-view .segmented-control button {
-  min-height: 2.25rem;
-  border: 0;
-  background: transparent;
-}
-.binder-view .segmented-control .segmented-control-option-active {
-  background: var(--surface);
-}
 
 @media (max-width: 767px) {
   .binders-library-header h1,
@@ -387,8 +388,8 @@ an action at the end */
   .page-stepper {
     gap: 0.25rem;
   }
-  .binder-view .button-icon {
-    width: 2.5rem;
+  .binder-scope .button-icon {
+    width: 2.75rem;
   }
   .page-jump label > span {
     position: absolute;
@@ -397,7 +398,7 @@ an action at the end */
     overflow: hidden;
     clip: rect(0, 0, 0, 0);
   }
-  .binder-view .page-jump input {
+  .binder-scope .page-jump input {
     width: 3.5rem;
   }
   /* The title has the header to itself on a phone; Manage binder lives in Tools. */
@@ -464,7 +465,7 @@ an action at the end */
   }
 }
 
-.binder-view .pocket {
+.binder-scope .pocket {
   position: relative;
   display: block;
   min-height: 0;
@@ -478,18 +479,18 @@ an action at the end */
   touch-action: pan-y;
   user-select: none;
 }
-.binder-view .pocket:focus-visible {
+.binder-scope .pocket:focus-visible {
   outline: 3px solid var(--accent-deep);
 }
-.binder-view .pocket-selected {
+.binder-scope .pocket-selected {
   outline: 3px solid var(--accent);
 }
-.binder-view .pocket-move-source {
+.binder-scope .pocket-move-source {
   outline: 3px dashed var(--accent);
   opacity: 0.7;
 }
-.binder-view .pocket-move-cursor,
-.binder-view .pocket-drop-hover {
+.binder-scope .pocket-move-cursor,
+.binder-scope .pocket-drop-hover {
   outline: 3px solid #f59e0b;
 }
 .pocket-words,
@@ -606,20 +607,20 @@ an action at the end */
 .pocket-actions .action-bar {
   gap: 0.35rem;
 }
-.binder-view .pocket-actions .action-bar-item {
+.binder-scope .pocket-actions .action-bar-item {
   height: 2.75rem;
   color: #ffffff;
   background: #1e293b;
   border: 0;
   border-radius: 10px;
 }
-.binder-view .pocket-actions .action-bar-item:hover:not(:disabled) {
+.binder-scope .pocket-actions .action-bar-item:hover:not(:disabled) {
   background: #334155;
 }
-.binder-view .pocket-actions .action-bar-danger {
+.binder-scope .pocket-actions .action-bar-danger {
   color: #fda4af;
 }
-.binder-view .pocket-actions .pocket-actions-close {
+.binder-scope .pocket-actions .pocket-actions-close {
   width: 2.75rem;
   padding: 0;
   color: #cbd5e1;
@@ -948,14 +949,14 @@ an action at the end */
   align-items: center;
   gap: 0.35rem;
 }
-.binder-view .phone-page-bar button {
+.binder-scope .phone-page-bar button {
   height: 2.75rem;
   white-space: nowrap;
 }
-.binder-view .phone-page-bar .button-icon {
+.binder-scope .phone-page-bar .button-icon {
   width: 2.75rem;
 }
-.binder-view .phone-page-number {
+.binder-scope .phone-page-number {
   min-width: 6.5rem;
   font-family: var(--font-mono);
   font-size: 0.9375rem;
@@ -979,17 +980,17 @@ an action at the end */
   max-height: none;
   box-shadow: none;
 }
-.binder-view .binder-sheet .space-search input,
-.binder-view .binder-sheet .bookmark-jump select {
+.binder-scope .binder-sheet .space-search input,
+.binder-scope .binder-sheet .bookmark-jump select {
   width: 100%;
   max-width: none;
   height: 2.75rem;
 }
-.binder-view .binder-sheet .page-jump input {
+.binder-scope .binder-sheet .page-jump input {
   width: 5rem;
   height: 2.75rem;
 }
-.binder-view .binder-sheet button {
+.binder-scope .binder-sheet button {
   min-height: 2.75rem;
 }
 .binder-sheet-section {
@@ -1006,7 +1007,7 @@ an action at the end */
   flex-direction: column;
   gap: 0.4rem;
 }
-.binder-view .page-action-list button {
+.binder-scope .page-action-list button {
   justify-content: flex-start;
 }
 .binder-sheet .binder-display-controls {

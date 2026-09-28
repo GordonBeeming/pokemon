@@ -135,6 +135,13 @@
   justify-content: space-between;
   gap: 1rem;
 }
+/* The shared .text-button has no minimum size (most uses sit inline in prose), but
+   this one is Still to find's only control and needs a real tap target at 390px. */
+.home-still-to-find-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+}
 .home-column-empty {
   margin: 0;
   padding: 1rem 1.1rem;

@@ -163,26 +163,20 @@ export function PasskeysTab(): ReactElement {
         destructive
         pending={remove.isPending}
         onCancel={() => setRemoving(null)}
-        onConfirm={() => {
-          if (!removing) return;
-          remove.mutate(removing.id, {
-            onSuccess: () => {
-              toast('success', 'Passkey removed.');
-              setRemoving(null);
-              // The worker ends this session with the removal; reload into sign-in.
-              location.reload();
-            },
-            onError: (cause) => {
-              toast(
-                'error',
-                cause instanceof ApiError && cause.code === 'last_passkey'
-                  ? 'This is your only passkey. Add another before removing it.'
-                  : 'The passkey could not be removed. Try again.',
-              );
-              setRemoving(null);
-            },
-          });
-        }}
+        success="Passkey removed."
+        describeError={(cause) =>
+          cause instanceof ApiError && cause.code === 'last_passkey'
+            ? 'This is your only passkey. Add another before removing it.'
+            : 'The passkey could not be removed. Try again.'
+        }
+        onConfirm={() =>
+          removing
+            ? remove.mutateAsync(removing.id).then(() => {
+                // The worker ends this session with the removal; reload into sign-in.
+                location.reload();
+              })
+            : undefined
+        }
       />
     </section>
   );

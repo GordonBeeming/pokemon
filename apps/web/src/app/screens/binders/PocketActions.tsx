@@ -136,6 +136,7 @@ export function PocketActions({
     return (
       <Sheet
         open
+        className="binder-scope"
         onClose={onClose}
         title={summary.title}
         header={<PocketSheetHeader summary={summary} />}

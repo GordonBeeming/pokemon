@@ -1,28 +1,126 @@
-/* Dialog */
-.dialog-backdrop {
+/* Overlays: Dialog, Sheet and SidePanel share one structure (ui/overlay.tsx):
+   backdrop > .overlay-modal (layout-transparent) > surface > header + body.
+   The backdrop tracks the visual viewport, so an on-screen keyboard or Safari's
+   toolbars never push a surface's controls out of reach. */
+.overlay-modal {
+  display: contents;
+}
+.dialog-backdrop,
+.sheet-backdrop,
+.side-panel-backdrop {
   position: fixed;
   z-index: 30;
-  inset: 0;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 100dvh;
+  height: var(--visual-viewport-height, 100dvh);
   display: flex;
+  background: rgb(15 23 42 / 45%);
+  /* A pull on the backdrop does nothing: no page scroll, no pull-to-refresh. */
+  touch-action: none;
+  overscroll-behavior: none;
+}
+.dialog,
+.sheet,
+.side-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--surface);
+  outline: none;
+}
+.overlay-header {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+.overlay-title-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  min-width: 0;
+}
+.overlay-title {
+  flex-grow: 1;
+  min-width: 0;
+  margin: 0;
+  padding-top: 0.55rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.overlay-header .overlay-close,
+.card-page-header .overlay-close {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  margin-left: auto;
+  padding: 0;
+  font-size: 1.15rem;
+  color: var(--ink-soft);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+}
+.overlay-header .overlay-close:hover,
+.card-page-header .overlay-close:hover {
+  color: var(--ink);
+  background: var(--paper);
+  border-color: var(--line);
+}
+.overlay-header .overlay-close:active,
+.card-page-header .overlay-close:active {
+  background: var(--line);
+}
+.overlay-body {
+  flex: 0 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.overlay-error {
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.9375rem;
+  color: var(--danger);
+  background: var(--danger-soft-bg);
+  border: 1px solid #fecaca;
+  border-radius: var(--radius-md);
+}
+
+/* Dialog */
+.dialog-backdrop {
   align-items: center;
   justify-content: center;
   padding: 1rem;
-  background: rgb(15 23 42 / 45%);
 }
 .dialog {
   width: min(28rem, 100%);
-  max-height: calc(100vh - 2rem);
-  padding: 1.5rem;
-  overflow-y: auto;
-  background: var(--surface);
+  max-height: 100%;
   border-radius: var(--radius-lg);
+  box-shadow: 0 24px 48px rgb(15 23 42 / 22%);
 }
-.dialog-title {
-  margin: 0 0 0.75rem;
-  font-size: 1.25rem;
+.dialog-wide {
+  width: min(56rem, 100%);
+}
+.dialog-header {
+  padding: 1rem 1rem 0.5rem 1.5rem;
+}
+.dialog-body {
+  padding: 0.25rem 1.5rem 1.5rem;
 }
 .dialog-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.5rem;
   margin-top: 1.25rem;
@@ -65,80 +163,60 @@
   gap: 0.35rem;
 }
 .confirm-dialog-typed-guard input {
-  height: 2.5rem;
+  height: 2.75rem;
   padding: 0 0.75rem;
+  font-size: 1rem;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
 }
+@media (max-width: 767px) {
+  /* Actions share the width on a phone instead of bunching at the right edge. */
+  .dialog-actions button {
+    flex: 1 1 auto;
+  }
+}
 
-/* SidePanel */
+/* SidePanel: right edge on desktop, the whole screen on a phone */
 .side-panel-backdrop {
-  position: fixed;
-  z-index: 30;
-  inset: 0;
-  display: flex;
   justify-content: flex-end;
-  background: rgb(15 23 42 / 45%);
 }
 .side-panel {
-  display: flex;
-  flex-direction: column;
   width: min(26rem, 100%);
   height: 100%;
-  overflow-y: auto;
-  background: var(--surface);
+  box-shadow: -12px 0 32px rgb(15 23 42 / 18%);
 }
 .side-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1rem 1.25rem;
+  padding: 0.5rem 0.75rem 0.5rem 1.25rem;
+  padding-top: calc(0.5rem + env(safe-area-inset-top, 0px));
   border-bottom: 1px solid var(--line);
 }
-.side-panel-header h2 {
-  margin: 0;
-  font-size: 1.1rem;
+.side-panel-header .overlay-title-row {
+  align-items: center;
 }
-.side-panel-header > button {
-  display: flex;
-  background: none;
-  border: 0;
+.side-panel-header .overlay-title {
+  padding-top: 0;
 }
 .side-panel-toolbar {
   flex-grow: 1;
   min-width: 0;
 }
 .side-panel-body {
-  padding: 1.25rem;
+  flex: 1 1 auto;
+  padding: 1.25rem 1.25rem calc(1.25rem + var(--safe-area-bottom));
 }
 
-/* Sheet */
+/* Sheet: rises from the bottom on a phone */
 .sheet-backdrop {
-  position: fixed;
-  z-index: 30;
-  inset: 0;
-  display: flex;
   align-items: flex-end;
-  background: rgb(15 23 42 / 45%);
-  /* A pull on the backdrop does nothing: no page scroll, no pull-to-refresh. */
-  touch-action: none;
-  overscroll-behavior: none;
 }
 .sheet {
-  display: flex;
-  flex-direction: column;
   width: 100%;
-  max-height: 85vh;
-  max-height: 85dvh;
-  background: var(--surface);
+  max-height: 85%;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: 0 -12px 32px rgb(15 23 42 / 18%);
   transition: transform 0.15s ease-out;
 }
 .sheet-header {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
   padding: 0.5rem 1rem 0.75rem;
   border-bottom: 1px solid var(--line);
   touch-action: none;
@@ -152,44 +230,51 @@
   background: var(--line-strong);
   border-radius: var(--radius-pill);
 }
-.sheet-title-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-}
-.sheet-title {
-  flex-grow: 1;
-  min-width: 0;
-  margin: 0;
-  padding-top: 0.55rem;
-  font-size: 1.1rem;
-}
 .sheet-header-content {
   flex-grow: 1;
   min-width: 0;
 }
-.sheet .sheet-close {
-  display: inline-flex;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  width: 2.75rem;
-  height: 2.75rem;
-  margin-left: auto;
-  padding: 0;
-  font-size: 1.1rem;
-  color: var(--ink);
-  background: transparent;
-  border: 0;
-  border-radius: var(--radius-md);
-}
 .sheet-body {
-  flex: 0 1 auto;
-  min-height: 0;
   padding: 1rem 1rem calc(1rem + var(--safe-area-bottom));
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .sheet[data-entering],
+  .sheet-backdrop[data-entering] .sheet {
+    animation: sheet-rise 0.18s ease-out;
+  }
+  .dialog-backdrop[data-entering] .dialog {
+    animation: dialog-pop 0.14s ease-out;
+  }
+  .side-panel-backdrop[data-entering] .side-panel {
+    animation: side-slide 0.18s ease-out;
+  }
+}
+@keyframes sheet-rise {
+  from {
+    transform: translateY(24%);
+    opacity: 0.6;
+  }
+}
+@keyframes dialog-pop {
+  from {
+    transform: scale(0.97);
+    opacity: 0;
+  }
+}
+@keyframes side-slide {
+  from {
+    transform: translateX(12%);
+    opacity: 0.6;
+  }
+}
+
+/* An in-flow notice slot for a surface that fills the screen: toasts raised while
+   it's open show here instead of on top of it. */
+.toast-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
 }
 
 /* ActionBar */
@@ -202,8 +287,10 @@
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  height: 2.5rem;
+  min-width: 0;
+  height: 2.75rem;
   padding: 0 0.9rem;
+  white-space: nowrap;
   font-size: 0.875rem;
   font-weight: 500;
   background: var(--surface);
@@ -217,26 +304,48 @@
 .segmented-control {
   display: flex;
   flex-shrink: 0;
-  gap: 0.25rem;
   height: 2.75rem;
-  padding: 0.25rem;
   background: var(--line);
   border-radius: var(--radius-md);
 }
-.segmented-control button {
-  padding: 0 1rem;
+/* Each option is the full 44px tall so it's a comfortable tap target; the
+   transparent border lets the track show round the active pill. */
+.segmented-control-option {
+  display: inline-flex;
+  flex: 1 0 auto;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 0 0.9rem;
   font-size: 0.875rem;
   font-weight: 500;
   white-space: nowrap;
   color: var(--ink-soft);
+  cursor: pointer;
   background: transparent;
-  border: 0;
-  border-radius: var(--radius-sm);
+  background-clip: padding-box;
+  border: 0.25rem solid transparent;
+  border-radius: var(--radius-md);
+}
+.segmented-control-option[data-hovered]:not(.segmented-control-option-active) {
+  color: var(--ink);
+}
+.segmented-control-option[data-pressed]:not(.segmented-control-option-active) {
+  background-color: rgb(255 255 255 / 55%);
 }
 .segmented-control-option-active {
   font-weight: 600;
   color: var(--ink);
-  background: var(--surface);
+  background-color: var(--surface);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 8%);
+}
+.segmented-control-option[data-focus-visible] {
+  outline: 3px solid var(--accent-deep);
+  outline-offset: -2px;
+}
+.segmented-control-option[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 /* Chip / FilterChips */
@@ -259,7 +368,7 @@
   display: flex;
   align-items: center;
   gap: 0.35rem;
-  height: 2rem;
+  min-height: 2.75rem;
   padding: 0 0.6rem 0 0.75rem;
   font-size: 0.875rem;
   font-weight: 500;
@@ -309,8 +418,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: 2.75rem;
+  height: 2.75rem;
   background: var(--surface);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
@@ -345,9 +454,6 @@
 }
 
 /* Additive variants used by the binder screens */
-.dialog-wide {
-  width: min(56rem, 100%);
-}
 .action-bar-kbd {
   padding: 0 0.3rem;
   font-family: var(--font-mono);
@@ -391,47 +497,67 @@
   background: var(--paper);
   border-color: var(--accent);
 }
+.menu-button-trigger[data-pressed] {
+  background: var(--line);
+}
+.menu-button-trigger[data-focus-visible] {
+  outline: 3px solid var(--accent-deep);
+  outline-offset: 2px;
+}
+/* React Aria positions the popover against its trigger and keeps it on screen; the
+   width only has to stay within the screen's gutters. */
 .menu-popover {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 0.35rem);
   display: flex;
   flex-direction: column;
   gap: 0.15rem;
   width: max-content;
-  min-width: 15rem;
-  max-width: min(22rem, calc(100vw - 2rem));
+  min-width: max(15rem, var(--trigger-width, 0px));
+  max-width: min(22rem, calc(100vw - 1rem));
+  max-height: var(--popover-max-height, 70dvh);
   padding: 0.35rem;
+  overflow-y: auto;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   box-shadow: 0 12px 32px rgb(15 23 42 / 18%);
+  outline: none;
 }
-.menu-popover-start {
-  left: 0;
-}
-.menu-popover-end {
-  right: 0;
+.menu-list,
+.menu-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  outline: none;
 }
 .menu-item {
   display: flex;
   flex-direction: column;
+  justify-content: center;
   align-items: flex-start;
   gap: 0.1rem;
   width: 100%;
+  min-height: 2.75rem;
   padding: 0.55rem 0.7rem;
   text-align: left;
   color: var(--ink);
+  cursor: pointer;
   background: transparent;
-  border: 0;
   border-radius: var(--radius-sm);
+  outline: none;
 }
-.menu-item:hover:not(:disabled),
-.menu-item:focus-visible {
+.menu-item[data-focused],
+.menu-item[data-hovered] {
   background: var(--paper);
 }
-.menu-item:disabled {
+.menu-item[data-pressed] {
+  background: var(--line);
+}
+.menu-item[data-focus-visible] {
+  box-shadow: inset 0 0 0 2px var(--accent-deep);
+}
+.menu-item[data-disabled] {
   cursor: not-allowed;
+  background: transparent;
 }
 .menu-item-label {
   font-size: 0.9375rem;
@@ -440,7 +566,7 @@
 .menu-item-danger .menu-item-label {
   color: var(--danger);
 }
-.menu-item:disabled .menu-item-label {
+.menu-item[data-disabled] .menu-item-label {
   color: var(--faint);
 }
 .menu-button-chevron {
@@ -513,4 +639,137 @@
   background: var(--accent);
   border: 0;
   border-radius: var(--radius-md);
+}
+.menu-note-error {
+  color: var(--danger);
+  background: var(--danger-soft-bg);
+}
+
+/* SelectField: our trigger and list, React Aria's behaviour */
+.select-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.select-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.select-field .select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+  height: 2.75rem;
+  padding: 0 0.6rem 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 500;
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+}
+.select-trigger[data-pressed],
+.select-field[data-open] .select-trigger {
+  background: var(--paper);
+  border-color: var(--accent);
+}
+.select-trigger[data-focus-visible] {
+  outline: 3px solid var(--accent-deep);
+  outline-offset: 2px;
+}
+.select-trigger[data-disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.select-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select-value[data-placeholder] {
+  color: var(--muted);
+}
+.select-chevron {
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 0.15s ease-out;
+}
+.select-field[data-open] .select-chevron {
+  transform: rotate(180deg);
+}
+.select-popover {
+  width: var(--trigger-width);
+  min-width: 12rem;
+  max-width: calc(100vw - 1rem);
+  max-height: var(--popover-max-height, 60dvh);
+  overflow-y: auto;
+  padding: 0.35rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: 0 12px 32px rgb(15 23 42 / 18%);
+  outline: none;
+}
+.select-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  outline: none;
+}
+.select-item {
+  display: flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.7rem;
+  font-size: 1rem;
+  color: var(--ink);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  outline: none;
+  overflow-wrap: anywhere;
+}
+.select-item[data-focused],
+.select-item[data-hovered] {
+  background: var(--paper);
+}
+.select-item[data-pressed] {
+  background: var(--line);
+}
+.select-item[data-selected] {
+  font-weight: 600;
+  color: var(--accent-deep);
+  background: var(--accent-soft-bg);
+}
+.select-item[data-focus-visible] {
+  box-shadow: inset 0 0 0 2px var(--accent-deep);
+}
+.select-item[data-disabled] {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+/* Text fields inside any overlay: full 44px, 16px text (no iOS focus zoom). */
+.overlay-body input:not([type='checkbox'], [type='radio'], [type='color']),
+.overlay-body textarea {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  font-size: 1rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+}
+.overlay-body textarea {
+  padding: 0.6rem 0.75rem;
 }

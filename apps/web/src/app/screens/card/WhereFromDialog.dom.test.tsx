@@ -65,6 +65,7 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  // Dialogs render at the end of document.body, outside the render container.
   queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   calls = [];
 });
@@ -93,15 +94,17 @@ describe('WhereFromDialog', () => {
     const onRemoved = vi.fn();
     await renderDialog({ looseCopies: 0, onRemoved });
 
-    const pocketRadio = container.querySelector<HTMLInputElement>('input[name="remove-source"]');
-    const looseRadio = container.querySelectorAll<HTMLInputElement>(
+    const pocketRadio = document.body.querySelector<HTMLInputElement>(
+      'input[name="remove-source"]',
+    );
+    const looseRadio = document.body.querySelectorAll<HTMLInputElement>(
       'input[name="remove-source"]',
     )[1];
     expect(pocketRadio).not.toBeNull();
     expect(looseRadio?.disabled).toBe(true);
 
     await step(() => pocketRadio?.click());
-    const confirmButton = Array.from(container.querySelectorAll('button')).find(
+    const confirmButton = Array.from(document.body.querySelectorAll('button')).find(
       (button) => button.textContent === 'Remove 1 copy',
     );
     await step(() => confirmButton?.click());
@@ -126,12 +129,12 @@ describe('WhereFromDialog', () => {
     }));
     await renderDialog({ looseCopies: 2 });
 
-    const looseRadio = container.querySelectorAll<HTMLInputElement>(
+    const looseRadio = document.body.querySelectorAll<HTMLInputElement>(
       'input[name="remove-source"]',
     )[1];
     expect(looseRadio?.disabled).toBe(false);
     await step(() => looseRadio?.click());
-    const confirmButton = Array.from(container.querySelectorAll('button')).find(
+    const confirmButton = Array.from(document.body.querySelectorAll('button')).find(
       (button) => button.textContent === 'Remove 1 copy',
     );
     await step(() => confirmButton?.click());
@@ -179,22 +182,22 @@ describe('WhereFromDialog', () => {
     const onRemoved = vi.fn();
     await renderDialog({ placedIn: [], looseCopies: 0, onRemoved });
 
-    const miscountRadio = container.querySelectorAll<HTMLInputElement>(
+    const miscountRadio = document.body.querySelectorAll<HTMLInputElement>(
       'input[name="remove-source"]',
     )[1];
     await step(() => miscountRadio?.click());
     const confirmButton = () =>
-      Array.from(container.querySelectorAll('button')).find(
+      Array.from(document.body.querySelectorAll('button')).find(
         (button) => button.textContent === 'Remove 1 copy',
       );
     await step(() => confirmButton()?.click());
 
     // The server pushed back with candidates — the dialog now shows a slot picker
     // instead of closing or erroring.
-    expect(container.querySelector('[aria-label="Which pocket to empty"]')).not.toBeNull();
+    expect(document.body.querySelector('[aria-label="Which pocket to empty"]')).not.toBeNull();
     expect(onRemoved).not.toHaveBeenCalled();
 
-    const slotRadio = container.querySelector<HTMLInputElement>('input[name="miscount-slot"]');
+    const slotRadio = document.body.querySelector<HTMLInputElement>('input[name="miscount-slot"]');
     await step(() => slotRadio?.click());
     await step(() => confirmButton()?.click());
 
@@ -210,22 +213,22 @@ describe('WhereFromDialog', () => {
     const onRemoved = vi.fn();
     await renderDialog({ looseCopies: 2, onRemoved });
 
-    const looseRadio = container.querySelectorAll<HTMLInputElement>(
+    const looseRadio = document.body.querySelectorAll<HTMLInputElement>(
       'input[name="remove-source"]',
     )[1];
     await step(() => looseRadio?.click());
-    const confirmButton = Array.from(container.querySelectorAll('button')).find(
+    const confirmButton = Array.from(document.body.querySelectorAll('button')).find(
       (button) => button.textContent === 'Remove 1 copy',
     );
     await step(() => confirmButton?.click());
 
     expect(calls).toEqual([{ body: { source: 'loose' } }]);
     expect(onRemoved).not.toHaveBeenCalled();
-    expect(container.textContent).toContain('This card changed somewhere else');
+    expect(document.body.textContent).toContain('This card changed somewhere else');
     expect(
-      Array.from(container.querySelectorAll<HTMLInputElement>('input[name="remove-source"]')).some(
-        (radio) => radio.checked,
-      ),
+      Array.from(
+        document.body.querySelectorAll<HTMLInputElement>('input[name="remove-source"]'),
+      ).some((radio) => radio.checked),
     ).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
 
 // The e2e server (scripts/e2e-server.mjs) copies .wrangler/state/v3 to a fresh temp
 // directory and starts the app against that copy on its own port, so a run never
@@ -34,9 +34,10 @@ export default defineConfig({
     timeout: 60_000,
     env: { POKEDEX_E2E_PORT: String(port) },
   },
-  // Both projects are Chromium — "phone" is a viewport + touch profile, not a real
-  // device emulation, so the invite flow's CDP virtual WebAuthn authenticator (only
-  // supported by Chromium) works in either project.
+  // "phone" and "phone-narrow" are Chromium with a phone viewport and touch, so the
+  // invite flow's CDP virtual WebAuthn authenticator (Chromium only) works there.
+  // "phone-webkit" is WebKit with the iPhone 13 descriptor, closest to Safari on
+  // Gordon's phone; specs that need CDP skip themselves on it.
   projects: [
     {
       name: 'desktop',
@@ -51,6 +52,20 @@ export default defineConfig({
         isMobile: true,
         deviceScaleFactor: 2,
       },
+    },
+    {
+      name: 'phone-narrow',
+      use: {
+        browserName: 'chromium',
+        viewport: { width: 360, height: 740 },
+        hasTouch: true,
+        isMobile: true,
+        deviceScaleFactor: 2,
+      },
+    },
+    {
+      name: 'phone-webkit',
+      use: { ...devices['iPhone 13'] },
     },
   ],
 });

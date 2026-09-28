@@ -258,6 +258,24 @@ describe('Home', () => {
     expect(document.querySelector('.side-panel')).not.toBeNull();
   });
 
+  it('desktop: the open card inspector offers "View all {species}", which closes the panel', async () => {
+    stubDesktop(true);
+    const onCloseCard = vi.fn();
+    await renderHome({ card: 'card-1', onOpenCard: vi.fn(), onCloseCard });
+    await flushUntil(
+      () => document.querySelector('.side-panel')?.textContent?.includes('Bulbasaur') === true,
+    );
+
+    const viewAll = Array.from(document.querySelectorAll('a')).find((link) =>
+      link.textContent?.includes('View all'),
+    );
+    expect(viewAll).toBeDefined();
+    expect(viewAll?.textContent).toContain('Bulbasaur');
+    await step(() => viewAll?.click());
+
+    expect(onCloseCard).toHaveBeenCalled();
+  });
+
   it('phone: clicking a shelf card navigates to the standalone card route instead of opening a panel', async () => {
     stubDesktop(false);
     await renderHome({ onOpenCard: vi.fn(), onCloseCard: vi.fn() });

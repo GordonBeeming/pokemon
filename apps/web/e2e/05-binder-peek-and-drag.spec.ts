@@ -1,7 +1,7 @@
 import type { APIRequestContext, Locator, Page } from '@playwright/test';
 import * as api from './support/api';
 import { expect, test } from './support/fixtures';
-import { ensureDisplayPanelOpen } from './support/nav';
+import { ensureDisplayPanelOpen, chooseSegment } from './support/nav';
 import { activeVersionId, findMissingCard, placeLooseCopy } from './support/scenarios';
 
 interface SlotFacts {
@@ -113,13 +113,13 @@ test('peek columns 0/1/2 control whether a neighbouring page is exposed', async 
   const display = page.locator('.binder-display');
   await ensureDisplayPanelOpen(page);
   // SegmentedControl renders an ARIA radio group, not plain buttons.
-  await display.getByRole('radio', { name: 'None' }).check();
+  await chooseSegment(display, 'None');
   await expect(neighbour).toHaveAttribute('aria-hidden', 'true');
 
-  await display.getByRole('radio', { name: '1 column' }).check();
+  await chooseSegment(display, '1 column');
   await expect(neighbour).not.toHaveAttribute('aria-hidden', 'true');
 
-  await display.getByRole('radio', { name: '2 columns' }).check();
+  await chooseSegment(display, '2 columns');
   await expect(neighbour).not.toHaveAttribute('aria-hidden', 'true');
 });
 
@@ -168,6 +168,9 @@ test.fixme('dragging a card between two pockets on the same page moves it', asyn
 });
 
 test('keyboard move: m, arrow keys, Enter', async ({ page }) => {
+  // On a phone a tapped pocket opens its modal action sheet, which holds focus; the
+  // phone's Move is the sheet's button (covered in 14-mobile-interactions).
+  test.skip(test.info().project.name !== 'desktop', 'a hardware-keyboard flow');
   const binderId = await collectionsBinderId(page.request);
   const { versionId, placedAt, emptyAt } = await placedAndNearbyEmpty(page.request, binderId, {
     requireOffset: 0,

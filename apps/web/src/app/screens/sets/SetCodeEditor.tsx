@@ -3,7 +3,7 @@ import { useState, type ReactElement } from 'react';
 import { usePatchSetCode } from '../../api/queries/sets';
 import { Dialog } from '../../ui/Dialog';
 import { Icon } from '../../ui/icons';
-import { useToast } from '../../ui/Toast';
+import { useOverlayAction } from '../../ui/overlay';
 
 /**
  * Owner-editable code for a set without a TCGdex-supplied one (or to disambiguate
@@ -13,69 +13,79 @@ import { useToast } from '../../ui/Toast';
  */
 export function SetCodeEditor({ set, clash }: { set: CatalogueSet; clash: boolean }): ReactElement {
   const [open, setOpen] = useState(false);
-  const [code, setCode] = useState(set.code ?? '');
-  const patch = usePatchSetCode();
-  const toast = useToast();
-
-  async function save(): Promise<void> {
-    const trimmed = code.trim();
-    try {
-      await patch.mutateAsync({ setId: set.setId, code: trimmed || null });
-      setOpen(false);
-      toast(
-        'success',
-        trimmed
-          ? `${set.setName}'s code is now ${trimmed.toUpperCase()}.`
-          : `${set.setName}'s code was cleared.`,
-      );
-    } catch (cause) {
-      toast('error', cause instanceof Error ? cause.message : 'Could not save that code.');
-    }
-  }
-
   return (
     <>
       <button
         type="button"
         className="set-code-edit-button"
         aria-label={`Edit code for ${set.setName}`}
-        onClick={() => {
-          setCode(set.code ?? '');
-          setOpen(true);
-        }}
+        onClick={() => setOpen(true)}
       >
         <Icon name="pencil" />
       </button>
       <Dialog open={open} onClose={() => setOpen(false)} title={`Edit code — ${set.setName}`}>
-        {clash ? (
-          <p role="alert">
-            This code is shared with another set. Choose a distinct code so card frames tell them
-            apart.
-          </p>
-        ) : null}
-        <label>
-          Set code (letters, numbers, hyphens — up to 8 characters)
-          <input
-            value={code}
-            maxLength={8}
-            autoFocus
-            onChange={(event) => setCode(event.target.value.toUpperCase())}
-          />
-        </label>
-        <div className="dialog-actions">
-          <button type="button" onClick={() => setOpen(false)} disabled={patch.isPending}>
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="dialog-action-primary"
-            onClick={() => void save()}
-            disabled={patch.isPending}
-          >
-            {patch.isPending ? 'Saving…' : 'Save code'}
-          </button>
-        </div>
+        <SetCodeForm set={set} clash={clash} onCancel={() => setOpen(false)} />
       </Dialog>
     </>
+  );
+}
+
+function SetCodeForm({
+  set,
+  clash,
+  onCancel,
+}: {
+  set: CatalogueSet;
+  clash: boolean;
+  onCancel: () => void;
+}): ReactElement {
+  const [code, setCode] = useState(set.code ?? '');
+  const patch = usePatchSetCode();
+  const action = useOverlayAction();
+  const busy = patch.isPending || action.pending;
+
+  function save(): void {
+    const trimmed = code.trim();
+    void action.run(() => patch.mutateAsync({ setId: set.setId, code: trimmed || null }), {
+      success: trimmed
+        ? `${set.setName}'s code is now ${trimmed.toUpperCase()}.`
+        : `${set.setName}'s code was cleared.`,
+      failure: 'Could not save that code.',
+    });
+  }
+
+  return (
+    <form
+      className="set-code-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!busy) save();
+      }}
+    >
+      {clash ? (
+        <p role="alert">
+          This code is shared with another set. Choose a distinct code so card frames tell them
+          apart.
+        </p>
+      ) : null}
+      <label>
+        Set code (letters, numbers, hyphens — up to 8 characters)
+        <input
+          value={code}
+          maxLength={8}
+          autoFocus
+          autoCapitalize="characters"
+          onChange={(event) => setCode(event.target.value.toUpperCase())}
+        />
+      </label>
+      <div className="dialog-actions">
+        <button type="button" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+        <button type="submit" className="dialog-action-primary" disabled={busy}>
+          {busy ? 'Saving…' : 'Save code'}
+        </button>
+      </div>
+    </form>
   );
 }

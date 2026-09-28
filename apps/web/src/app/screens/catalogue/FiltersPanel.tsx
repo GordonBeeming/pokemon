@@ -9,6 +9,9 @@ import { useState, type ReactElement } from 'react';
 import { useSets } from '../../api/queries/sets';
 import { RARITY_VISUALS } from '../../cards/rarity-visuals';
 import { catalogueSortOrders, type CatalogueSearch } from '../../routes/search-params';
+import { SelectField } from '../../ui/SelectField';
+
+const ANY_REGION = 'any';
 
 export const FRAME_TYPE_LABELS: Record<FrameType, string> = {
   grass: 'Grass',
@@ -79,20 +82,18 @@ export function FiltersPanel({
         </div>
       </fieldset>
 
-      <fieldset>
-        <legend>First found region</legend>
-        <select
-          value={filters.region ?? ''}
-          onChange={(event) => onChange({ region: event.target.value || undefined, page: 1 })}
-        >
-          <option value="">Any region</option>
-          {POKEMON_DISCOVERY_CATEGORIES.map((region) => (
-            <option key={region} value={region}>
-              {region}
-            </option>
-          ))}
-        </select>
-      </fieldset>
+      <SelectField
+        className="filters-panel-select"
+        label="First found region"
+        value={filters.region ?? ANY_REGION}
+        options={[
+          { value: ANY_REGION, label: 'Any region' },
+          ...POKEMON_DISCOVERY_CATEGORIES.map((region) => ({ value: region, label: region })),
+        ]}
+        onChange={(region) =>
+          onChange({ region: region === ANY_REGION ? undefined : region, page: 1 })
+        }
+      />
 
       <fieldset>
         <legend>Card type</legend>
@@ -129,22 +130,13 @@ export function FiltersPanel({
         </div>
       </fieldset>
 
-      <fieldset>
-        <legend>Order</legend>
-        <select
-          value={filters.sort}
-          onChange={(event) => {
-            const value = catalogueSortOrders.find((order) => order === event.target.value);
-            if (value) onChange({ sort: value });
-          }}
-        >
-          {SORT_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </fieldset>
+      <SelectField
+        className="filters-panel-select"
+        label="Order"
+        value={filters.sort}
+        options={SORT_OPTIONS}
+        onChange={(sort) => onChange({ sort })}
+      />
     </div>
   );
 }

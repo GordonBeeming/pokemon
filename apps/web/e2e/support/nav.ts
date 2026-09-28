@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 
 // The shell breakpoint AppShell/shell.css switches on — matches useIsDesktop's own
 // `(min-width: 768px)` query, so "which nav is visible" always agrees with the app.
@@ -85,4 +85,15 @@ export async function expectActiveFilterCount(page: Page, count: number): Promis
   }
   if (count === 0) await expect(page.locator('.filter-count-badge')).toHaveCount(0);
   else await expect(page.locator('.filter-count-badge')).toHaveText(String(count));
+}
+
+/**
+ * Picks a SegmentedControl option. It's a React Aria radio group: each radio input is
+ * visually hidden inside its label, so the label is what takes the press.
+ */
+export async function chooseSegment(scope: Locator, name: string): Promise<void> {
+  // `has` matches inside each label, so its locator starts from the page, not the scope.
+  const inLabel = scope.page().getByRole('radio', { name, exact: true });
+  await scope.locator('label.segmented-control-option').filter({ has: inLabel }).click();
+  await expect(scope.getByRole('radio', { name, exact: true })).toBeChecked();
 }

@@ -45,12 +45,21 @@ export function applyMutation(queryClient: QueryClient, result: BinderMutation):
     };
     queryClient.setQueryData(queryKeys.binders.page(versionId, page.position), window);
   }
+  const unwritten = (key: readonly unknown[]): boolean =>
+    !(key[3] === 'page' && typeof key[4] === 'number' && written.has(key[4]));
+  // Pages are cached by position, and a write can move whole pages (blank pages
+  // inserted, a page moved) or shift targets across them. A cached page that isn't on
+  // screen is dropped outright: showing it again, even for the moment a background
+  // refetch takes, would put the wrong page under a jump (a bookmark to page 78
+  // showing what used to be page 78).
+  void queryClient.resetQueries({
+    queryKey: queryKeys.binders.version(versionId),
+    type: 'inactive',
+    predicate: (query) => query.queryKey[3] === 'page' && unwritten(query.queryKey),
+  });
   void queryClient.invalidateQueries({
     queryKey: queryKeys.binders.version(versionId),
-    predicate: (query) => {
-      const key = query.queryKey;
-      return !(key[3] === 'page' && typeof key[4] === 'number' && written.has(key[4]));
-    },
+    predicate: (query) => unwritten(query.queryKey),
   });
   void queryClient.invalidateQueries({ queryKey: queryKeys.binders.list() });
   void queryClient.invalidateQueries({ queryKey: queryKeys.binders.inactiveTargets() });
@@ -150,10 +159,9 @@ export function useBinderWriter({
             return false;
           }
         }
-        if (message) {
-          setError(message);
-          toast('error', message);
-        }
+        // Shown where the action started: inside the panel that's still open, or in
+        // the banner above the pages. A toast as well would sit on top of that panel.
+        if (message) setError(message);
         return false;
       } finally {
         inFlight.current = false;

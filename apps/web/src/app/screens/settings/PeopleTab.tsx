@@ -8,6 +8,7 @@ import {
   type PersonView,
 } from '../../api/queries/people';
 import { Icon } from '../../ui/icons';
+import { SelectField } from '../../ui/SelectField';
 import { useToast } from '../../ui/Toast';
 import { formatDate } from './format';
 
@@ -266,16 +267,15 @@ export function PeopleTab({ meId }: { meId: string | null }): ReactElement {
               onChange={(event) => setLabel(event.target.value)}
             />
           </label>
-          <label>
-            <span>Role</span>
-            <select
-              value={role}
-              onChange={(event) => setRole(event.target.value === 'admin' ? 'admin' : 'member')}
-            >
-              <option value="member">Member</option>
-              <option value="admin">Admin</option>
-            </select>
-          </label>
+          <SelectField<'admin' | 'member'>
+            label="Role"
+            value={role}
+            options={[
+              { value: 'member', label: 'Member' },
+              { value: 'admin', label: 'Admin' },
+            ]}
+            onChange={setRole}
+          />
           <button type="submit" className="button-primary" disabled={createInvite.isPending}>
             Create invite link
           </button>

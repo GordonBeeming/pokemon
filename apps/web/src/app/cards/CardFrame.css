@@ -43,16 +43,18 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0.4rem;
+  padding: 0.4rem 0.15rem;
   overflow: hidden;
   color: inherit;
 }
+/* A target's name shrinks with the pocket and wraps between words rather than
+   ending in an ellipsis: on a phone "Ivy…" and "Ve…" were unreadable. */
 .card-frame-art-placeholder span {
-  overflow: hidden;
-  font-size: 0.75rem;
+  max-width: 100%;
+  font-size: clamp(0.4375rem, 10cqi, 0.75rem);
+  line-height: 1.15;
   text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word;
 }
 
 .card-frame-row {

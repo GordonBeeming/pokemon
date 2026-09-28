@@ -22,7 +22,11 @@ test('a picked-up card does not carry over when another binder opens', async ({ 
     `[data-pocket="${placement.page}:${placement.row}:${placement.column}"]`,
   );
   await pocket.click();
-  await pocket.press('m');
+  // A phone opens the pocket's action sheet, which holds focus; Move is its button.
+  const sheet = page.locator('.sheet[role="dialog"]');
+  if ((await page.locator('.phone-page-number').count()) > 0)
+    await sheet.getByRole('button', { name: 'Move', exact: true }).click();
+  else await pocket.press('m');
   await expect(page.locator('.binder-banner-accent')).toContainText('Moving');
 
   // On a phone the jump field sits in a sheet; close it to reach the breadcrumb.

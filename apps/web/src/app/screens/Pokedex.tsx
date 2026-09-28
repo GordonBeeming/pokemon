@@ -20,6 +20,7 @@ import {
 } from '../routes/search-params';
 import { EmptyState } from '../ui/EmptyState';
 import { SegmentedControl } from '../ui/SegmentedControl';
+import { SelectField } from '../ui/SelectField';
 import { Pagination } from './catalogue/Pagination';
 import './pokedex/pokedex.css';
 
@@ -40,6 +41,9 @@ function matches(
     (state?.types.some((type) => type.toLocaleLowerCase('en-AU').includes(needle)) ?? false)
   );
 }
+
+// The select's key for "every region" (a key can't be an empty string).
+const ALL_REGIONS = 'all';
 
 export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
   const navigate = useNavigate({ from: '/pokedex' });
@@ -168,19 +172,18 @@ export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
             onChange={(event) => updateSearch({ q: event.target.value })}
           />
         </label>
-        <label>
-          First found region
-          <select
-            value={search.region ?? ''}
-            onChange={(event) => updateSearch({ region: event.target.value || undefined })}
-          >
-            {regionOptions.map((option) => (
-              <option key={option.value || 'all'} value={option.value}>
-                {option.label} ({option.count.toLocaleString('en-AU')})
-              </option>
-            ))}
-          </select>
-        </label>
+        <SelectField
+          className="pokedex-region"
+          label="First found region"
+          value={search.region ?? ALL_REGIONS}
+          options={regionOptions.map((option) => ({
+            value: option.value || ALL_REGIONS,
+            label: `${option.label} (${option.count.toLocaleString('en-AU')})`,
+          }))}
+          onChange={(region) =>
+            updateSearch({ region: region === ALL_REGIONS ? undefined : region })
+          }
+        />
         <SegmentedControl<PokedexOwnedFilter>
           label="Collection"
           value={search.filter}

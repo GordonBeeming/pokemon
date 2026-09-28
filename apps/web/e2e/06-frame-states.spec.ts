@@ -1,6 +1,6 @@
 import * as api from './support/api';
 import { expect, test } from './support/fixtures';
-import { ensureDisplayPanelOpen } from './support/nav';
+import { ensureDisplayPanelOpen, chooseSegment } from './support/nav';
 import { activeVersionId, findMissingCard } from './support/scenarios';
 import { escapeRegExp } from './support/text';
 
@@ -72,10 +72,10 @@ test('an unfilled any-Pokémon target shows the ANY frame; turning the frame off
 
   await ensureDisplayPanelOpen(page);
   // SegmentedControl renders an ARIA radio group, not plain buttons.
-  await page.locator('.binder-display').getByRole('radio', { name: 'Off' }).check();
+  await chooseSegment(page.locator('.binder-display'), 'Off');
   await expect(pocket.locator('.pocket-any-pill')).toHaveText('Any');
   await expect(pocket.locator('.card-frame')).toHaveCount(0);
 
-  await page.locator('.binder-display').getByRole('radio', { name: 'On', exact: true }).check();
+  await chooseSegment(page.locator('.binder-display'), 'On');
   await expect(pocket.getByText('ANY', { exact: true })).toBeVisible();
 });

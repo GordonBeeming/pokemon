@@ -1,5 +1,11 @@
-import { DEFAULT_FRAME_PALETTE, RARITY_LABELS, regionForDex } from '@pokedex/shared';
+import {
+  DEFAULT_FRAME_PALETTE,
+  NATIONAL_POKEDEX,
+  RARITY_LABELS,
+  regionForDex,
+} from '@pokedex/shared';
 import { useQueryClient } from '@tanstack/react-query';
+import { Link } from '@tanstack/react-router';
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import { binderApi } from '../../api/queries/binders';
 import { useCardBinderMatches } from '../../api/queries/card';
@@ -9,6 +15,7 @@ import { queryKeys } from '../../api/keys';
 import { useSetNationalRepresentative } from '../../api/queries/pokedex';
 import { CardFrame } from '../../cards/CardFrame';
 import { RARITY_VISUALS } from '../../cards/rarity-visuals';
+import { catalogueSearch } from '../../routes/search-params';
 import { Icon } from '../../ui/icons';
 import { CardFrameSkeleton } from '../../ui/Skeleton';
 import { useToast } from '../../ui/Toast';
@@ -24,12 +31,19 @@ function formatMoney(amountAud: number | null): string {
   return `A$${new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amountAud)}`;
 }
 
+/** Where the inspector was opened from, when that's outside the Catalogue. */
+export type CardInspectorContext =
+  /** A binder pocket's "View card": auto-expands that binder's row so the answer to
+   * "why did I open this" is immediately visible. */
+  | { from?: 'binder'; binderId: string; slotId: string }
+  /** The Home shelf. */
+  | { from: 'home' };
+
 export interface CardInspectorProps {
   cardId: string;
   onClose: () => void;
-  /** Set when reached from a specific binder pocket ("View card") — auto-expands
-   * that binder's row so the answer to "why did I open this" is immediately visible. */
-  context?: { binderId: string; slotId: string };
+  /** Set when opened from outside the Catalogue; adds "View all {species}". */
+  context?: CardInspectorContext;
   /** Not part of the spec's minimal 3-prop contract, but additive and optional: lets
    * an embedding chrome (Catalogue's overlay, the standalone /card/$cardId page) know
    * when a save is in flight or failed, so it can hold off closing instead of
@@ -136,6 +150,10 @@ export function CardInspector({
     })),
   );
   const loose = Math.max(0, quantity - placedIn.length);
+  const contextBinderId = context && 'binderId' in context ? context.binderId : null;
+  const speciesName = pokedexNumber
+    ? (NATIONAL_POKEDEX.find((entry) => entry.number === pokedexNumber)?.name ?? card.name)
+    : card.name;
 
   return (
     <div className="card-inspector">
@@ -198,6 +216,19 @@ export function CardInspector({
             >
               Use as Pokédex image
             </button>
+          ) : null}
+          {context ? (
+            // Opened from outside the Catalogue: the way into every printing of it.
+            <Link
+              className="card-inspector-view-all"
+              to="/catalogue"
+              search={catalogueSearch.parse(
+                pokedexNumber ? { dex: pokedexNumber } : { q: speciesName },
+              )}
+              onClick={onClose}
+            >
+              View all {speciesName}
+            </Link>
           ) : null}
         </div>
       </div>
@@ -287,7 +318,7 @@ export function CardInspector({
               cardId={cardId}
               looseCopies={loose}
               match={match}
-              autoExpand={context?.binderId === match.binderId}
+              autoExpand={contextBinderId === match.binderId}
             />
           ))
         )}
@@ -306,12 +337,6 @@ export function CardInspector({
           toast('success', 'Copy removed.');
         }}
       />
-
-      <div className="card-inspector-close">
-        <button type="button" onClick={onClose}>
-          Close
-        </button>
-      </div>
     </div>
   );
 }

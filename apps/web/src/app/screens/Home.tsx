@@ -179,7 +179,7 @@ export function Home({
               <h2 id="home-still-to-find-heading">Still to find</h2>
               <button
                 type="button"
-                className="text-button"
+                className="text-button home-still-to-find-toggle"
                 ref={shortageTrigger}
                 aria-expanded={shortagesOpen}
                 aria-controls="active-shortages-panel"

@@ -161,12 +161,8 @@ function PriceRefreshCard(): ReactElement {
     setEveryCardStarting(true);
     try {
       await startPriceRefresh({ everyCard: true });
-      toast('success', "Refreshing every card's price in the background.");
-    } catch (cause) {
-      toast('error', startFailureMessage(cause));
     } finally {
       setEveryCardStarting(false);
-      setEveryCardOpen(false);
     }
   }
 
@@ -221,7 +217,9 @@ function PriceRefreshCard(): ReactElement {
         confirmLabel="Refresh every card"
         pending={everyCardStarting}
         onCancel={() => setEveryCardOpen(false)}
-        onConfirm={() => void startEveryCard()}
+        onConfirm={startEveryCard}
+        success="Refreshing every card's price in the background."
+        describeError={startFailureMessage}
       />
     </section>
   );

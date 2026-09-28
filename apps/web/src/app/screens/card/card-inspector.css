@@ -61,7 +61,8 @@
 }
 .card-inspector textarea {
   padding: 0.6rem 0.75rem;
-  font: inherit;
+  font-family: inherit;
+  font-size: 1rem;
   color: var(--ink);
   resize: vertical;
   border: 1px solid var(--line-strong);
@@ -90,6 +91,7 @@
   justify-content: space-between;
   gap: 0.75rem;
   width: 100%;
+  min-height: 2.75rem;
   padding: 0.7rem 0.9rem;
   text-align: left;
   background: var(--surface);
@@ -146,7 +148,7 @@
 }
 
 .new-binder-row {
-  height: 2.5rem;
+  height: 2.75rem;
   color: var(--accent);
   background: transparent;
   border: 1px dashed var(--line-strong);
@@ -158,13 +160,13 @@
 }
 .new-binder-row-form input {
   flex-grow: 1;
-  height: 2.5rem;
+  height: 2.75rem;
   padding: 0 0.75rem;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
 }
 .new-binder-row-form button {
-  height: 2.5rem;
+  height: 2.75rem;
   padding: 0 1rem;
   color: #ffffff;
   background: var(--accent);
@@ -174,20 +176,38 @@
 
 .card-inspector-meta .text-button {
   align-self: flex-start;
+  min-height: 2.75rem;
 }
-.card-inspector-close {
-  display: flex;
-  justify-content: flex-end;
-}
-.card-inspector-close button {
-  height: 2.75rem;
+/* The inspector's one primary action (Add first copy): its own look wherever it's
+   embedded, rather than whatever button style the host screen has. */
+.card-inspector .primary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2.75rem;
   padding: 0 1rem;
-  font-weight: 500;
-  white-space: nowrap;
-  color: var(--ink);
-  background: var(--surface);
-  border: 1px solid var(--line-strong);
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--accent);
+  border: 0;
   border-radius: var(--radius-md);
+}
+.card-inspector .primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.card-inspector .stepper button {
+  width: 2.75rem;
+  height: 2.75rem;
+}
+.card-inspector-view-all {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  min-height: 2.75rem;
+  font-weight: 600;
+  color: var(--accent-deep);
 }
 
 .where-from-option {

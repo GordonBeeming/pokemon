@@ -1,15 +1,15 @@
-import { useId, useRef, type ReactElement, type ReactNode } from 'react';
-import { Icon } from './icons';
-import { useFocusTrap } from './useFocusTrap';
-import './primitives.css';
+import type { ReactElement, ReactNode } from 'react';
+import { Overlay } from './overlay';
 
 /** A panel that slides in from the right — the card inspector, filters, and similar
- * secondary surfaces that stay anchored to the edge instead of centering like Dialog. */
+ * secondary surfaces that stay anchored to the edge instead of centering like Dialog.
+ * On a phone it fills the screen. */
 export function SidePanel({
   open,
   onClose,
   title,
   toolbar,
+  className,
   children,
 }: {
   open: boolean;
@@ -19,35 +19,20 @@ export function SidePanel({
    * inspector's previous/next), so they don't cost a second row above the content.
    * The title still names the dialog for assistive tech. */
   toolbar?: ReactNode;
+  /** Extra class on the backdrop (a screen's style scope). */
+  className?: string;
   children: ReactNode;
-}): ReactElement | null {
-  const headingId = useId();
-  const containerRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(containerRef, open, onClose);
-
-  if (!open) return null;
+}): ReactElement {
   return (
-    <div className="side-panel-backdrop" onMouseDown={onClose}>
-      <div
-        ref={containerRef}
-        className="side-panel"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={headingId}
-        tabIndex={-1}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <div className="side-panel-header">
-          <h2 id={headingId} className={toolbar ? 'sr-only' : undefined}>
-            {title}
-          </h2>
-          {toolbar ? <div className="side-panel-toolbar">{toolbar}</div> : null}
-          <button type="button" aria-label="Close" onClick={onClose}>
-            <Icon name="close" />
-          </button>
-        </div>
-        <div className="side-panel-body">{children}</div>
-      </div>
-    </div>
+    <Overlay
+      variant="side"
+      className={className}
+      open={open}
+      onClose={onClose}
+      title={title}
+      toolbar={toolbar}
+    >
+      {children}
+    </Overlay>
   );
 }

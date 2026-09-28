@@ -34,7 +34,7 @@
 .catalogue-search-bar input {
   height: 2.75rem;
   padding: 0 0.85rem;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   color: var(--ink);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
@@ -105,7 +105,7 @@
 .catalogue-dialog-form select {
   height: 2.75rem;
   padding: 0 0.75rem;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   font-weight: 400;
   color: var(--ink);
   background: var(--surface);
@@ -156,7 +156,7 @@
 }
 .filters-panel select,
 .filters-panel input[type='search'] {
-  height: 2.5rem;
+  height: 2.75rem;
   padding: 0 0.65rem;
   margin-bottom: 0.5rem;
   border: 1px solid var(--line-strong);
@@ -175,8 +175,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 2.5rem;
-  height: 2.5rem;
+  width: 2.75rem;
+  height: 2.75rem;
   background: var(--surface);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
@@ -208,7 +208,7 @@
   .catalogue-search-bar .bar-field {
     flex: 1 1 100%;
   }
-  .catalogue-search-bar .bar-field .segmented-control button {
+  .catalogue-search-bar .bar-field .segmented-control-option {
     flex: 1 1 0;
   }
   .catalogue-search-bar > button,

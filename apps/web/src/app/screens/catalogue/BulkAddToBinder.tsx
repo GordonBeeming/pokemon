@@ -4,13 +4,14 @@ import { apiFetch } from '../../api/client';
 import { fetchBinderPage, useBinders } from '../../api/queries/binders';
 import { CATALOGUE_BULK_CAP, collectAllMatchingCards } from '../../api/queries/catalogue';
 import type { CatalogueSearch } from '../../routes/search-params';
-import { useToast } from '../../ui/Toast';
+import { useOverlayAction } from '../../ui/overlay';
+import { SelectField } from '../../ui/SelectField';
 
 const addCardsResponseSchema = z.object({ ok: z.literal(true), added: z.number() }).passthrough();
 
 /** "Add these results to a binder" — every matching result in catalogue order,
  * capped at 2,000 with the same wording the copy tools use. Rendered inside the
- * Catalogue's More menu dialog; `onClose` closes it once the cards are in. */
+ * Catalogue's More menu dialog, which closes itself once the cards are in. */
 export function BulkAddToBinder({
   filters,
   total,
@@ -20,46 +21,46 @@ export function BulkAddToBinder({
   total: number;
   onClose: () => void;
 }): ReactElement {
-  const [binderId, setBinderId] = useState('');
-  const [adding, setAdding] = useState(false);
+  const [binderId, setBinderId] = useState<string | null>(null);
   const binders = useBinders();
-  const toast = useToast();
+  const action = useOverlayAction();
   const overCap = total > CATALOGUE_BULK_CAP;
+  const choices = (binders.data ?? []).filter((binder) => binder.activeVersionId !== null);
 
-  async function addAll(): Promise<void> {
-    const target = binders.data?.find((binder) => binder.id === binderId);
+  function addAll(): void {
+    const target = choices.find((binder) => binder.id === binderId);
     const versionId = target?.activeVersionId;
-    if (!versionId) return;
-    setAdding(true);
-    try {
-      const controller = new AbortController();
-      const [cards, page] = await Promise.all([
-        collectAllMatchingCards(filters, 'displayed', controller.signal),
-        fetchBinderPage(versionId, 0),
-      ]);
-      const result = await apiFetch(
-        `/api/binders/versions/${encodeURIComponent(versionId)}/cards`,
-        addCardsResponseSchema,
-        {
-          method: 'POST',
-          body: { cardIds: cards.map((card) => card.id), expectedRevision: page.version.revision },
-        },
-      );
-      toast(
-        'success',
-        `${result.added} cards were added to ${target?.name ?? 'the binder'} in catalogue order.`,
-      );
-      onClose();
-    } catch (cause) {
-      toast('error', cause instanceof Error ? cause.message : 'Could not add these results.');
-    } finally {
-      setAdding(false);
-    }
+    if (!target || !versionId) return;
+    void action.run(
+      async () => {
+        const controller = new AbortController();
+        const [cards, page] = await Promise.all([
+          collectAllMatchingCards(filters, 'displayed', controller.signal),
+          fetchBinderPage(versionId, 0),
+        ]);
+        return apiFetch(
+          `/api/binders/versions/${encodeURIComponent(versionId)}/cards`,
+          addCardsResponseSchema,
+          {
+            method: 'POST',
+            body: {
+              cardIds: cards.map((card) => card.id),
+              expectedRevision: page.version.revision,
+            },
+          },
+        );
+      },
+      {
+        success: (result) =>
+          `${result.added} cards were added to ${target.name} in catalogue order.`,
+        failure: 'Could not add these results.',
+      },
+    );
   }
 
   return (
     <div className="catalogue-dialog-form">
-      {(binders.data ?? []).length === 0 ? (
+      {choices.length === 0 ? (
         <p>Create a binder in Binders first.</p>
       ) : (
         <>
@@ -68,17 +69,13 @@ export function BulkAddToBinder({
               ? `Narrow the results to ${CATALOGUE_BULK_CAP.toLocaleString('en-AU')} cards or fewer to add all.`
               : `Every one of the ${total.toLocaleString('en-AU')} results goes in, in catalogue order.`}
           </p>
-          <label>
-            Binder
-            <select value={binderId} onChange={(event) => setBinderId(event.target.value)}>
-              <option value="">Choose a binder</option>
-              {(binders.data ?? []).map((binder) => (
-                <option key={binder.id} value={binder.id}>
-                  {binder.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <SelectField
+            label="Binder"
+            value={binderId}
+            placeholder="Choose a binder"
+            options={choices.map((binder) => ({ value: binder.id, label: binder.name }))}
+            onChange={setBinderId}
+          />
           <div className="dialog-actions">
             <button type="button" onClick={onClose}>
               Cancel
@@ -86,10 +83,12 @@ export function BulkAddToBinder({
             <button
               type="button"
               className="dialog-action-primary"
-              disabled={!binderId || adding || total === 0 || overCap}
-              onClick={() => void addAll()}
+              disabled={!binderId || action.pending || total === 0 || overCap}
+              onClick={addAll}
             >
-              {adding ? 'Adding in order…' : `Add all ${total.toLocaleString('en-AU')} results`}
+              {action.pending
+                ? 'Adding in order…'
+                : `Add all ${total.toLocaleString('en-AU')} results`}
             </button>
           </div>
         </>

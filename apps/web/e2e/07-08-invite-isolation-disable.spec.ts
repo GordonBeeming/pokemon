@@ -1,6 +1,7 @@
 import type { BrowserContext } from '@playwright/test';
 import * as api from './support/api';
 import { expect, test } from './support/fixtures';
+import { hasCdp } from './support/layout';
 import { findMissingCard } from './support/scenarios';
 
 function tokenFromInviteUrl(inviteUrl: string): string {
@@ -21,6 +22,11 @@ test.describe
   let guestLabel = '';
   let guestCardId = '';
   let liveGuestContext: BrowserContext | undefined;
+
+  // eslint-disable-next-line no-empty-pattern
+  test.beforeEach(({}, testInfo) => {
+    test.skip(!hasCdp(testInfo), 'the virtual passkey authenticator is Chromium-only');
+  });
 
   test('an invite link registers a brand-new, fully isolated account', async ({
     page,

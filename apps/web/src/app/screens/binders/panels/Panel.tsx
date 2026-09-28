@@ -4,7 +4,8 @@ import { Sheet } from '../../../ui/Sheet';
 import { PHONE_QUERY, useMediaQuery } from '../useMediaQuery';
 
 /** Every pocket tool opens in the same surface: a dialog on desktop, a bottom sheet on
- * phone. Both trap focus and hand it back to the control that opened them. */
+ * phone. Both trap focus and hand it back to the control that opened them, and an
+ * action run inside with `useOverlayAction` closes the panel when it succeeds. */
 export function Panel({
   title,
   onClose,
@@ -22,12 +23,18 @@ export function Panel({
   const phone = useMediaQuery(PHONE_QUERY);
   if (phone)
     return (
-      <Sheet open onClose={onClose} title={title}>
+      <Sheet open onClose={onClose} title={title} className={bare ? undefined : 'binder-scope'}>
         {bare ? children : <div className="binder-panel">{children}</div>}
       </Sheet>
     );
   return (
-    <Dialog open onClose={onClose} title={title} wide={wide}>
+    <Dialog
+      open
+      onClose={onClose}
+      title={title}
+      wide={wide}
+      className={bare ? undefined : 'binder-scope'}
+    >
       {bare ? children : <div className="binder-panel">{children}</div>}
     </Dialog>
   );

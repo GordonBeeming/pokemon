@@ -24,12 +24,19 @@ test('a card with 0 copies offers Add first copy, and adding one shows the stepp
 
   const tile = page
     .locator('.catalogue-grid')
-    .getByRole('button', { name: new RegExp(`^${escapeRegExp(card.name)},`) })
+    // Name and number, not just the name: a name search lists every printing, and an
+    // earlier run can have made another printing of the same card owned.
+    .getByRole('button', {
+      name: new RegExp(`^${escapeRegExp(card.name)}, (?:\\S+ · )?${escapeRegExp(card.number)},`),
+    })
     .first();
   await expect(tile).toBeVisible();
   const tileArt = tile.locator('.card-frame-art');
   await expect(tileArt).toHaveCSS('opacity', '0.45');
 
+  // The gallery's art requests go first; on WebKit a write can queue behind them for
+  // seconds against the local dev server.
+  await page.waitForLoadState('networkidle');
   await addFirst.click();
 
   await expect(inspector.locator('output')).toHaveText('1');

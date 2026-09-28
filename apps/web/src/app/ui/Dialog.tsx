@@ -1,6 +1,5 @@
-import { useId, useRef, type ReactElement, type ReactNode } from 'react';
-import { useFocusTrap } from './useFocusTrap';
-import './primitives.css';
+import type { ReactElement, ReactNode } from 'react';
+import { Overlay } from './overlay';
 
 export function Dialog({
   open,
@@ -8,6 +7,7 @@ export function Dialog({
   title,
   children,
   wide = false,
+  className,
 }: {
   open: boolean;
   onClose: () => void;
@@ -15,28 +15,19 @@ export function Dialog({
   children: ReactNode;
   /** Room for a result grid (binder insert/paste pickers) instead of a short form. */
   wide?: boolean;
-}): ReactElement | null {
-  const headingId = useId();
-  const containerRef = useRef<HTMLDivElement>(null);
-  useFocusTrap(containerRef, open, onClose);
-
-  if (!open) return null;
+  /** Extra class on the backdrop (a screen's style scope). */
+  className?: string;
+}): ReactElement {
   return (
-    <div className="dialog-backdrop" onMouseDown={onClose}>
-      <div
-        ref={containerRef}
-        className={wide ? 'dialog dialog-wide' : 'dialog'}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={headingId}
-        tabIndex={-1}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <h2 id={headingId} className="dialog-title">
-          {title}
-        </h2>
-        {children}
-      </div>
-    </div>
+    <Overlay
+      variant="dialog"
+      className={className}
+      open={open}
+      onClose={onClose}
+      title={title}
+      wide={wide}
+    >
+      {children}
+    </Overlay>
   );
 }

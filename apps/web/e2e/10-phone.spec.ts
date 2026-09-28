@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import * as api from './support/api';
 import { expect, test } from './support/fixtures';
+import { hasCdp, isPhoneProject } from './support/layout';
 import { ensureCatalogueControlsOpen } from './support/nav';
 import { activeVersionId } from './support/scenarios';
 
@@ -8,7 +9,7 @@ import { activeVersionId } from './support/scenarios';
 // fixture is used, so the empty pattern is required here.
 // eslint-disable-next-line no-empty-pattern
 test.beforeEach(({}, testInfo) => {
-  test.skip(testInfo.project.name !== 'phone', 'phone-only flow');
+  test.skip(!isPhoneProject(testInfo), 'phone-only flow');
 });
 
 async function assertNoHorizontalScroll(page: Page, screen: string): Promise<void> {
@@ -22,7 +23,7 @@ async function assertNoHorizontalScroll(page: Page, screen: string): Promise<voi
   ).toBeLessThanOrEqual(overflow.innerWidth + 1);
 }
 
-test('no screen scrolls horizontally on a 390px phone viewport', async ({ page }) => {
+test('no screen scrolls horizontally on a phone viewport', async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.app-tabbar')).toBeVisible();
   await assertNoHorizontalScroll(page, 'Home');
@@ -81,15 +82,23 @@ test('the catalogue opens to its cards with search and filters behind a summary 
 });
 
 test('tapping a binder pocket opens the phone action sheet', async ({ page }) => {
-  const binders = await api.listBinders(page.request);
-  const binder = binders[0];
-  if (!binder) throw new Error('No binders exist in this database copy.');
-  const versionId = await activeVersionId(page.request, binder.id);
-  const firstPage = await api.binderPage(page.request, versionId, 0);
-  const slot = firstPage.pages[0]?.slots.find(
-    (item) => item.entryKind && item.entryKind !== 'empty',
-  );
-  if (!slot) throw new Error(`Binder "${binder.name}" has no occupied pocket on its first page.`);
+  // The first binder whose first page has something in it: the list's order follows
+  // recent edits, and a binder can open on a reserved (empty) page.
+  type Binder = Awaited<ReturnType<typeof api.listBinders>>[number];
+  let found: { binder: Binder; slot: { row: number; column: number } } | null = null;
+  for (const candidate of await api.listBinders(page.request)) {
+    const versionId = await activeVersionId(page.request, candidate.id);
+    const firstPage = await api.binderPage(page.request, versionId, 0);
+    const occupied = firstPage.pages[0]?.slots.find(
+      (item) => item.entryKind && item.entryKind !== 'empty',
+    );
+    if (occupied) {
+      found = { binder: candidate, slot: occupied };
+      break;
+    }
+  }
+  if (!found) throw new Error('No binder has an occupied pocket on its first page.');
+  const { binder, slot } = found;
 
   await page.goto(`/binders/${binder.id}?page=1&q=`);
   const pocket = page.locator(`[data-pocket="0:${slot.row}:${slot.column}"]`);
@@ -102,6 +111,7 @@ test('tapping a binder pocket opens the phone action sheet', async ({ page }) =>
 });
 
 test('swiping to the next binder page keeps the window where it was', async ({ page }) => {
+  test.skip(!hasCdp(test.info()), 'raw touch streams need Chromium');
   const binders = await api.listBinders(page.request);
   const binder = binders.find((item) => item.name === 'National Pokedex') ?? binders[0];
   if (!binder) throw new Error('No binders exist in this database copy.');
@@ -165,6 +175,7 @@ test.describe('bottom sheets', () => {
   });
 
   test('dragging the sheet body down neither dismisses it nor moves the page', async ({ page }) => {
+    test.skip(!hasCdp(test.info()), 'raw touch streams need Chromium');
     const sheet = await openFiltersSheet(page);
     const scrollBefore = await page.evaluate(() => window.scrollY);
     const body = sheet.locator('.sheet-body');

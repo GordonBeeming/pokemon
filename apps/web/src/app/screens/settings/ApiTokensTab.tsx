@@ -106,14 +106,9 @@ export function ApiTokensTab(): ReactElement {
         destructive
         pending={revoke.isPending}
         onCancel={() => setRevoking(null)}
-        onConfirm={() => {
-          if (!revoking) return;
-          revoke.mutate(revoking.id, {
-            onSuccess: () => toast('success', `${revoking.label} was revoked.`),
-            onError: () => toast('error', 'That token could not be revoked. Try again.'),
-            onSettled: () => setRevoking(null),
-          });
-        }}
+        success={`${revoking?.label ?? 'The token'} was revoked.`}
+        describeError={() => 'That token could not be revoked. Try again.'}
+        onConfirm={() => (revoking ? revoke.mutateAsync(revoking.id) : undefined)}
       />
     </section>
   );

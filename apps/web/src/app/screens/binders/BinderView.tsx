@@ -66,6 +66,7 @@ import {
 import { ChangeTargetPanel } from './panels/ChangeTargetPanel';
 import { InsertPanel } from './panels/InsertPanel';
 import { FindCardsPanelContainer, ManagePanelContainer } from './panels/containers';
+import { InsertPagesPanel, MovePagePanel, movedPageOrder } from './panels/PagePanels';
 import { Panel } from './panels/Panel';
 import { PastePanel } from './panels/PastePanel';
 import {
@@ -98,6 +99,8 @@ type PanelKind =
   | 'remove'
   | 'reserve'
   | 'page-reserve'
+  | 'insert-pages'
+  | 'move-page'
   | 'manage'
   | 'discard'
   | 'delete';
@@ -233,9 +236,23 @@ export function BinderView({
   const [navigationEpoch, setNavigationEpoch] = useState(0);
   const pendingSelect = useRef<PendingSelect | null>(null);
   const pendingFocus = useRef<'selected' | 'first' | null>('selected');
+  // A bookmark names its page by id. If the page cached at that position turns out to
+  // be a different page (pages were inserted or moved since it was fetched, say in
+  // another tab), it's refetched rather than shown as the bookmarked page.
+  const expectedPage = useRef<{ index: number; id: string } | null>(null);
 
+  // The newest URL state this screen asked for. A panel that closes after an awaited
+  // write reads this rather than the `search` it rendered with, which by then is stale
+  // and would put back the selection the write just cleared.
+  const latestSearch = useRef(search);
+  useEffect(() => {
+    latestSearch.current = search;
+  }, [search]);
   const navigate = useCallback(
-    (next: BinderSearch, replace: boolean) => onSearch(next, { replace }),
+    (next: BinderSearch, replace: boolean) => {
+      latestSearch.current = next;
+      onSearch(next, { replace });
+    },
     [onSearch],
   );
 
@@ -309,6 +326,13 @@ export function BinderView({
     navigate({ ...search, sel: slotIdOf(currentPage.id, slot.row, slot.column) }, true);
     if (pending.open) setPanel(pending.open);
   }, [currentPage, pageIndex, navigate, search]);
+
+  useEffect(() => {
+    const expected = expectedPage.current;
+    if (!expected || !currentPage || expected.index !== pageIndex) return;
+    expectedPage.current = null;
+    if (currentPage.id !== expected.id) void currentQuery?.refetch();
+  }, [currentPage, currentQuery, pageIndex]);
 
   // Direct links, back/forward and jumps restore focus to the linked pocket (or the
   // first one); ordinary page turns leave focus where it was.
@@ -547,7 +571,7 @@ export function BinderView({
       if (!(event.target instanceof Element)) return;
       if (
         event.target.closest(
-          '[data-pocket], .pocket-actions, [role="dialog"], .dialog-backdrop, .sheet-backdrop, .menu-button, .toast-viewport',
+          '[data-pocket], .pocket-actions, [role="dialog"], .dialog-backdrop, .sheet-backdrop, .menu-button, .menu-popover, .select-popover, .space-search-popover, .toast-viewport',
         )
       )
         return;
@@ -575,9 +599,18 @@ export function BinderView({
   const closePanel = useCallback(() => {
     setPanel(null);
     writer.clearError();
-    if (search.mode === 'insert' || search.mode === 'paste')
-      navigate({ ...search, mode: undefined }, true);
-  }, [navigate, search, writer]);
+    const current = latestSearch.current;
+    if (current.mode === 'insert' || current.mode === 'paste')
+      navigate({ ...current, mode: undefined }, true);
+  }, [navigate, writer]);
+
+  // A finished pocket action lands back on the binder. On a phone the selection is
+  // what holds the pocket sheet open, so it's cleared too; the writer's own writes do
+  // the same in onSettled.
+  const leavePocket = useCallback(() => {
+    setPanel(null);
+    if (phone) navigate({ ...latestSearch.current, sel: undefined, mode: undefined }, true);
+  }, [navigate, phone]);
 
   // --- inactive targets --------------------------------------------------------
   const inactiveHere = (inactiveTargets.data ?? []).filter(
@@ -614,6 +647,7 @@ export function BinderView({
   }
 
   function jumpToBookmark(bookmark: BinderBookmark): void {
+    expectedPage.current = { index: bookmark.at.page, id: bookmark.pageId };
     pendingFocus.current = 'selected';
     setNavigationEpoch((value) => value + 1);
     navigate(
@@ -782,6 +816,8 @@ export function BinderView({
     reservedPage,
     canRemove: pageRemovable,
     onReservePage: () => setPanel('page-reserve'),
+    onInsertPages: () => setPanel('insert-pages'),
+    onMoveTo: () => setPanel('move-page'),
     onEarlier: () => reorder(-1),
     onLater: () => reorder(1),
     onArrange: () => setPanel('manage'),
@@ -833,7 +869,7 @@ export function BinderView({
     : '';
 
   return (
-    <section className="binder-view" aria-labelledby="binder-heading">
+    <section className="binder-view binder-scope" aria-labelledby="binder-heading">
       <header className="binder-header">
         <div className="binder-heading">
           <nav aria-label="Breadcrumb" className="binder-breadcrumb">
@@ -992,6 +1028,7 @@ export function BinderView({
           <MenuButton
             kind="dialog"
             className="binder-display"
+            popoverClassName="binder-scope binder-display"
             align="end"
             menuLabel="Display"
             label={
@@ -1007,7 +1044,12 @@ export function BinderView({
 
       {phone ? (
         <>
-          <Sheet open={phoneSheet === 'jump'} onClose={closePhoneSheet} title="Go to a page">
+          <Sheet
+            open={phoneSheet === 'jump'}
+            onClose={closePhoneSheet}
+            title="Go to a page"
+            className="binder-scope"
+          >
             <div className="binder-sheet">
               <PageJumpForm
                 pageIndex={pageIndex}
@@ -1028,7 +1070,12 @@ export function BinderView({
               />
             </div>
           </Sheet>
-          <Sheet open={phoneSheet === 'tools'} onClose={closePhoneSheet} title="Binder tools">
+          <Sheet
+            open={phoneSheet === 'tools'}
+            onClose={closePhoneSheet}
+            title="Binder tools"
+            className="binder-scope"
+          >
             <div className="binder-sheet">
               <SpaceSearch
                 key={versionId}
@@ -1282,9 +1329,7 @@ export function BinderView({
         <BookmarkPanel
           initialName={selectedBookmark?.name ?? bookmarkDefaultName(selectedSlot, cards)}
           hasBookmark={selectedBookmark !== undefined}
-          pending={pending}
-          error={null}
-          onSave={(name) => {
+          onSave={(name) =>
             binderApi
               .setBookmark(versionId, {
                 pageId: currentPage.id,
@@ -1293,27 +1338,22 @@ export function BinderView({
                 name,
               })
               .then(() => {
-                void queryClient.invalidateQueries({
+                leavePocket();
+                return queryClient.invalidateQueries({
                   queryKey: queryKeys.binders.bookmarks(versionId),
                 });
-                toast('success', 'Bookmark saved.');
-                setPanel(null);
               })
-              .catch((cause: unknown) => toast('error', binderErrorMessage(cause)));
-          }}
-          onRemove={() => {
-            if (!selectedBookmark) return;
-            binderApi
-              .removeBookmark(versionId, selectedBookmark.id)
-              .then(() => {
-                void queryClient.invalidateQueries({
-                  queryKey: queryKeys.binders.bookmarks(versionId),
-                });
-                toast('success', 'Bookmark removed.');
-                setPanel(null);
-              })
-              .catch((cause: unknown) => toast('error', binderErrorMessage(cause)));
-          }}
+          }
+          onRemove={() =>
+            selectedBookmark
+              ? binderApi.removeBookmark(versionId, selectedBookmark.id).then(() => {
+                  leavePocket();
+                  return queryClient.invalidateQueries({
+                    queryKey: queryKeys.binders.bookmarks(versionId),
+                  });
+                })
+              : Promise.resolve()
+          }
           onClose={closePanel}
         />
       ) : null}
@@ -1376,6 +1416,32 @@ export function BinderView({
                 }),
             )
           }
+          onClose={closePanel}
+        />
+      ) : null}
+      {panel === 'insert-pages' && versionId ? (
+        <InsertPagesPanel
+          pageIndex={pageIndex}
+          pending={pending}
+          error={writer.error}
+          onInsert={(beforePosition, count) =>
+            run(
+              `${count === 1 ? 'A blank page was' : `${count} blank pages were`} added ${beforePosition === pageIndex ? 'before' : 'after'} page ${pageIndex + 1}.`,
+              (revision) => binderApi.insertPages(versionId, beforePosition, count, revision),
+              { page: beforePosition, row: 0, column: 0 },
+            )
+          }
+          onClose={closePanel}
+        />
+      ) : null}
+      {panel === 'move-page' && versionId && version ? (
+        <MovePagePanel
+          pageIndex={pageIndex}
+          pageCount={pageCount}
+          lastPagePartial={capacity % (rows * columns) !== 0}
+          pending={pending}
+          error={writer.error}
+          onMove={(to) => movePageTo(to)}
           onClose={closePanel}
         />
       ) : null}
@@ -1469,7 +1535,9 @@ export function BinderView({
         destructive
         pending={discarding}
         onCancel={() => setPanel(null)}
-        onConfirm={() => void discardDraft()}
+        onConfirm={discardDraft}
+        success="Draft discarded. The active binder is unchanged."
+        describeError={binderErrorMessage}
       />
       <ConfirmDialog
         open={panel === 'delete'}
@@ -1480,55 +1548,50 @@ export function BinderView({
         destructive
         requireTypedConfirmation={binder.name}
         onCancel={() => setPanel(null)}
-        onConfirm={() => {
-          binderApi
-            .remove(binderId, binder.name)
-            .then(() => {
-              toast('success', `${binder.name} was deleted.`);
-              queryClient.removeQueries({ queryKey: ['binders', 'version', versionId] });
-              void queryClient.invalidateQueries({ queryKey: queryKeys.binders.list() });
-              // Only leave if this binder is still the one on screen; if Gordon opened
-              // another binder meanwhile this component is gone and nothing navigates.
-              if (mountedRef.current) onOpenLibrary();
-            })
-            .catch((cause: unknown) => toast('error', binderErrorMessage(cause)));
-        }}
+        success={`${binder.name} was deleted.`}
+        describeError={binderErrorMessage}
+        onConfirm={() =>
+          binderApi.remove(binderId, binder.name).then(() => {
+            queryClient.removeQueries({ queryKey: ['binders', 'version', versionId] });
+            void queryClient.invalidateQueries({ queryKey: queryKeys.binders.list() });
+            // Only leave if this binder is still the one on screen; if Gordon opened
+            // another binder meanwhile this component is gone and nothing navigates.
+            if (mountedRef.current) onOpenLibrary();
+          })
+        }
       />
     </section>
   );
 
-  async function discardDraft(): Promise<void> {
+  // Resolves once the draft is gone (the dialog then closes and confirms); throws to
+  // keep the dialog open with the reason inside it. A draft that was already discarded
+  // or made active elsewhere isn't a failure to retry: the screen moves on to the
+  // binder as it is now and says why.
+  async function discardDraft(): Promise<boolean> {
     const revision = revisionRef.current;
-    if (!versionId || revision === undefined || discarding) return;
+    if (!versionId || revision === undefined || discarding) return false;
     setDiscarding(true);
     try {
       await binderApi.discardDraft(versionId, revision);
-      toast('success', 'Draft discarded. The active binder is unchanged.');
       queryClient.removeQueries({ queryKey: queryKeys.binders.version(versionId) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.binders.list() });
+      if (mountedRef.current) navigate({ page: 1, q: '' }, false);
+      return true;
+    } catch (cause) {
+      if (!(cause instanceof ApiError && cause.status === 404)) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.binders.version(versionId) });
+        throw cause;
+      }
       void queryClient.invalidateQueries({ queryKey: queryKeys.binders.list() });
       if (mountedRef.current) {
         setPanel(null);
         navigate({ page: 1, q: '' }, false);
       }
-    } catch (cause) {
-      const gone = cause instanceof ApiError && cause.status === 404;
       toast(
         'error',
-        gone
-          ? 'This draft no longer exists; it was discarded or made active somewhere else. Showing the binder as it is now.'
-          : binderErrorMessage(cause),
+        'This draft no longer exists; it was discarded or made active somewhere else. Showing the binder as it is now.',
       );
-      if (gone) {
-        // Already gone (discarded or made active elsewhere): show the binder as it is now.
-        void queryClient.invalidateQueries({ queryKey: queryKeys.binders.list() });
-        if (mountedRef.current) {
-          setPanel(null);
-          navigate({ page: 1, q: '' }, false);
-        }
-      } else {
-        void queryClient.invalidateQueries({ queryKey: queryKeys.binders.version(versionId) });
-        if (mountedRef.current) setPanel(null);
-      }
+      return false;
     } finally {
       if (mountedRef.current) setDiscarding(false);
     }
@@ -1548,6 +1611,18 @@ export function BinderView({
       writer.clearCapacityNeed();
       await need.retry();
     }
+  }
+
+  // Sends the whole new order, which is what the page-order endpoint takes; the moved
+  // page is where the binder opens afterwards.
+  function movePageTo(to: number): Promise<boolean> {
+    const ids = summary.data?.pageIds ?? [];
+    if (!versionId || ids.length !== pageCount || to === pageIndex) return Promise.resolve(false);
+    return run(
+      `Page ${pageIndex + 1} moved to page ${to + 1}.`,
+      (revision) => binderApi.reorderPages(versionId, movedPageOrder(ids, pageIndex, to), revision),
+      { page: to, row: 0, column: 0 },
+    );
   }
 
   function reorder(direction: -1 | 1): void {

@@ -1,5 +1,7 @@
 import { useState, type ReactElement } from 'react';
 import type { BinderSlotView, BinderCandidate } from '../../../api/queries/binders';
+import { useOverlayAction } from '../../../ui/overlay';
+import { binderErrorMessage } from '../model';
 import { Panel } from './Panel';
 
 function PanelError({ error }: { error: string | null }): ReactElement | null {
@@ -13,52 +15,84 @@ function PanelError({ error }: { error: string | null }): ReactElement | null {
 export function BookmarkPanel({
   initialName,
   hasBookmark,
-  pending,
-  error,
   onSave,
   onRemove,
   onClose,
 }: {
   initialName: string;
   hasBookmark: boolean;
-  pending: boolean;
-  error: string | null;
-  onSave: (name: string) => void;
-  onRemove: () => void;
+  onSave: (name: string) => Promise<unknown>;
+  onRemove: () => Promise<unknown>;
   onClose: () => void;
 }): ReactElement {
-  const [name, setName] = useState(initialName.slice(0, 120));
   return (
     <Panel title="Bookmark this pocket" onClose={onClose}>
-      <form
-        className="panel-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          if (!pending && name.trim()) onSave(name.trim());
-        }}
-      >
-        <PanelError error={error} />
-        <label className="panel-field">
-          <span>Bookmark name</span>
-          <input
-            value={name}
-            maxLength={120}
-            disabled={pending}
-            onChange={(event) => setName(event.target.value)}
-          />
-        </label>
-        <div className="panel-actions">
-          <button type="submit" className="button-primary" disabled={pending || !name.trim()}>
-            Save bookmark
-          </button>
-          {hasBookmark ? (
-            <button type="button" className="button-text" disabled={pending} onClick={onRemove}>
-              Remove bookmark
-            </button>
-          ) : null}
-        </div>
-      </form>
+      <BookmarkForm
+        initialName={initialName}
+        hasBookmark={hasBookmark}
+        onSave={onSave}
+        onRemove={onRemove}
+      />
     </Panel>
+  );
+}
+
+function BookmarkForm({
+  initialName,
+  hasBookmark,
+  onSave,
+  onRemove,
+}: {
+  initialName: string;
+  hasBookmark: boolean;
+  onSave: (name: string) => Promise<unknown>;
+  onRemove: () => Promise<unknown>;
+}): ReactElement {
+  const [name, setName] = useState(initialName.slice(0, 120));
+  const action = useOverlayAction();
+  const pending = action.pending;
+  return (
+    <form
+      className="panel-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!pending && name.trim())
+          void action.run(() => onSave(name.trim()), {
+            success: 'Bookmark saved.',
+            describeError: binderErrorMessage,
+          });
+      }}
+    >
+      <label className="panel-field">
+        <span>Bookmark name</span>
+        <input
+          value={name}
+          maxLength={120}
+          disabled={pending}
+          onChange={(event) => setName(event.target.value)}
+        />
+      </label>
+      <div className="panel-actions">
+        <button type="submit" className="button-primary" disabled={pending || !name.trim()}>
+          Save bookmark
+        </button>
+        {hasBookmark ? (
+          <button
+            type="button"
+            className="button-text"
+            disabled={pending}
+            onClick={() =>
+              void action.run(onRemove, {
+                success: 'Bookmark removed.',
+                describeError: binderErrorMessage,
+              })
+            }
+          >
+            Remove bookmark
+          </button>
+        ) : null}
+      </div>
+    </form>
   );
 }
 

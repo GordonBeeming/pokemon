@@ -16,7 +16,7 @@
   align-items: center;
   justify-content: center;
   gap: 0.4rem;
-  min-height: 2.5rem;
+  min-height: 2.75rem;
   padding: 0 0.9rem;
   font-size: 0.875rem;
   font-weight: 500;
@@ -47,16 +47,16 @@
 .settings input,
 .settings select {
   min-width: 0;
-  height: 2.5rem;
+  height: 2.75rem;
   padding: 0 0.75rem;
-  font-size: 0.9375rem;
+  font-size: 1rem;
   background: var(--surface);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-md);
 }
 .settings input[type='color'] {
-  width: 2.5rem;
-  height: 2rem;
+  width: 2.75rem;
+  height: 2.75rem;
   padding: 0;
 }
 
@@ -266,16 +266,6 @@
   color: #334155;
   background: #f1f5f9;
 }
-.settings .segmented-control button {
-  min-height: 2.1rem;
-  font-size: 0.8125rem;
-  font-weight: 600;
-  background: transparent;
-  border: 0;
-}
-.settings .segmented-control .segmented-control-option-active {
-  background: var(--surface);
-}
 .invite-row-new {
   background: #f0fdff;
 }
@@ -298,8 +288,8 @@
   gap: 0.4rem;
 }
 .settings .frame-swatch {
-  width: 2.25rem;
-  min-height: 2.25rem;
+  width: 2.75rem;
+  min-height: 2.75rem;
   padding: 0;
   border: 3px solid #ffffff;
   box-shadow: 0 0 0 1px var(--line-strong);

@@ -1,3 +1,5 @@
+/* Above the tab bar and the home indicator on a phone. When an overlay is open the
+   provider moves the column clear of it (inline `bottom`/`right`). */
 .toast-viewport {
   position: fixed;
   z-index: 40;
@@ -14,23 +16,29 @@
     right: 1.5rem;
     bottom: 1.5rem;
     left: auto;
-    width: min(22rem, calc(100vw - 3rem));
+    width: min(22rem, calc(100% - 3rem));
   }
 }
 .toast {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.75rem 1rem;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.25rem 0.25rem 0.25rem 1rem;
   margin: 0;
-  font-size: 0.875rem;
+  font-size: 0.9375rem;
   color: var(--ink);
+  overflow-wrap: anywhere;
   pointer-events: auto;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   box-shadow: 0 8px 24px rgb(15 23 42 / 12%);
+}
+.toast-message {
+  min-width: 0;
+  padding: 0.5rem 0;
 }
 .toast-error {
   color: var(--danger);
@@ -40,14 +48,20 @@
 .toast-dismiss {
   display: flex;
   flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  color: inherit;
   background: none;
   border: 0;
-  color: inherit;
+  border-radius: var(--radius-sm);
 }
 .toast-action {
-  padding: 0;
+  min-height: 2.75rem;
+  padding: 0 0.25rem;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-deep);
   text-decoration: underline;
   background: none;
   border: 0;

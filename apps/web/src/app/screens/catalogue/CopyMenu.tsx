@@ -5,7 +5,7 @@ import { CATALOGUE_BULK_CAP, collectAllMatchingCards } from '../../api/queries/c
 import type { CatalogueSearch } from '../../routes/search-params';
 import { Icon } from '../../ui/icons';
 import { MenuButton, MenuItem } from '../../ui/MenuButton';
-import { useToast } from '../../ui/Toast';
+import { useOverlayAction } from '../../ui/overlay';
 import { copyCardsToClipboard } from './card-clipboard';
 
 export const COPY_CAP_MESSAGE = `Narrow the results to ${CATALOGUE_BULK_CAP.toLocaleString('en-AU')} cards or fewer to copy all.`;
@@ -29,49 +29,6 @@ export function CopyMenu({
   busy: boolean;
 }): ReactElement {
   const [copying, setCopying] = useState(false);
-  const toast = useToast();
-  const navigate = useNavigate();
-  const overCap = total > CATALOGUE_BULK_CAP;
-  const bulkDisabled = busy || copying || total === 0 || overCap;
-
-  function confirm(count: number): void {
-    toast('success', `${count.toLocaleString('en-AU')} ${count === 1 ? 'card' : 'cards'} copied.`, {
-      label: 'Open binders',
-      onSelect: () => void navigate({ to: '/binders' }),
-    });
-  }
-
-  async function copyAll(order: 'displayed' | 'release-date', close: () => void): Promise<void> {
-    setCopying(true);
-    const controller = new AbortController();
-    try {
-      const results = await collectAllMatchingCards(filters, order, controller.signal);
-      copyCardsToClipboard(results);
-      close();
-      confirm(results.length);
-    } catch (cause) {
-      toast('error', cause instanceof Error ? cause.message : 'The results changed while copying.');
-    } finally {
-      setCopying(false);
-    }
-  }
-
-  function copyPage(close: () => void): void {
-    copyCardsToClipboard(cards);
-    close();
-    confirm(cards.length);
-  }
-
-  // Why the whole-result items can't run right now, shown as their hint instead of
-  // the usual description so a disabled item is never a silent grey row.
-  const bulkReason = copying
-    ? 'Copying cards…'
-    : busy
-      ? 'Waiting for the search to finish.'
-      : total === 0
-        ? 'No cards match this search.'
-        : null;
-
   return (
     <MenuButton
       className="copy-menu"
@@ -82,35 +39,116 @@ export function CopyMenu({
         </>
       }
     >
-      {(close) => (
-        <>
-          {overCap ? <p className="menu-note">{COPY_CAP_MESSAGE}</p> : null}
-          <MenuItem
-            label="Displayed order"
-            hint={bulkReason ?? 'Every result, in the current arrangement.'}
-            disabled={bulkDisabled}
-            onSelect={() => void copyAll('displayed', close)}
-          />
-          <MenuItem
-            label="Release-date order"
-            hint={bulkReason ?? 'Every result, oldest printing first.'}
-            disabled={bulkDisabled}
-            onSelect={() => void copyAll('release-date', close)}
-          />
-          {total > 50 ? (
-            <MenuItem
-              label="This page"
-              hint={
-                busy
-                  ? 'Waiting for the search to finish.'
-                  : `Only the ${cards.length.toLocaleString('en-AU')} cards shown on this page.`
-              }
-              disabled={busy || copying || cards.length === 0}
-              onSelect={() => copyPage(close)}
-            />
-          ) : null}
-        </>
+      {() => (
+        <CopyItems
+          filters={filters}
+          cards={cards}
+          total={total}
+          busy={busy}
+          copying={copying}
+          onCopying={setCopying}
+        />
       )}
     </MenuButton>
+  );
+}
+
+function CopyItems({
+  filters,
+  cards,
+  total,
+  busy,
+  copying,
+  onCopying,
+}: {
+  filters: CatalogueSearch;
+  cards: CatalogueCardView[];
+  total: number;
+  busy: boolean;
+  copying: boolean;
+  onCopying: (copying: boolean) => void;
+}): ReactElement {
+  const action = useOverlayAction();
+  const navigate = useNavigate();
+  const overCap = total > CATALOGUE_BULK_CAP;
+  const bulkDisabled = busy || copying || total === 0 || overCap;
+  const openBinders = { label: 'Open binders', onSelect: () => void navigate({ to: '/binders' }) };
+  const copied = (count: number): string =>
+    `${count.toLocaleString('en-AU')} ${count === 1 ? 'card' : 'cards'} copied.`;
+
+  // The whole-result copies page through every match first, so the menu stays open
+  // (showing "Copying…") until they're on the clipboard, then closes and confirms.
+  function copyAll(order: 'displayed' | 'release-date'): void {
+    onCopying(true);
+    void action
+      .run(
+        async () => {
+          const results = await collectAllMatchingCards(
+            filters,
+            order,
+            new AbortController().signal,
+          );
+          copyCardsToClipboard(results);
+          return results.length;
+        },
+        {
+          success: copied,
+          successAction: openBinders,
+          failure: 'The results changed while copying.',
+        },
+      )
+      .finally(() => onCopying(false));
+  }
+
+  // Why the whole-result items can't run right now, shown as their hint instead of
+  // the usual description so a disabled item is never a silent grey row.
+  const bulkReason = copying
+    ? 'Copying cards…'
+    : busy
+      ? 'Waiting for the search to finish.'
+      : total === 0
+        ? 'No cards match this search.'
+        : overCap
+          ? COPY_CAP_MESSAGE
+          : null;
+
+  return (
+    <>
+      <MenuItem
+        label="Displayed order"
+        hint={bulkReason ?? 'Every result, in the current arrangement.'}
+        disabled={bulkDisabled}
+        closeOnSelect={false}
+        onSelect={() => copyAll('displayed')}
+      />
+      <MenuItem
+        label="Release-date order"
+        hint={bulkReason ?? 'Every result, oldest printing first.'}
+        disabled={bulkDisabled}
+        closeOnSelect={false}
+        onSelect={() => copyAll('release-date')}
+      />
+      {total > 50 ? (
+        <MenuItem
+          label="This page"
+          hint={
+            busy
+              ? 'Waiting for the search to finish.'
+              : `Only the ${cards.length.toLocaleString('en-AU')} cards shown on this page.`
+          }
+          disabled={busy || copying || cards.length === 0}
+          closeOnSelect={false}
+          onSelect={() =>
+            void action.run(
+              () => {
+                copyCardsToClipboard(cards);
+                return Promise.resolve(cards.length);
+              },
+              { success: copied, successAction: openBinders },
+            )
+          }
+        />
+      ) : null}
+    </>
   );
 }

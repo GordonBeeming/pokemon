@@ -14,6 +14,24 @@ textarea {
   font: inherit;
   color: inherit;
 }
+/* iOS zooms the page in when a field under 16px takes focus, and stays zoomed. */
+input,
+select,
+textarea {
+  font-size: 1rem;
+}
+/* The browser's own blue clear control on search fields doesn't match anything
+   else; clearing is the same as deleting the text. */
+input[type='search']::-webkit-search-cancel-button {
+  appearance: none;
+}
+/* Native checkboxes and radios in the app's accent, at a size a thumb can hit. */
+input[type='checkbox'],
+input[type='radio'] {
+  width: 1.25rem;
+  height: 1.25rem;
+  accent-color: var(--accent);
+}
 button {
   cursor: pointer;
 }

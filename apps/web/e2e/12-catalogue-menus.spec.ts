@@ -51,7 +51,7 @@ test('the More menu opens each rare action in its own dialog, and the copy cap l
   await page.getByRole('button', { name: 'Copy', exact: true }).click();
   const copyMenu = page.getByRole('menu', { name: 'Copy catalogue cards' });
   await expect(
-    copyMenu.getByText(/Narrow the results to 2,000 cards or fewer to copy all\./),
+    copyMenu.getByText(/Narrow the results to 2,000 cards or fewer to copy all\./).first(),
   ).toBeVisible();
   await expect(copyMenu.getByRole('menuitem', { name: /^Displayed order/ })).toBeDisabled();
   await expect(copyMenu.getByRole('menuitem', { name: /^This page/ })).toBeEnabled();

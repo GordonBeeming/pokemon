@@ -476,6 +476,13 @@ export const binderApi = {
   ) => mutate(versionId, '/reserved-page', 'PUT', { page, reserved, label, expectedRevision }),
   reorderPages: (versionId: string, pageIds: string[], expectedRevision: number) =>
     mutate(versionId, '/pages/order', 'PUT', { pageIds, expectedRevision }),
+  /** Blank pages before `beforePosition` (0-based); later pages move back whole. */
+  insertPages: (
+    versionId: string,
+    beforePosition: number,
+    count: number,
+    expectedRevision: number,
+  ) => mutate(versionId, '/pages/insert', 'POST', { beforePosition, count, expectedRevision }),
   addPage: (versionId: string, expectedRevision: number) =>
     mutate(versionId, '/pages', 'POST', { expectedRevision }),
   deletePage: (versionId: string, pageId: string, expectedRevision: number) =>
