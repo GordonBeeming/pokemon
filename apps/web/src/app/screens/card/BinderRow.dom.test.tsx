@@ -107,7 +107,7 @@ function jsonResponse(body: unknown): Response {
 }
 
 function renderRow(props: {
-  quantity: number;
+  looseCopies: number;
   match: BinderRowMatch;
   autoExpand?: boolean;
 }): Promise<void> {
@@ -116,7 +116,7 @@ function renderRow(props: {
       <ToastProvider>
         <BinderRow
           cardId="card-1"
-          quantity={props.quantity}
+          looseCopies={props.looseCopies}
           match={props.match}
           autoExpand={props.autoExpand ?? false}
         />
@@ -158,7 +158,7 @@ afterEach(async () => {
 describe('BinderRow', () => {
   it('shows "Not in binder" when there is no open target, but still offers "Add at the end" when there is room', async () => {
     await renderRow({
-      quantity: 0,
+      looseCopies: 0,
       autoExpand: true,
       match: {
         binderId: 'binder-1',
@@ -184,7 +184,7 @@ describe('BinderRow', () => {
 
   it('shows "Not in binder" and "Binder is full" with a link when there is no target and no room', async () => {
     await renderRow({
-      quantity: 0,
+      looseCopies: 0,
       autoExpand: true,
       match: {
         binderId: 'binder-1',
@@ -206,7 +206,7 @@ describe('BinderRow', () => {
 
   it('shows "Target waiting" and places into the waiting target ahead of the end destination', async () => {
     await renderRow({
-      quantity: 0,
+      looseCopies: 0,
       autoExpand: true,
       match: {
         binderId: 'binder-1',
@@ -230,9 +230,34 @@ describe('BinderRow', () => {
     ]);
   });
 
-  it('shows "In binder" and offers "Place here" (no addCopy) when already owned and a second target is open', async () => {
+  it('offers "Add a copy and place" when every owned copy is already placed (no loose copy to place)', async () => {
     await renderRow({
-      quantity: 1,
+      looseCopies: 0,
+      autoExpand: true,
+      match: {
+        binderId: 'binder-1',
+        name: 'National Pokedex',
+        exactTargets: [],
+        pokemonTargets: [slot(4, 0, 0)],
+        placed: [slot(1, 0, 0)],
+        nextTarget: slot(4, 0, 0),
+        endDestination: slot(6, 0, 0),
+      },
+    });
+    const action = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Add a copy and place',
+    );
+    expect(action).toBeDefined();
+    await step(() => action?.click());
+    await flushUntil(() => placeCalls.length > 0);
+    expect(placeCalls).toEqual([
+      { binderId: 'binder-1', slotId: 'p4:0:0', addCopy: true, expectedRevision: 7 },
+    ]);
+  });
+
+  it('shows "In binder" and offers "Place here" (no addCopy) when a loose copy exists and a second target is open', async () => {
+    await renderRow({
+      looseCopies: 1,
       autoExpand: true,
       match: {
         binderId: 'binder-1',

@@ -31,12 +31,12 @@ function destinationFor(match: BinderRowMatch): Destination {
  */
 export function BinderRow({
   cardId,
-  quantity,
+  looseCopies,
   match,
   autoExpand,
 }: {
   cardId: string;
-  quantity: number;
+  looseCopies: number;
   match: BinderRowMatch;
   autoExpand: boolean;
 }): ReactElement {
@@ -54,7 +54,10 @@ export function BinderRow({
     const activeVersionId = binders.data?.find(
       (binder) => binder.id === match.binderId,
     )?.activeVersionId;
-    if (!activeVersionId) return;
+    if (!activeVersionId) {
+      toast('error', `${match.name} isn't loaded yet. Try again in a moment.`);
+      return;
+    }
     setPlacing(true);
     try {
       // /api/cards/:id/place takes the binder VERSION's expectedRevision (optimistic
@@ -65,7 +68,7 @@ export function BinderRow({
       await place.mutateAsync({
         binderId: match.binderId,
         slotId: destination.slot.slotId,
-        addCopy: quantity === 0,
+        addCopy: looseCopies === 0,
         expectedRevision: page.version.revision,
       });
       toast('success', `Placed in ${match.name} — page ${destination.slot.page + 1}.`);
@@ -118,11 +121,11 @@ export function BinderRow({
               <button
                 type="button"
                 onClick={() => void confirmPlace()}
-                disabled={placing || place.isPending}
+                disabled={placing || place.isPending || !binders.data}
               >
                 {placing || place.isPending
                   ? 'Placing…'
-                  : quantity === 0
+                  : looseCopies === 0
                     ? 'Add a copy and place'
                     : 'Place here'}
               </button>

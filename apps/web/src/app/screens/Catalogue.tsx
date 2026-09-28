@@ -81,6 +81,10 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
   const cards = query.data?.cards ?? [];
   const total = query.data?.total ?? 0;
   const busy = query.isLoading || query.isFetching;
+  // keepPreviousData holds the last page's cards while the next page loads; the grid
+  // must not show them under the new page's "Showing X to Y" line, so it skeletons
+  // until the cards for this exact URL arrive (the total still drives pagination).
+  const galleryLoading = query.isLoading || query.isPlaceholderData;
   const contextual = Boolean(speciesEntry) || search.set.length === 1;
   const contextSetName = search.set.length === 1 ? cards[0]?.setName : undefined;
 
@@ -299,7 +303,7 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
           cards={cards}
           total={total}
           page={search.page}
-          loading={busy && cards.length === 0}
+          loading={galleryLoading}
           selectedCardId={search.card}
           onOpen={openCard}
         />

@@ -282,7 +282,7 @@ export function CardInspector({
             <BinderRow
               key={match.binderId}
               cardId={cardId}
-              quantity={quantity}
+              looseCopies={loose}
               match={match}
               autoExpand={context?.binderId === match.binderId}
             />
