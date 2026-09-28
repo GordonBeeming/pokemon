@@ -99,6 +99,7 @@ export const inviteTokenSchema = z
 export const PEOPLE_ERROR_CODES = [
   'user_disabled',
   'last_admin',
+  'person_changed',
   'invite_expired',
   'invite_used',
 ] as const;

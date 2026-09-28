@@ -181,6 +181,55 @@ describe('listing and patching people', () => {
       .first<{ count: number }>();
     expect(remaining?.count).toBe(1);
   });
+
+  // Round 2 of the review: a *different* interleaving than the two races
+  // above still zeroed out the admins. A is the sole admin; a request to
+  // disable member B reads B as an ordinary, active member and then pauses
+  // before its write. Meanwhile B is promoted to admin and A is demoted, so
+  // B becomes the sole active admin. The paused request resumes and, under
+  // the old code, its stale "B is just a member" read skipped the
+  // last-admin subquery entirely (its own removesActiveAdmin flag was
+  // false) and blindly overwrote B's role back to member plus disabled —
+  // zero admins left. The fix adds an optimistic check (role/disabled_at
+  // must still match what was read) to the same UPDATE, so a target that
+  // moved underneath a paused request aborts the write instead of applying
+  // a decision computed from data that's no longer true.
+  //
+  // A plain Promise.all can't force this exact ordering (both "meanwhile"
+  // writes need to fully land between the paused request's read and its own
+  // write), so this wraps the real db's batch() to run them at that exact
+  // point, then lets the original (stale) write attempt proceed through the
+  // same real patchPerson call and the same real SQL guard.
+  it('rejects a paused disable whose stale read would otherwise leave zero admins', async () => {
+    const db = setup();
+    const admin = await createUser(db, 'Admin', 'admin');
+    const member = await createUser(db, 'Member', 'member');
+
+    let batchCalls = 0;
+    const pausingDb = {
+      ...db,
+      batch: (async (statements: D1PreparedStatement[]) => {
+        batchCalls += 1;
+        if (batchCalls === 1) {
+          await patchPerson(db, member.id, { role: 'admin' });
+          await patchPerson(db, admin.id, { role: 'member' });
+        }
+        return db.batch(statements);
+      }) as D1Database['batch'],
+    } as unknown as D1Database;
+
+    await expect(patchPerson(pausingDb, member.id, { disabled: true })).rejects.toMatchObject({
+      code: 'person_changed',
+    });
+
+    const remaining = await db
+      .prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND disabled_at IS NULL")
+      .first<{ count: number }>();
+    expect(remaining?.count).toBe(1);
+    // The paused request wrote nothing at all — B is still the promoted
+    // admin from the "meanwhile" step, not silently reset to member.
+    expect(await getPerson(db, member.id)).toMatchObject({ role: 'admin', disabledAt: null });
+  });
 });
 
 describe('invites', () => {

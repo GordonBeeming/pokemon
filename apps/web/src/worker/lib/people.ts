@@ -83,24 +83,41 @@ export async function patchPerson(
   // role on every admin-guarded request).
   const disablesNow = !target.disabled_at && nextDisabled;
 
-  // The last-admin invariant is re-checked against the live table inside
-  // this same UPDATE, not from the wasActiveAdmin/stillActiveAdmin values
-  // computed above: two concurrent demotions/disables of two different
-  // admins would each see "2 active admins" from a separate pre-check read,
-  // and both would then succeed. Counting every OTHER active admin at the
-  // moment this statement actually runs closes that race regardless of
-  // which of two concurrent requests' batches commits first.
+  // Two guards, both evaluated against the live row at write time, not the
+  // possibly-stale `target` read above:
+  //   - optimistic concurrency: role and disabled_at must still match what
+  //     was just read, or this write does nothing. Without this, a patch
+  //     that only sets `disabled` (say) still carries a *computed* nextRole
+  //     baked from the stale read, and would silently overwrite a role that
+  //     changed in between — e.g. disabling a member who was promoted to
+  //     the system's only active admin a moment earlier, using this
+  //     request's stale "still just a member" role.
+  //   - the last-admin invariant, via a live subquery: two concurrent
+  //     demotions/disables of two different admins would each see "2 active
+  //     admins" from a separate pre-check read, and both would then
+  //     succeed, so the count is re-read here instead of trusted from
+  //     wasActiveAdmin/stillActiveAdmin above.
+  // Both guards matter together: removesActiveAdmin is only safe to trust
+  // once the optimistic check confirms the row hasn't moved since it was
+  // computed from.
   const statements = [
     db
       .prepare(
         `UPDATE users SET role = ?1, disabled_at = ?2
-         WHERE id = ?3
+         WHERE id = ?3 AND role = ?4 AND disabled_at IS ?5
            AND (
-             ?4 = 0
+             ?6 = 0
              OR (SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled_at IS NULL AND id != ?3) >= 1
            )`,
       )
-      .bind(nextRole, nextDisabledAt, targetId, removesActiveAdmin ? 1 : 0),
+      .bind(
+        nextRole,
+        nextDisabledAt,
+        targetId,
+        target.role,
+        target.disabled_at,
+        removesActiveAdmin ? 1 : 0,
+      ),
   ];
   if (disablesNow) {
     // Each follow-on write is conditioned on the primary update above having
@@ -130,7 +147,16 @@ export async function patchPerson(
     );
   }
   const [primary] = await db.batch(statements);
-  if (!primary || primary.meta.changes !== 1) throw new ApplicationError('last_admin', 409);
+  if (!primary || primary.meta.changes !== 1) {
+    // The UPDATE's WHERE bundles two different reasons for 0 rows into one
+    // outcome; re-reading the row is the cheap way to tell them apart,
+    // and it only runs on this (rare) failure path.
+    const current = await getUserById(db, targetId);
+    if (!current) throw new ApplicationError('person_not_found', 404);
+    if (current.role !== target.role || current.disabled_at !== target.disabled_at)
+      throw new ApplicationError('person_changed', 409);
+    throw new ApplicationError('last_admin', 409);
+  }
   const updated = await getPerson(db, targetId);
   if (!updated) throw new ApplicationError('person_not_found', 404);
   return updated;

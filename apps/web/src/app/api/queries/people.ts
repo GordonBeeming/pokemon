@@ -109,6 +109,7 @@ export function useInviteStatus(token: string) {
 const PEOPLE_MESSAGES: Record<string, string> = {
   last_admin:
     'Someone else needs to be an active admin first. There must always be at least one active admin.',
+  person_changed: 'This person changed while you were editing them. Refresh and try again.',
   user_disabled: 'This account has been turned off by an admin. Ask them to turn it back on.',
   invite_expired: 'This invite link has expired. Ask for a new one.',
   invite_used: 'This invite link has already been used. Ask for a new one.',
