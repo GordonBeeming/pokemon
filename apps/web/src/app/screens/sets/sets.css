@@ -98,8 +98,9 @@
 }
 .set-code-edit-button {
   flex-shrink: 0;
-  width: 2.5rem;
-  height: 2.5rem;
+  min-height: 2.5rem;
+  padding: 0 0.9rem;
+  white-space: nowrap;
   color: var(--muted);
   background: var(--surface);
   border: 1px solid var(--line);

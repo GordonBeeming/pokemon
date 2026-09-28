@@ -156,6 +156,8 @@ browserApiRoutes.get('/dashboard', async (c) => {
         limit: 50,
         offset: 0,
         cursor: null,
+        // The shelf renders card frames, whose top row is the Pokédex number and region.
+        includePokemonNumber: true,
       }),
     ]);
     return c.json({

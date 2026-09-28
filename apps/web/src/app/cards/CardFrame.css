@@ -10,6 +10,9 @@
   border: 2px solid transparent;
   border-radius: 0.85rem;
   outline-offset: 2px;
+  /* The code line scales with the card's own width (cqi below), so a long set code
+     and number shrink to fit rather than being cut off on a small card. */
+  container-type: inline-size;
 }
 .card-frame-raw {
   gap: 0;
@@ -81,7 +84,7 @@
   align-items: center;
   gap: 0.3rem;
   font-family: var(--font-mono);
-  font-size: 0.8125rem;
+  font-size: clamp(0.5625rem, 6.5cqi, 0.8125rem);
   font-weight: 600;
   white-space: nowrap;
 }
