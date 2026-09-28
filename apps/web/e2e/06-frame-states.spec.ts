@@ -68,13 +68,13 @@ test('an unfilled any-Pokémon target shows the ANY frame; turning the frame off
   // Inside a pocket, CardFrame renders without `onView` (a plain styled <div>, not
   // the button it is in the catalogue gallery) — the border lives there, not on
   // the outer `.pocket` button.
-  await expect(pocket.locator('.card-frame')).toHaveCSS('border-style', 'dashed');
+  await expect(pocket.locator('.pocket-face .card-frame')).toHaveCSS('border-style', 'dashed');
 
   await ensureDisplayPanelOpen(page);
   // SegmentedControl renders an ARIA radio group, not plain buttons.
   await chooseSegment(page.locator('.binder-display'), 'Off');
   await expect(pocket.locator('.pocket-any-pill')).toHaveText('Any');
-  await expect(pocket.locator('.card-frame')).toHaveCount(0);
+  await expect(pocket.locator('.pocket-face .card-frame')).toHaveCount(0);
 
   await chooseSegment(page.locator('.binder-display'), 'On');
   await expect(pocket.getByText('ANY', { exact: true })).toBeVisible();

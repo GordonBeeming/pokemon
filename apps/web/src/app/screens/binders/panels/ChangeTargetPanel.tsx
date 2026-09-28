@@ -1,11 +1,11 @@
-import type { BinderCopyChoice, FrameType } from '@pokedex/shared';
+import type { FrameType } from '@pokedex/shared';
 import { useState, type ReactElement } from 'react';
 import type { BinderSlotView, ResolvedCard } from '../../../api/queries/binders';
 import { SegmentedControl } from '../../../ui/SegmentedControl';
 import type { CardLookup } from '../model';
 import { CardPicker, type PickerQuery } from './CardPicker';
-import { CopyChoice } from './CopyChoice';
 import { Panel } from './Panel';
+import { TargetConfirm } from './TargetConfirm';
 
 type Mode = 'same' | 'any';
 
@@ -38,7 +38,7 @@ export function ChangeTargetPanel({
   palette: Record<FrameType, string>;
   pending: boolean;
   error: string | null;
-  onChoose: (card: ResolvedCard, choice: BinderCopyChoice) => void;
+  onChoose: (card: ResolvedCard) => void;
   onClose: () => void;
 }): ReactElement {
   const sameFilters = sameTypeFilters(slot, cards);
@@ -55,11 +55,11 @@ export function ChangeTargetPanel({
         </p>
       ) : null}
       {picked ? (
-        <CopyChoice
+        <TargetConfirm
           card={picked}
           pending={pending}
           palette={palette}
-          onChoose={(choice) => onChoose(picked, choice)}
+          onConfirm={() => onChoose(picked)}
           onBack={() => setPicked(null)}
         />
       ) : (

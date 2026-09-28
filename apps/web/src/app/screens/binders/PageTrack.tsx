@@ -9,8 +9,9 @@ import {
   type ReactElement,
 } from 'react';
 import type { BinderPageView, BinderSlotView } from '../../api/queries/binders';
+import { Icon } from '../../ui/icons';
 import { pocketState, trackGeometry, type CardLookup } from './model';
-import { Pocket } from './Pocket';
+import { Pocket, PocketSizer } from './Pocket';
 
 // How long a dragged card has to hover over a neighbouring page's edge before the page
 // turns. Long enough that sweeping past the edge doesn't flip it by accident.
@@ -20,6 +21,10 @@ const EDGE_FLIP_DELAY_MS = 700;
 const TOUCH_PICKUP_DELAY_MS = 350;
 const MOUSE_DRAG_THRESHOLD_PX = 6;
 const SWIPE_THRESHOLD_PX = 50;
+// Room each side-of-the-page turn button takes on desktop: its 44px target plus the
+// gap to the page. The track is sized from what's left, so this must match the
+// `.page-edge-beside` rules in binders.css.
+const EDGE_BESIDE_PX = 56;
 
 export interface TrackPage {
   index: number;
@@ -50,6 +55,11 @@ export interface PageTrackProps {
   ) => void;
   onDrop: (source: BinderSlotLocation, target: BinderSlotLocation) => void;
   onFlip: (delta: -1 | 1) => void;
+  /** Previous/next buttons at the page's sides: in the gutter beside it (desktop) or
+   * over its edges (phone). Omitted, the track draws none. */
+  edgeButtons?: 'beside' | 'overlay';
+  /** Page turns from the edge buttons wait while a write is in flight, as the pager's do. */
+  busy?: boolean;
 }
 
 export const locationKey = (at: BinderSlotLocation): string => `${at.page}:${at.row}:${at.column}`;
@@ -77,7 +87,7 @@ interface DragState {
 export function PageTrack(props: PageTrackProps): ReactElement {
   const { currentIndex, columns, peek, showFrame } = props;
   const viewportRef = useRef<HTMLDivElement>(null);
-  const currentPageRef = useRef<HTMLElement | null>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   const [height, setHeight] = useState(0);
   const [ghost, setGhost] = useState<{ x: number; y: number; label: string } | null>(null);
@@ -102,18 +112,32 @@ export function PageTrack(props: PageTrackProps): ReactElement {
     return () => observer.disconnect();
   }, []);
 
-  const geometry = trackGeometry(width || 960, columns, peek, {
+  const edges = props.edgeButtons;
+  const available = Math.max(0, (width || 960) - (edges === 'beside' ? 2 * EDGE_BESIDE_PX : 0));
+  const geometry = trackGeometry(available, columns, peek, {
     before: currentIndex > 0,
     after: currentIndex + 1 < props.pageCount,
   });
 
+  // The viewport is as tall as the tallest page drawn in it (a reserved page carries
+  // a label line), never just the current one, so a peeked page is never cut off.
+  // Pages stretch to the viewport, so each is measured by its grid, not its own box.
+  const pad = geometry.pad;
   useLayoutEffect(() => {
-    const element = currentPageRef.current;
-    if (!element) return;
-    setHeight(element.offsetHeight);
+    const track = trackRef.current;
+    if (!track) return;
+    const grids = [...track.querySelectorAll<HTMLElement>('.binder-page-grid')];
+    const measure = (): void =>
+      setHeight(
+        grids.reduce(
+          (tallest, grid) => Math.max(tallest, grid.offsetTop + grid.offsetHeight + pad),
+          0,
+        ),
+      );
+    measure();
     if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(() => setHeight(element.offsetHeight));
-    observer.observe(element);
+    const observer = new ResizeObserver(measure);
+    for (const grid of grids) observer.observe(grid);
     return () => observer.disconnect();
   });
 
@@ -260,10 +284,30 @@ export function PageTrack(props: PageTrackProps): ReactElement {
   }
 
   const trackX = geometry.offset - currentIndex * geometry.stride;
-  const firstPeekColumn = columns - peek;
+
+  // The pager's own controls are the keyboard route (and PageUp/PageDown work from
+  // anywhere), so these pointer shortcuts stay out of the tab order.
+  const edgeButton = (delta: -1 | 1): ReactElement => (
+    <button
+      type="button"
+      tabIndex={-1}
+      className={`page-edge page-edge-${edges ?? 'beside'} page-edge-${delta < 0 ? 'prev' : 'next'}`}
+      aria-label={delta < 0 ? 'Previous page' : 'Next page'}
+      disabled={
+        props.busy === true ||
+        (delta < 0 ? currentIndex === 0 : currentIndex + 1 >= props.pageCount)
+      }
+      onClick={() => props.onFlip(delta)}
+    >
+      <span className="page-edge-face">
+        <Icon name={delta < 0 ? 'chevron-left' : 'chevron-right'} />
+      </span>
+    </button>
+  );
 
   return (
-    <div className="page-track-frame">
+    <div className={`page-track-frame${ghost ? ' page-track-dragging' : ''}`}>
+      {edges === 'beside' ? edgeButton(-1) : null}
       <div
         ref={viewportRef}
         className="page-track-viewport"
@@ -279,6 +323,7 @@ export function PageTrack(props: PageTrackProps): ReactElement {
         }}
       >
         <div
+          ref={trackRef}
           className="page-track"
           style={{
             transform: `translateX(${trackX}px)`,
@@ -293,9 +338,6 @@ export function PageTrack(props: PageTrackProps): ReactElement {
             return (
               <section
                 key={index}
-                ref={
-                  direction === 0 ? (element) => void (currentPageRef.current = element) : undefined
-                }
                 className={`binder-page${direction === 0 ? '' : ' binder-page-peek'}${reserved ? ' binder-page-reserved' : ''}`}
                 aria-label={
                   direction === 0 ? `Page ${index + 1}` : `Page ${index + 1}, neighbouring`
@@ -332,12 +374,6 @@ export function PageTrack(props: PageTrackProps): ReactElement {
                         const at = { page: index, row: slot.row, column: slot.column };
                         const key = locationKey(at);
                         const isSelected = sameLocation(props.selected, at);
-                        const peekEdge =
-                          showFrame && direction === -1 && slot.column === firstPeekColumn
-                            ? 'left'
-                            : showFrame && direction === 1 && slot.column === peek - 1
-                              ? 'right'
-                              : undefined;
                         const focusable =
                           direction === 0 &&
                           (isSelected ||
@@ -354,7 +390,6 @@ export function PageTrack(props: PageTrackProps): ReactElement {
                             cards={props.cards}
                             palette={props.palette}
                             showFrame={showFrame}
-                            peekEdge={peek > 0 ? peekEdge : undefined}
                             selected={isSelected}
                             moveSource={sameLocation(props.moveSource, at)}
                             moveCursor={sameLocation(props.moveCursor, at)}
@@ -375,14 +410,25 @@ export function PageTrack(props: PageTrackProps): ReactElement {
                           className="pocket-skeleton"
                           style={{ width: geometry.pocketWidth }}
                           aria-hidden="true"
-                        />
+                        >
+                          <PocketSizer showFrame={showFrame} />
+                        </span>
                       ))}
                 </div>
               </section>
             );
           })}
         </div>
+        {/* Inside the viewport so a swipe that starts on one still reaches the swipe
+            handlers above, and a swipe's click is swallowed before it reaches them. */}
+        {edges === 'overlay' ? (
+          <>
+            {edgeButton(-1)}
+            {edgeButton(1)}
+          </>
+        ) : null}
       </div>
+      {edges === 'beside' ? edgeButton(1) : null}
       {ghost ? (
         <div
           className="pocket-drag-ghost"

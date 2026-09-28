@@ -48,12 +48,16 @@ function page(index: number): BinderPageView {
   };
 }
 
-async function renderTrack(peek: PeekColumns): Promise<void> {
+async function renderTrack(
+  peek: PeekColumns,
+  edges: { edgeButtons?: 'beside' | 'overlay'; currentIndex?: number; onFlip?: () => void } = {},
+): Promise<void> {
   await step(() =>
     root.render(
       <PageTrack
+        edgeButtons={edges.edgeButtons}
         pages={[0, 1, 2].map((index) => ({ index, page: page(index) }))}
-        currentIndex={1}
+        currentIndex={edges.currentIndex ?? 1}
         pageCount={3}
         rows={3}
         columns={3}
@@ -70,18 +74,10 @@ async function renderTrack(peek: PeekColumns): Promise<void> {
         onPocketClick={vi.fn()}
         onPocketKeyDown={vi.fn()}
         onDrop={vi.fn()}
-        onFlip={vi.fn()}
+        onFlip={edges.onFlip ?? vi.fn()}
       />,
     ),
   );
-}
-
-function peekEdges(): { left: string[]; right: string[] } {
-  const collect = (className: string) =>
-    [...container.querySelectorAll(`.${className}`)].map(
-      (frame) => frame.closest('[data-pocket]')?.getAttribute('data-pocket') ?? '',
-    );
-  return { left: collect('card-frame-peek-left'), right: collect('card-frame-peek-right') };
 }
 
 describe('PageTrack peek', () => {
@@ -90,31 +86,69 @@ describe('PageTrack peek', () => {
     const neighbours = [...container.querySelectorAll('.binder-page-peek')];
     expect(neighbours).toHaveLength(2);
     for (const neighbour of neighbours) expect(neighbour.getAttribute('aria-hidden')).toBe('true');
-    expect(peekEdges()).toEqual({ left: [], right: [] });
     const viewport = container.querySelector<HTMLElement>('.page-track-viewport');
     expect(viewport?.style.width).toBe(`${trackGeometry(960, 3, 0).viewportWidth}px`);
   });
 
-  it('cuts the nearest column of each neighbour flat at peek 1', async () => {
+  it('shows neighbouring cards whole, with every corner rounded, at peek 1', async () => {
     await renderTrack(1);
-    // Previous page: its last column shows at the left edge; next page: its first column at the right.
-    expect(peekEdges()).toEqual({
-      left: ['0:0:2', '0:1:2', '0:2:2'],
-      right: ['2:0:0', '2:1:0', '2:2:0'],
-    });
     for (const neighbour of container.querySelectorAll('.binder-page-peek'))
       expect(neighbour.getAttribute('aria-hidden')).toBeNull();
+    const peekFrames = container.querySelectorAll('.binder-page-peek .pocket-face .card-frame');
+    expect(peekFrames.length).toBeGreaterThan(0);
+    for (const frame of peekFrames) expect(frame.className).not.toMatch(/peek/u);
   });
 
-  it('shows two columns and cuts only the outermost at peek 2', async () => {
+  it('sizes every pocket from the same full-frame sizer, whatever it holds', async () => {
+    await renderTrack(1);
+    const pockets = [...container.querySelectorAll('[data-pocket]')];
+    expect(pockets).toHaveLength(27);
+    for (const pocket of pockets) {
+      expect(pocket.querySelectorAll(':scope > .pocket-sizer .card-frame')).toHaveLength(1);
+      expect(pocket.querySelectorAll(':scope > .pocket-face')).toHaveLength(1);
+    }
+  });
+
+  it('shows two neighbouring columns at peek 2', async () => {
     await renderTrack(2);
-    expect(peekEdges()).toEqual({
-      left: ['0:0:1', '0:1:1', '0:2:1'],
-      right: ['2:0:1', '2:1:1', '2:2:1'],
-    });
     const one = trackGeometry(960, 3, 1);
     const two = trackGeometry(960, 3, 2);
     expect(two.offset).toBeGreaterThan(one.offset);
     expect(two.pocketWidth).toBeLessThan(one.pocketWidth);
+  });
+});
+
+describe('PageTrack edge buttons', () => {
+  function edge(label: string): HTMLButtonElement {
+    const found = container.querySelector<HTMLButtonElement>(`.page-edge[aria-label="${label}"]`);
+    if (!found) throw new Error(`${label} edge button missing`);
+    return found;
+  }
+
+  it('sits beside the page, turns it both ways and leaves room for itself', async () => {
+    const onFlip = vi.fn();
+    await renderTrack(1, { edgeButtons: 'beside', onFlip });
+    const viewport = container.querySelector('.page-track-viewport');
+    expect(edge('Previous page').nextElementSibling).toBe(viewport);
+    expect(edge('Next page').previousElementSibling).toBe(viewport);
+    expect(container.querySelector<HTMLElement>('.page-track-viewport')?.style.width).toBe(
+      `${trackGeometry(960 - 112, 3, 1).viewportWidth}px`,
+    );
+    await step(() => edge('Previous page').click());
+    await step(() => edge('Next page').click());
+    expect(onFlip.mock.calls).toEqual([[-1], [1]]);
+  });
+
+  it('is disabled at the first page and drawn over the page as an overlay', async () => {
+    await renderTrack(1, { edgeButtons: 'overlay', currentIndex: 0 });
+    const viewport = container.querySelector('.page-track-viewport');
+    expect(edge('Previous page').parentElement).toBe(viewport);
+    expect(edge('Previous page').disabled).toBe(true);
+    expect(edge('Next page').disabled).toBe(false);
+  });
+
+  it('draws no edge buttons unless asked', async () => {
+    await renderTrack(0);
+    expect(container.querySelector('.page-edge')).toBeNull();
   });
 });

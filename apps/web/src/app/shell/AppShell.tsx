@@ -19,10 +19,11 @@ function consumeReturnTo(): string | null {
   }
 }
 
-function Nav(): ReactElement {
+function Nav({ variant }: { variant: 'rail' | 'tabbar' }): ReactElement {
+  const items = variant === 'tabbar' ? NAV_ITEMS.filter((item) => !item.railOnly) : NAV_ITEMS;
   return (
     <>
-      {NAV_ITEMS.map((item) => (
+      {items.map((item) => (
         <Link
           key={item.to}
           to={item.to}
@@ -103,13 +104,13 @@ export function AppShell(): ReactElement {
           <span className="app-brand-mark">P</span>
           <span>Pokédex</span>
         </div>
-        <Nav />
+        <Nav variant="rail" />
       </nav>
       <main className="app-content">
         <Outlet />
       </main>
       <nav aria-label="Primary" className="app-tabbar">
-        <Nav />
+        <Nav variant="tabbar" />
       </nav>
     </div>
   );

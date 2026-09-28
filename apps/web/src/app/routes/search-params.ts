@@ -72,6 +72,7 @@ const catalogueSearchSchema = z.object({
   region: z.string().min(1).optional(),
   rarity: csv(z.string()).default([]),
   set: csv(z.string()).default([]),
+  artist: z.string().trim().min(1).max(200).optional(),
   // Preserved from Sets & codes: a Japanese-language set stays scoped to Japanese
   // printings after the jump into Catalogue (worker's catalogueFilters already
   // accepts this as `language`).
@@ -108,6 +109,16 @@ const setsSearchSchema = z.object({
 });
 export const setsSearch = defineSearchParams(setsSearchSchema);
 export type SetsSearch = z.infer<typeof setsSearchSchema>;
+
+export const illustratorSortOrders = ['name', 'card-count'] as const;
+
+const illustratorsSearchSchema = z.object({
+  q: z.string().default(''),
+  sort: z.enum(illustratorSortOrders).default('name'),
+});
+export const illustratorsSearch = defineSearchParams(illustratorsSearchSchema);
+export type IllustratorsSearch = z.infer<typeof illustratorsSearchSchema>;
+export type IllustratorSortOrder = (typeof illustratorSortOrders)[number];
 
 export const binderModes = ['move', 'paste', 'insert'] as const;
 

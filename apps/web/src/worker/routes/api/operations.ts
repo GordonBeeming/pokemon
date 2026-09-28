@@ -133,6 +133,7 @@ export function catalogueFilters(
     setId: query.setId,
     setIds,
     species: pokedexNumber === undefined ? query.species : undefined,
+    artist: query.artist,
     pokedexNumber,
     region: region?.success ? region.data : undefined,
     frameTypes,

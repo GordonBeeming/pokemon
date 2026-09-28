@@ -1,13 +1,14 @@
 import { RARITY_KEYS, RARITY_LABELS } from '@pokedex/shared';
-import { useNavigate } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { Button, Disclosure, DisclosurePanel, Heading } from 'react-aria-components';
 import { useSession } from '../api/queries/session';
 import { useSetCodes, useSets } from '../api/queries/sets';
 import { RARITY_VISUALS, rarityToneColour } from '../cards/rarity-visuals';
-import { catalogueSearch, type SetsSearch } from '../routes/search-params';
+import { catalogueSearch, illustratorsSearch, type SetsSearch } from '../routes/search-params';
 import { EmptyState } from '../ui/EmptyState';
 import { Icon } from '../ui/icons';
+import { useIsDesktop } from './catalogue/useIsDesktop';
 import { useMediaQuery } from './binders/useMediaQuery';
 import { SetCodeEditor } from './sets/SetCodeEditor';
 import './sets/sets.css';
@@ -62,6 +63,7 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
   const facets = useSets();
   const [query, setQuery] = useState('');
   const legendBeside = useMediaQuery(LEGEND_BESIDE_QUERY);
+  const isDesktop = useIsDesktop();
 
   const facetByKey = useMemo(
     () => new Map((facets.data ?? []).map((facet) => [`${facet.setId}:${facet.language}`, facet])),
@@ -106,6 +108,18 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
             <h1 id="sets-heading">Sets</h1>
             <p>The code is what card frames show.</p>
           </div>
+          {/* Desktop reaches Illustrators from the rail; the phone tab bar has no
+              room for a 7th icon, so this is its only route in. */}
+          {isDesktop ? null : (
+            <Link
+              className="sets-illustrators-link"
+              to="/illustrators"
+              search={illustratorsSearch.parse({})}
+            >
+              <Icon name="illustrator" />
+              Illustrators
+            </Link>
+          )}
         </header>
         <label className="sr-only" htmlFor="sets-find">
           Find a set

@@ -3,7 +3,7 @@ import type { BinderSlotLocation, FrameType } from '@pokedex/shared';
 import { NATIONAL_POKEDEX } from '@pokedex/shared';
 import type { KeyboardEvent, PointerEvent, ReactElement } from 'react';
 import type { BinderSlotView } from '../../api/queries/binders';
-import { CardFrame } from '../../cards/CardFrame';
+import { CardFrame, type CardFrameCard } from '../../cards/CardFrame';
 import {
   anyFrameCard,
   frameCardFrom,
@@ -18,7 +18,6 @@ export interface PocketProps {
   cards: CardLookup;
   palette: Record<FrameType, string>;
   showFrame: boolean;
-  peekEdge?: 'left' | 'right';
   selected: boolean;
   moveSource: boolean;
   moveCursor: boolean;
@@ -30,6 +29,33 @@ export interface PocketProps {
   onPointerDown?: (event: PointerEvent<HTMLButtonElement>) => void;
 }
 
+// The widest labels a frame can carry (a #dex, a rarity symbol and the longest set
+// code and number in the catalogue), so the sizer wraps whenever a real frame would.
+const SIZER_CARD: CardFrameCard = {
+  id: 'pocket-sizer',
+  name: '',
+  frameType: null,
+  setCode: 'SWSHP',
+  number: 'SWSH233',
+  rarityKey: 'C',
+  pokedexNumber: 1,
+  imageUrl: null,
+};
+
+/**
+ * An invisible full card frame that gives every pocket its size. Whatever a pocket
+ * holds (a card, an ANY target, words for an empty or reserved sleeve, a loading
+ * skeleton), it's drawn over this, so every pocket on every page is exactly the size
+ * of a full card frame at that width and rows line up across the peeked pages.
+ */
+export function PocketSizer({ showFrame }: { showFrame: boolean }): ReactElement {
+  return (
+    <span className="pocket-sizer" aria-hidden="true">
+      <CardFrame card={SIZER_CARD} state="owned" frame={showFrame} />
+    </span>
+  );
+}
+
 /** The art inside a pocket. A placed copy shows solid; a planned exact-card target shows
  * that card faded; an any-printing target shows the ANY frame; reserved and empty
  * sleeves show their words, never a card. */
@@ -38,19 +64,12 @@ function PocketContent({
   cards,
   palette,
   showFrame,
-  peekEdge,
-}: Pick<PocketProps, 'slot' | 'cards' | 'palette' | 'showFrame' | 'peekEdge'>): ReactElement {
+}: Pick<PocketProps, 'slot' | 'cards' | 'palette' | 'showFrame'>): ReactElement {
   const state = pocketState(slot);
   const placed = slot.assignedCardId ? cards.get(slot.assignedCardId) : undefined;
   if (placed)
     return (
-      <CardFrame
-        card={frameCardFrom(placed)}
-        state="placed"
-        frame={showFrame}
-        peekEdge={peekEdge}
-        palette={palette}
-      />
+      <CardFrame card={frameCardFrom(placed)} state="placed" frame={showFrame} palette={palette} />
     );
   if (slot.entryKind === 'exact-card' && slot.cardId) {
     const target = cards.get(slot.cardId);
@@ -60,7 +79,6 @@ function PocketContent({
           card={frameCardFrom(target)}
           state="unowned"
           frame={showFrame}
-          peekEdge={peekEdge}
           palette={palette}
         />
       );
@@ -73,7 +91,6 @@ function PocketContent({
           card={anyFrameCard(slot.pokemonNumber)}
           state="unowned"
           variant="any"
-          peekEdge={peekEdge}
           palette={palette}
         />
       );
@@ -122,13 +139,15 @@ export function Pocket(props: PocketProps): ReactElement {
       onPointerDown={props.onPointerDown}
       draggable={false}
     >
-      <PocketContent
-        slot={slot}
-        cards={cards}
-        palette={props.palette}
-        showFrame={props.showFrame}
-        peekEdge={props.peekEdge}
-      />
+      <PocketSizer showFrame={props.showFrame} />
+      <span className="pocket-face">
+        <PocketContent
+          slot={slot}
+          cards={cards}
+          palette={props.palette}
+          showFrame={props.showFrame}
+        />
+      </span>
       {inactive ? (
         <span className="pocket-flag" aria-hidden="true">
           Retarget

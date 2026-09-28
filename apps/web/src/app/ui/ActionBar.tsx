@@ -29,9 +29,12 @@ function ItemContent({ item }: { item: ActionBarItem }): ReactElement {
 export function ActionBar({
   items,
   maxVisible = 4,
+  tooltips = false,
 }: {
   items: ActionBarItem[];
   maxVisible?: number;
+  /** Adds each label as a hover tooltip, for a bar whose CSS may drop to icons only. */
+  tooltips?: boolean;
 }): ReactElement {
   const [expanded, setExpanded] = useState(false);
   const visible = items.slice(0, maxVisible);
@@ -49,6 +52,7 @@ export function ActionBar({
           onClick={item.onSelect}
           disabled={item.disabled}
           aria-keyshortcuts={item.shortcut}
+          title={tooltips ? item.label : undefined}
         >
           <ItemContent item={item} />
         </button>

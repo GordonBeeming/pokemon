@@ -1,5 +1,5 @@
 import { useState, type ReactElement } from 'react';
-import type { BinderSlotView, BinderCandidate } from '../../../api/queries/binders';
+import type { BinderSlotView } from '../../../api/queries/binders';
 import { useOverlayAction } from '../../../ui/overlay';
 import { binderErrorMessage } from '../model';
 import { Panel } from './Panel';
@@ -226,105 +226,6 @@ export function PageReservePanel({
           ) : null}
         </div>
       </form>
-    </Panel>
-  );
-}
-
-/** Find cards for a pocket: the owned copies that fit (assign one), take the placed copy
- * out, the page-break toggle, and a jump to the catalogue for anything not owned yet. */
-export function FindCardsPanel({
-  slot,
-  title,
-  reservedPage,
-  editable,
-  candidates,
-  candidatesLoading,
-  candidatesError,
-  pending,
-  error,
-  onAssign,
-  onUnassign,
-  onPageBreak,
-  onSearchCatalogue,
-  onClose,
-}: {
-  slot: BinderSlotView;
-  title: string;
-  reservedPage: boolean;
-  editable: boolean;
-  candidates: BinderCandidate[] | undefined;
-  candidatesLoading: boolean;
-  candidatesError: string | null;
-  pending: boolean;
-  error: string | null;
-  onAssign: (candidate: BinderCandidate) => void;
-  onUnassign: () => void;
-  onPageBreak: (startsNewPage: boolean) => void;
-  onSearchCatalogue: () => void;
-  onClose: () => void;
-}): ReactElement {
-  return (
-    <Panel title={`Find cards · ${title}`} onClose={onClose}>
-      <PanelError error={error} />
-      <section className="panel-section" aria-labelledby="owned-copies-heading">
-        <h3 id="owned-copies-heading">Owned copies that fit</h3>
-        <p className="panel-help">
-          {slot.assignedCardId
-            ? 'This target has an owned copy placed in it.'
-            : 'This target is planned but has no physical copy placed.'}
-        </p>
-        {candidatesLoading ? (
-          <p role="status">Loading compatible unassigned copies…</p>
-        ) : candidatesError ? (
-          <p role="alert" className="panel-error">
-            {candidatesError}
-          </p>
-        ) : candidates && candidates.length > 0 ? (
-          <ul className="candidate-list">
-            {candidates.map((candidate) => (
-              <li key={candidate.cardId}>
-                <button
-                  type="button"
-                  disabled={!editable || pending || candidate.available === 0}
-                  onClick={() => onAssign(candidate)}
-                >
-                  <strong>Place {candidate.name}</strong>
-                  <span>
-                    {candidate.setCode ?? candidate.setName} · {candidate.number} ·{' '}
-                    {candidate.available} compatible {candidate.available === 1 ? 'copy' : 'copies'}{' '}
-                    remaining
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : candidates ? (
-          <p>You have no spare copy of this yet.</p>
-        ) : null}
-        <div className="panel-actions">
-          <button
-            type="button"
-            disabled={!editable || pending || !slot.assignedCardId}
-            onClick={onUnassign}
-          >
-            Remove physical placement
-          </button>
-          <button type="button" className="button-primary" onClick={onSearchCatalogue}>
-            Search the catalogue for this pocket
-          </button>
-        </div>
-      </section>
-      {!reservedPage ? (
-        <label className="panel-check">
-          <input
-            type="checkbox"
-            checked={slot.startsNewPage === true}
-            disabled={!editable || pending}
-            onChange={(event) => onPageBreak(event.target.checked)}
-          />
-          Start this target on a new page
-        </label>
-      ) : null}
     </Panel>
   );
 }

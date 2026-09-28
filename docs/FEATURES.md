@@ -145,6 +145,9 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       active-count badge) with set/region/type/order filters in an on-demand panel and active filters
       shown as removable chips · done when: opening Filters, choosing a set and a type, shows two
       removable chips next to the search bar and the badge reads "2".
+- [ ] new · An exact-match illustrator filter (`?artist=`), reached from the Illustrators page or a
+      card's artist link, shows as a removable "✎ Name" chip · done when: opening an illustrator from
+      the Illustrators page filters the gallery to only their cards and shows that chip.
 - [ ] keep · Card art is always shown; when the source genuinely has none, an explicit
       "art unavailable" state renders instead of a blank tile · done when: a card confirmed to have
       no source art shows a labelled placeholder, never a broken-image icon.
@@ -174,6 +177,10 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] new · Opened from outside the Catalogue (Home, a binder pocket's View card), the inspector
       offers "View all {species}", which opens the Catalogue on every printing of it · done when:
       View card on a Gengar pocket shows "View all Gengar" and it opens that species' gallery.
+- [ ] new · The illustrator's name is a link (a pencil icon, no "Illustrated by" words) to the
+      Catalogue filtered to every card by that artist, closing the inspector the same way "View all
+      {species}" does · done when: clicking the artist name closes the inspector and shows only that
+      artist's cards.
 - [ ] keep · Focus is trapped inside the open inspector and page scroll is locked while it's open ·
       done when: pressing Tab repeatedly from the last control cycles back to the first, and the page
       behind it doesn't scroll.
@@ -195,9 +202,12 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       Next shows card B's own notes, not a leaked draft.
 - [ ] changed · Binder placement is not a separate disclosure — each binder the owner has is a row
       with a status tag (Target waiting / In binder / Not in binder); a row expands inline to show
-      the destination and one action; "New binder" is the last row · done when: opening the inspector
-      for a card that's a target in one binder shows that binder's row tagged "Target waiting", and
-      expanding it offers to fill that exact target.
+      the destination and one action · done when: opening the inspector for a card that's a target
+      in one binder shows that binder's row tagged "Target waiting", and expanding it offers to fill
+      that exact target.
+- [ ] changed · The inspector's Binders list has no "New binder" row; making one means going to the
+      Binders screen and coming back to the card · done when: the inspector's Binders section ends
+      after the last binder row, with no create-a-binder control of its own.
 - [ ] keep · Choosing a destination for an exact-card target opens the copy-choice prompt (use an
       existing copy / add a new copy / don't add a copy) before committing · done when: placing a
       card you don't yet own into a binder pocket offers "Add a new copy" and picking it increments
@@ -305,6 +315,25 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       frame.
 - [ ] keep · Empty state "Nothing to show yet." · done when: an empty or failed set list shows this
       text instead of a blank page.
+
+## Illustrators
+
+- [ ] new · A grid of every illustrator across the catalogue, each tile a card frame previewing one
+      of their cards (an owned one when the owner has any, otherwise any card of theirs with art) ·
+      done when: opening Illustrators shows a tile per artist with a real card frame, not a
+      placeholder.
+- [ ] new · A search box (by name) and an A–Z / Most cards sort, both in the URL · done when:
+      switching to "Most cards" and reloading the page keeps that order.
+- [ ] new · Each tile shows the illustrator's name and their owned/total count; the frame is solid
+      when the owner has any card by them and pale/dashed otherwise · done when: an illustrator with
+      zero owned cards shows a pale, dashed frame.
+- [ ] new · Tapping a tile opens the Catalogue filtered to that illustrator · done when: tapping a
+      tile lands on Catalogue showing only that artist's cards with the artist chip present.
+- [ ] new · Reached from the desktop rail (after Sets); on a phone, from a compact link on the Sets
+      screen instead of a 7th tab-bar icon · done when: the rail shows an Illustrators item, and on a
+      phone the Sets screen offers the same destination.
+- [ ] keep · Empty state "No illustrators match this search." · done when: searching for a name that
+      matches nobody shows this text instead of an empty grid.
 
 ## Binders library
 

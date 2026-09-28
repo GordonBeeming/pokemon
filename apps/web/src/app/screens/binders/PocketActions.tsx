@@ -169,11 +169,12 @@ export function PocketActions({
           {summary.where} · {summary.status}
         </span>
       </span>
-      <ActionBar items={items} maxVisible={items.length} />
+      <ActionBar items={items} maxVisible={items.length} tooltips />
       <button
         type="button"
         className="pocket-actions-close"
-        aria-label="Close pocket actions"
+        aria-label="Close"
+        title="Close"
         onClick={onClose}
       >
         <Icon name="close" />

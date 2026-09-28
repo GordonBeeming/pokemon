@@ -48,8 +48,8 @@ export async function collectAllCards(
   return found;
 }
 
-/** The one exact-card result grid used by Change target and Insert. Every result is a
- * picker preview: full colour, never faded by ownership. */
+/** The one exact-card result grid used by Change target, Insert and Find cards. Every
+ * result is a picker preview: full colour, never faded by ownership. */
 export function CardPicker({
   query,
   palette,
@@ -59,15 +59,23 @@ export function CardPicker({
   onTotal,
   searchLabel = 'Search cards',
   autoSearch = false,
+  placeholder = 'Pokémon, set, number, rarity, or artist',
+  hideIds,
+  renderItem,
 }: {
   query: PickerQuery;
   palette: Record<FrameType, string>;
   pending: boolean;
   selectedIds?: ReadonlySet<string>;
-  onPick: (card: ResolvedCard) => void;
+  onPick?: (card: ResolvedCard) => void;
   onTotal?: (total: number, query: PickerQuery) => void;
   searchLabel?: string;
   autoSearch?: boolean;
+  placeholder?: string;
+  /** Results left out of the grid because the caller already shows them elsewhere. */
+  hideIds?: ReadonlySet<string>;
+  /** Draws each result in place of the default pick button, keeping the grid's look. */
+  renderItem?: (card: ResolvedCard) => ReactElement;
 }): ReactElement {
   const [draft, setDraft] = useState(query.q);
   const [active, setActive] = useState<PickerQuery | null>(autoSearch ? query : null);
@@ -99,6 +107,7 @@ export function CardPicker({
   }, [active, offset]);
 
   const total = results?.total ?? 0;
+  const shown = results?.cards.filter((card) => !hideIds?.has(card.id)) ?? [];
   return (
     <div className="card-picker">
       <form
@@ -116,7 +125,7 @@ export function CardPicker({
             type="search"
             value={draft}
             maxLength={200}
-            placeholder="Pokémon, set, number, rarity, or artist"
+            placeholder={placeholder}
             onChange={(event) => setDraft(event.target.value)}
           />
         </label>
@@ -138,24 +147,28 @@ export function CardPicker({
           {error}
         </p>
       ) : null}
-      {results && results.cards.length > 0 ? (
+      {shown.length > 0 ? (
         <div className="card-picker-grid" aria-label="Matching cards">
-          {results.cards.map((card) => (
-            <button
-              key={card.id}
-              type="button"
-              className="card-picker-item"
-              aria-pressed={selectedIds ? selectedIds.has(card.id) : undefined}
-              disabled={pending}
-              onClick={() => onPick(card)}
-            >
-              <CardFrame card={frameCardFrom(card)} state="owned" forceSolid palette={palette} />
-              <span className="card-picker-name">{card.name}</span>
-              <span className="card-picker-meta">
-                {card.setName} · {card.number}
-              </span>
-            </button>
-          ))}
+          {shown.map((card) =>
+            renderItem ? (
+              renderItem(card)
+            ) : (
+              <button
+                key={card.id}
+                type="button"
+                className="card-picker-item"
+                aria-pressed={selectedIds ? selectedIds.has(card.id) : undefined}
+                disabled={pending || !onPick}
+                onClick={() => onPick?.(card)}
+              >
+                <CardFrame card={frameCardFrom(card)} state="owned" forceSolid palette={palette} />
+                <span className="card-picker-name">{card.name}</span>
+                <span className="card-picker-meta">
+                  {card.setName} · {card.number}
+                </span>
+              </button>
+            ),
+          )}
         </div>
       ) : null}
       {results && total > PICKER_PAGE_SIZE ? (

@@ -37,6 +37,7 @@ import {
   stageCatalogueCards,
   importCatalogueLanguage,
 } from '../../lib/catalogue';
+import { listIllustrators } from '../../lib/illustrators';
 import { cachedTcgdexSpeciesPreviews, discoverTcgdexSpecies } from '../../lib/tcgdex-discovery';
 import { collectionSummary } from '../../lib/collection';
 import { asPositiveInt } from '../../lib/db';
@@ -145,6 +146,7 @@ browserApiRoutes.use('/art*', requireSession);
 // Every member can browse set codes; only editing one is admin-only, so that
 // guard is inline on the PATCH route below rather than on this wildcard.
 browserApiRoutes.use('/sets*', requireSession);
+browserApiRoutes.use('/illustrators*', requireSession);
 browserApiRoutes.use('/prices*', requireSession);
 
 browserApiRoutes.get('/dashboard', async (c) => {
@@ -551,6 +553,14 @@ browserApiRoutes.patch('/sets/:setId', requireAdmin, async (c) => {
     );
     const { sets, codeClashes } = await ownerOperations(c.env, sessionOwner(c)).listSets();
     return c.json({ ok: true, sets, codeClashes });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.get('/illustrators', async (c) => {
+  try {
+    return c.json({ ok: true, illustrators: await listIllustrators(c.env.DB, sessionOwner(c)) });
   } catch (error) {
     return apiFailure(c, error);
   }

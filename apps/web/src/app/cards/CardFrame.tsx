@@ -18,6 +18,8 @@ const NEUTRAL_FRAME_COLOR = '#94a3b8';
 // The board's own missing-art fill (independent of any frame colour) — used with
 // frame=false, where there's no coloured chrome around the art to tie a tint to.
 const NEUTRAL_PLACEHOLDER_BG = '#e2e8f0';
+// A printed card's width over its height; the art box is always this shape.
+const ART_RATIO = 245 / 337;
 
 export interface CardFrameCard {
   id: string;
@@ -44,8 +46,6 @@ export interface CardFrameProps {
   size?: number | string;
   onView?: () => void;
   selected?: boolean;
-  /** Only this edge stays square, for a card peeking in from off-screen in a binder row. */
-  peekEdge?: 'left' | 'right';
   /** The card inspector always shows full colour, even for a card that isn't owned. */
   forceSolid?: boolean;
   /** A fully-resolved palette (DEFAULT_FRAME_PALETTE merged with the owner's overrides). */
@@ -61,7 +61,6 @@ export function CardFrame({
   size = '100%',
   onView,
   selected = false,
-  peekEdge,
   forceSolid = false,
   palette = DEFAULT_FRAME_PALETTE,
   className = '',
@@ -79,6 +78,12 @@ export function CardFrame({
   // back to the named placeholder instead of the browser's broken-image icon.
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const imageUrl = card.imageUrl && card.imageUrl !== failedUrl ? card.imageUrl : null;
+  // Scans aren't all exactly 245:337. The art box keeps that shape so every frame
+  // lays out the same, and the picture is sized to its own shape inside it (never
+  // cropped or squished) so the rounded corners land on the card, not on the
+  // letterbox around it.
+  const [fit, setFit] = useState<{ url: string; along: 'width' | 'height' } | null>(null);
+  const fitAlong = fit && fit.url === imageUrl ? fit.along : undefined;
 
   const isSolid = forceSolid || state !== 'unowned';
   const textColor = isSolid ? onSolid : ink;
@@ -109,13 +114,24 @@ export function CardFrame({
   const placeholderTextColor = bestTextColor(placeholderBg);
 
   const art = imageUrl ? (
-    <img
-      className="card-frame-art"
-      src={imageUrl}
-      alt=""
-      onError={() => setFailedUrl(imageUrl)}
-      style={{ opacity: isSolid ? 1 : 0.45 }}
-    />
+    <span className="card-frame-art-box">
+      <img
+        className="card-frame-art"
+        src={imageUrl}
+        alt=""
+        data-fit={fitAlong}
+        onLoad={(event) => {
+          const { naturalWidth, naturalHeight } = event.currentTarget;
+          if (naturalWidth > 0 && naturalHeight > 0)
+            setFit({
+              url: imageUrl,
+              along: naturalWidth / naturalHeight >= ART_RATIO ? 'width' : 'height',
+            });
+        }}
+        onError={() => setFailedUrl(imageUrl)}
+        style={{ opacity: isSolid ? 1 : 0.45 }}
+      />
+    </span>
   ) : (
     <div
       className="card-frame-art card-frame-art-placeholder"
@@ -128,13 +144,6 @@ export function CardFrame({
       <span>{card.name}</span>
     </div>
   );
-
-  const peekClass =
-    peekEdge === 'left'
-      ? 'card-frame-peek-left'
-      : peekEdge === 'right'
-        ? 'card-frame-peek-right'
-        : '';
 
   const content = !frame ? (
     art
@@ -183,7 +192,6 @@ export function CardFrame({
   const classes = [
     'card-frame',
     frame ? '' : 'card-frame-raw',
-    frame ? peekClass : '',
     selected ? 'card-frame-selected' : '',
     className,
   ]

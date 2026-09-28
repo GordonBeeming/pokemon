@@ -277,7 +277,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   binder_paste_confirmation_required: 'Confirm replacement of the occupied targets before pasting.',
   binder_bookmark_reserved_page: 'Use Manage page to change a reserved-page bookmark.',
   binder_assignment_quantity_exceeded:
-    'All owned copies of this card are already placed. Add a new copy or save only the target.',
+    'All owned copies of this card are already placed. Use Find cards to add a copy and place it.',
   binder_assignment_incompatible: 'That copy does not fit this target.',
   binder_version_not_draft: 'Only a draft can be discarded. The active binder was not changed.',
   binder_version_not_found:

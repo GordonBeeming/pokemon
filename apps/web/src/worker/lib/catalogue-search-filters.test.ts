@@ -16,17 +16,17 @@ function setup(): D1Database {
     INSERT INTO catalogue_sets(set_id,language,set_name,updated_at) VALUES
       ('set-a','en','Set A',1),('set-b','en','Set B',1);
     INSERT INTO catalogue_cards
-      (id,name,language,category,set_id,set_name,number,types,subtype,rarity,pokedex_number,is_active,created_at,updated_at)
+      (id,name,language,category,set_id,set_name,number,types,subtype,rarity,artist,pokedex_number,is_active,created_at,updated_at)
     VALUES
-      ('grass-mon','Bulbasaur','en','pokemon','set-a','Set A','1','["Grass"]',NULL,'Common',1,1,1,1),
-      ('fire-mon','Charmander','en','pokemon','set-b','Set B','2','["Fire"]',NULL,'Rare',4,1,1,1),
-      ('kanto-other','Squirtle','en','pokemon','set-a','Set A','3',NULL,NULL,'Common',7,1,1,1),
-      ('johto-mon','Chikorita','en','pokemon','set-a','Set A','4',NULL,NULL,'Common',152,1,1,1),
-      ('trainer-card','Bill','en','trainer','set-a','Set A','5',NULL,NULL,'Uncommon',NULL,1,1,1),
-      ('basic-energy-typed','Water Energy','en','energy','set-a','Set A','6','["Water"]','Normal','None',NULL,1,1,1),
-      ('basic-energy-named','Fire Energy','en','energy','set-b','Set B','7',NULL,'Normal','None',NULL,1,1,1),
-      ('special-energy','Rainbow Energy','en','energy','set-a','Set A','8',NULL,'Special','Rare',NULL,1,1,1),
-      ('inactive-grass','Hidden Grass Mon','en','pokemon','set-a','Set A','9','["Grass"]',NULL,'Common',3,0,1,1);
+      ('grass-mon','Bulbasaur','en','pokemon','set-a','Set A','1','["Grass"]',NULL,'Common','Ken Sugimori',1,1,1,1),
+      ('fire-mon','Charmander','en','pokemon','set-b','Set B','2','["Fire"]',NULL,'Rare','Ken Sugimori',4,1,1,1),
+      ('kanto-other','Squirtle','en','pokemon','set-a','Set A','3',NULL,NULL,'Common','Mitsuhiro Arita',7,1,1,1),
+      ('johto-mon','Chikorita','en','pokemon','set-a','Set A','4',NULL,NULL,'Common',NULL,152,1,1,1),
+      ('trainer-card','Bill','en','trainer','set-a','Set A','5',NULL,NULL,'Uncommon',NULL,NULL,1,1,1),
+      ('basic-energy-typed','Water Energy','en','energy','set-a','Set A','6','["Water"]','Normal','None',NULL,NULL,1,1,1),
+      ('basic-energy-named','Fire Energy','en','energy','set-b','Set B','7',NULL,'Normal','None',NULL,NULL,1,1,1),
+      ('special-energy','Rainbow Energy','en','energy','set-a','Set A','8',NULL,'Special','Rare',NULL,NULL,1,1,1),
+      ('inactive-grass','Hidden Grass Mon','en','pokemon','set-a','Set A','9','["Grass"]',NULL,'Common','Ken Sugimori',3,0,1,1);
     INSERT INTO card_sources(provider,source_id,card_id,language,source_updated_at,checksum,active,imported_at)
     SELECT 'tcgdex', id, id, 'en', 1, 'checksum', 1, 1 FROM catalogue_cards;`);
   return sqliteD1(db);
@@ -92,6 +92,12 @@ describe('catalogue search filters', () => {
   it('filters by a repeatable set list', async () => {
     const db = setup();
     expect(await ids(db, { setIds: ['set-b'] })).toEqual(['basic-energy-named', 'fire-mon']);
+  });
+
+  it('filters by an exact artist match, never a partial one', async () => {
+    const db = setup();
+    expect(await ids(db, { artist: 'Ken Sugimori' })).toEqual(['fire-mon', 'grass-mon']);
+    expect(await ids(db, { artist: 'Ken' })).toEqual([]);
   });
 
   it('combines frame type and rarity filters', async () => {

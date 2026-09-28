@@ -38,6 +38,7 @@ import { Icon } from '../../ui/icons';
 import { MenuButton } from '../../ui/MenuButton';
 import { SegmentedControl } from '../../ui/SegmentedControl';
 import { Sheet } from '../../ui/Sheet';
+import { SidePanel } from '../../ui/SidePanel';
 import { useRouteAnnounce, useToast } from '../../ui/Toast';
 import { CardInspector } from '../card/CardInspector';
 import { clearCardClipboard, useCardClipboard } from '../catalogue/card-clipboard';
@@ -60,14 +61,13 @@ import {
   PageJumpForm,
   PageMenu,
   PageStepper,
-  PhonePageBar,
+  PhonePageStepper,
   type PageMenuActions,
 } from './PageToolbar';
 import { ChangeTargetPanel } from './panels/ChangeTargetPanel';
 import { InsertPanel } from './panels/InsertPanel';
 import { FindCardsPanelContainer, ManagePanelContainer } from './panels/containers';
 import { InsertPagesPanel, MovePagePanel, movedPageOrder } from './panels/PagePanels';
-import { Panel } from './panels/Panel';
 import { PastePanel } from './panels/PastePanel';
 import {
   BookmarkPanel,
@@ -86,7 +86,6 @@ export interface BinderViewProps {
   search: BinderSearch;
   onSearch: (next: BinderSearch, options: { replace: boolean }) => void;
   onOpenLibrary: () => void;
-  onFindCards: (query: string) => void;
 }
 
 type PanelKind =
@@ -149,7 +148,6 @@ export function BinderView({
   search,
   onSearch,
   onOpenLibrary,
-  onFindCards,
 }: BinderViewProps): ReactElement {
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -604,6 +602,27 @@ export function BinderView({
       navigate({ ...current, mode: undefined }, true);
   }, [navigate, writer]);
 
+  // Closing the card flyout waits for unsaved notes (as it does everywhere else), then
+  // hands focus back to the pocket it was opened from; the selection and the page's
+  // scroll stay as they were. The action bar that opened it is gone while it's open,
+  // so the overlay's own focus return has nothing to go back to.
+  const [dirtyInspector, setDirtyInspector] = useState(false);
+  const closeInspector = useCallback(() => {
+    if (dirtyInspector) {
+      toast(
+        'error',
+        'Notes are still saving. Wait a moment, or fix the save error, then try again.',
+      );
+      return;
+    }
+    setPanel(null);
+    setDirtyInspector(false);
+    if (selected) {
+      const at = selected;
+      requestAnimationFrame(() => focusPocket(at, false));
+    }
+  }, [dirtyInspector, toast, selected]);
+
   // A finished pocket action lands back on the binder. On a phone the selection is
   // what holds the pocket sheet open, so it's cleared too; the writer's own writes do
   // the same in onSettled.
@@ -803,14 +822,12 @@ export function BinderView({
     </dl>
   ) : null;
 
-  const meta = (
-    <p className="binder-meta">
-      {layoutLabel} pages · {capacity.toLocaleString('en-AU')} pockets
-      {summary.data
-        ? ` · ${summary.data.targets.toLocaleString('en-AU')} targets · ${summary.data.placed.toLocaleString('en-AU')} placed`
-        : ''}
-    </p>
-  );
+  const metaText = `${layoutLabel} pages · ${capacity.toLocaleString('en-AU')} pockets${
+    summary.data
+      ? ` · ${summary.data.targets.toLocaleString('en-AU')} targets · ${summary.data.placed.toLocaleString('en-AU')} placed`
+      : ''
+  }`;
+  const meta = <p className="binder-meta">{metaText}</p>;
 
   const pageMenuActions: PageMenuActions = {
     reservedPage,
@@ -884,16 +901,70 @@ export function BinderView({
             </a>
           </nav>
           <h1 id="binder-heading">{binder.name}</h1>
-          {phone ? null : meta}
+          {/* The pager sits under the pages, so the header keeps a quiet read-only
+              "where am I" for when the pager is scrolled out of view. */}
+          <p className="binder-meta">
+            <span className="binder-page-indicator">
+              Page {pageIndex + 1} / {Math.max(pageCount, 1)}
+            </span>
+            {phone ? null : <> · {metaText}</>}
+          </p>
         </div>
-        <div className="binder-header-actions">
-          {phone ? null : (
+        {phone ? (
+          <div className="binder-header-actions">
+            <button
+              type="button"
+              className="button-icon binder-tools-trigger"
+              aria-label="Binder tools"
+              onClick={() => setPhoneSheet('tools')}
+            >
+              <Icon name="settings" />
+            </button>
+          </div>
+        ) : (
+          <div className="binder-header-actions binder-toolbar">
+            <SpaceSearch
+              key={versionId}
+              versionId={versionId}
+              query={search.q}
+              pending={pending}
+              onQueryChange={(q) => navigate({ ...search, q }, true)}
+              onJump={jumpToSpace}
+            />
+            <BookmarkJump
+              bookmarks={bookmarks.data ?? []}
+              pending={pending}
+              onJump={jumpToBookmark}
+            />
+            <PageMenu
+              pageIndex={pageIndex}
+              pageCount={pageCount}
+              editable={editable}
+              pending={pending}
+              actions={pageMenuActions}
+            />
+            {/* Peek and frame are set once per binder and rarely touched again, so they
+                sit behind one trigger instead of a row of controls. */}
+            <MenuButton
+              kind="dialog"
+              className="binder-display"
+              popoverClassName="binder-scope binder-display"
+              align="end"
+              menuLabel="Display"
+              label={
+                <>
+                  <Icon name="eye" /> <span className="menu-button-text">Display</span>
+                </>
+              }
+            >
+              {() => displayControls}
+            </MenuButton>
             <button type="button" onClick={() => setPanel('manage')}>
               <Icon name="settings" />
               Manage binder
             </button>
-          )}
-        </div>
+          </div>
+        )}
       </header>
 
       {version?.status === 'archived' ? (
@@ -985,62 +1056,6 @@ export function BinderView({
           ) : null}
         </div>
       ) : null}
-
-      {phone ? (
-        <PhonePageBar
-          pageIndex={pageIndex}
-          pageCount={Math.max(pageCount, 1)}
-          pending={pending}
-          onGo={goToPage}
-          onOpenJump={() => setPhoneSheet('jump')}
-          onOpenTools={() => setPhoneSheet('tools')}
-        />
-      ) : (
-        <div className="binder-toolbar">
-          <PageStepper
-            pageIndex={pageIndex}
-            pageCount={Math.max(pageCount, 1)}
-            pending={pending}
-            onGo={goToPage}
-          />
-          <BookmarkJump
-            bookmarks={bookmarks.data ?? []}
-            pending={pending}
-            onJump={jumpToBookmark}
-          />
-          <PageMenu
-            pageIndex={pageIndex}
-            pageCount={pageCount}
-            editable={editable}
-            pending={pending}
-            actions={pageMenuActions}
-          />
-          <SpaceSearch
-            key={versionId}
-            versionId={versionId}
-            query={search.q}
-            pending={pending}
-            onQueryChange={(q) => navigate({ ...search, q }, true)}
-            onJump={jumpToSpace}
-          />
-          {/* Peek and frame are set once per binder and rarely touched again, so they
-              sit behind one trigger in the bar instead of a second row of controls. */}
-          <MenuButton
-            kind="dialog"
-            className="binder-display"
-            popoverClassName="binder-scope binder-display"
-            align="end"
-            menuLabel="Display"
-            label={
-              <>
-                <Icon name="eye" /> <span className="menu-button-text">Display</span>
-              </>
-            }
-          >
-            {() => displayControls}
-          </MenuButton>
-        </div>
-      )}
 
       {phone ? (
         <>
@@ -1175,6 +1190,8 @@ export function BinderView({
             onPocketKeyDown={onPocketKeyDown}
             onDrop={drop}
             onFlip={(delta) => goToPage(pageIndex + delta)}
+            edgeButtons={phone ? 'overlay' : 'beside'}
+            busy={pending}
           />
         ) : (
           <p role="status" className="binder-loading">
@@ -1182,6 +1199,24 @@ export function BinderView({
           </p>
         )}
       </div>
+
+      {/* Paging reads after the content, like the foot of a book page. */}
+      {phone ? (
+        <PhonePageStepper
+          pageIndex={pageIndex}
+          pageCount={Math.max(pageCount, 1)}
+          pending={pending}
+          onGo={goToPage}
+          onOpenJump={() => setPhoneSheet('jump')}
+        />
+      ) : (
+        <PageStepper
+          pageIndex={pageIndex}
+          pageCount={Math.max(pageCount, 1)}
+          pending={pending}
+          onGo={goToPage}
+        />
+      )}
 
       {selectedSlot && selected && !moveSource && !panel ? (
         <PocketActions
@@ -1217,17 +1252,19 @@ export function BinderView({
         </p>
       ) : null}
 
+      {/* The same card flyout the rest of the app uses: one inspector, one surface. */}
       {panel === 'view' && selectedCardId && selectedSlot && currentPage ? (
-        <Panel title="View card" onClose={() => setPanel(null)} wide bare>
+        <SidePanel open onClose={closeInspector} title="Card">
           <CardInspector
             cardId={selectedCardId}
-            onClose={() => setPanel(null)}
+            onClose={closeInspector}
+            onDirtyChange={setDirtyInspector}
             context={{
               binderId,
               slotId: slotIdOf(currentPage.id, selectedSlot.row, selectedSlot.column),
             }}
           />
-        </Panel>
+        </SidePanel>
       ) : null}
       {panel === 'find' && selectedSlot && selected && versionId ? (
         <FindCardsPanelContainer
@@ -1238,12 +1275,29 @@ export function BinderView({
           title={selectedTitle}
           reservedPage={reservedPage}
           editable={editable}
+          palette={palette}
+          binderId={binderId}
+          exactCard={
+            selectedSlot.entryKind === 'exact-card' && selectedSlot.cardId
+              ? cards.get(selectedSlot.cardId)
+              : undefined
+          }
+          // A new copy is placed through the card's own place endpoint, which only
+          // writes to the binder's active version.
+          addBlockedReason={
+            version?.status === 'active'
+              ? null
+              : 'Adding a copy places it in the active binder, so it’s not available while you edit a draft.'
+          }
           pending={pending}
           error={writer.error}
           onAssign={(candidate) =>
             void run(`${candidate.name} placed.`, (revision) =>
               binderApi.assign(versionId, selected, candidate.cardId, revision),
             )
+          }
+          onAddAndPlace={(card, place) =>
+            void run(`Added a copy of ${card.name} and placed it.`, place)
           }
           onUnassign={() =>
             void run('Physical placement removed.', (revision) =>
@@ -1255,7 +1309,6 @@ export function BinderView({
               binderApi.pageBreak(versionId, selected, starts, revision),
             )
           }
-          onSearchCatalogue={() => onFindCards(selectedTitle.replace(/^#\d+\s/u, ''))}
           onClose={closePanel}
         />
       ) : null}
@@ -1267,9 +1320,11 @@ export function BinderView({
           palette={palette}
           pending={pending}
           error={writer.error}
-          onChoose={(card, choice) =>
+          onChoose={(card) =>
+            // No copy choice: a copy already placed here stays placed when it is the new
+            // target card, and goes back to loose only when it no longer fits.
             void run(`${card.name} is now the target for this pocket.`, (revision) =>
-              binderApi.setSlot(versionId, selected, card.id, revision, choice),
+              binderApi.setSlot(versionId, selected, card.id, revision),
             )
           }
           onClose={closePanel}

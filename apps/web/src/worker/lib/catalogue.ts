@@ -77,6 +77,7 @@ export interface CatalogueFilters {
   offset: number;
   setId?: string;
   species?: string;
+  artist?: string;
   pokedexNumber?: number;
   cursor?: string | null;
   includePokemonNumber?: boolean;
@@ -1020,7 +1021,9 @@ export async function setNationalRepresentativesFromSources(
   return resolved.results.map((row) => ({ number: row.pokedex_number, cardId: row.card_id }));
 }
 
-function rowTypes(row: CardRow): string[] | null {
+type TypeFields = Pick<CardRow, 'types' | 'category' | 'subtype'>;
+
+function rowTypes(row: TypeFields): string[] | null {
   if (!row.types) return null;
   try {
     const parsed: unknown = JSON.parse(row.types);
@@ -1041,7 +1044,7 @@ interface FrameFields {
 // Cards imported before the `types` column carry a Pokémon's elemental types in
 // `subtype` ("Water", or "Fire, Water" for dual types), so frames and the type
 // filter fall back to it until a catalogue sync fills `types`.
-function pokemonSubtypeTypes(row: CardRow): string[] | null {
+function pokemonSubtypeTypes(row: TypeFields): string[] | null {
   if (row.category !== 'pokemon' || !row.subtype) return null;
   const types = row.subtype
     .split(',')
@@ -1050,11 +1053,17 @@ function pokemonSubtypeTypes(row: CardRow): string[] | null {
   return types.length > 0 ? types : null;
 }
 
+/** A card's energy types: the stored TCGdex types, or the Pokémon's subtype when those
+ * were never filled in. */
+export function cardTypes(row: TypeFields): string[] | null {
+  return rowTypes(row) ?? pokemonSubtypeTypes(row);
+}
+
 function frameFields(row: CardRow): FrameFields {
   return {
     frameType: frameTypeFor({
       category: row.category,
-      types: rowTypes(row) ?? pokemonSubtypeTypes(row),
+      types: cardTypes(row),
       subtype: row.subtype,
       name: row.name,
     }),
@@ -1335,6 +1344,10 @@ export async function searchCards(
     where.push(`c.species = ?${values.length + 1}`);
     values.push(filters.species);
   }
+  if (filters.artist) {
+    where.push(`c.artist = ?${values.length + 1}`);
+    values.push(filters.artist);
+  }
   if (filters.pokedexNumber !== undefined) {
     where.push(`c.pokedex_number = ?${values.length + 1}`);
     values.push(filters.pokedexNumber);
@@ -1379,6 +1392,7 @@ export async function searchCards(
     setId: filters.setId ?? null,
     setIds: filters.setIds?.slice().sort() ?? null,
     species: filters.species ?? null,
+    artist: filters.artist ?? null,
     pokedexNumber: filters.pokedexNumber ?? null,
     region: filters.region ?? null,
     frameTypes: filters.frameTypes?.slice().sort() ?? null,

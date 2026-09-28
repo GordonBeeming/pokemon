@@ -10,7 +10,6 @@ export function BinderDetail({
   search,
   onSearch,
   onOpenLibrary,
-  onFindCards,
 }: {
   binderId: string;
   search: BinderSearch;
@@ -22,7 +21,6 @@ export function BinderDetail({
       search={search}
       onSearch={onSearch}
       onOpenLibrary={onOpenLibrary}
-      onFindCards={onFindCards}
     />
   );
 }

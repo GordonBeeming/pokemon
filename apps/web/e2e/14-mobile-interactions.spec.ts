@@ -123,7 +123,7 @@ test.describe('done means closed', () => {
     const panel = page.getByRole('dialog', { name: /^Change target/ });
     await expect(panel).toBeVisible();
     await panel.locator('.card-picker-item').first().tap();
-    await panel.getByRole('button', { name: 'Don’t add a copy' }).tap();
+    await panel.getByRole('button', { name: 'Set as target' }).tap();
     await expectDoneAndClosed(page, /is now the target for this pocket\./);
   });
 
@@ -354,9 +354,18 @@ test.describe('basic controls', () => {
     const binder = await createBinder(page.request, 2, species(1, 9));
     await page.setViewportSize({ width: page.viewportSize()?.width ?? 390, height: 560 });
     await openBinder(page, binder);
-    await page.evaluate(() => window.scrollTo(0, 120));
-    const before = await page.evaluate(() => window.scrollY);
+    // Opening a binder focuses its first pocket (scrolling it into view if needed);
+    // let that land first so it can't undo the scroll this test sets up.
+    await expect(page.locator('[data-pocket="0:0:0"]')).toBeFocused();
     const trigger = page.locator('.binder-tools-trigger');
+    // Scrolled, but not so far that the header's Tools button leaves the screen: a
+    // tap on an off-screen button would scroll the page itself.
+    await trigger.evaluate((element) => {
+      const top = element.getBoundingClientRect().top + window.scrollY;
+      window.scrollTo(0, Math.max(1, Math.floor(top) - 8));
+    });
+    const before = await page.evaluate(() => window.scrollY);
+    expect(before).toBeGreaterThan(0);
     await trigger.tap();
     const sheet = page.getByRole('dialog', { name: 'Binder tools' });
     await expect(sheet).toBeVisible();

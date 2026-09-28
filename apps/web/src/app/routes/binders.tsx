@@ -3,7 +3,7 @@ import { useCallback } from 'react';
 import { BinderDetail } from '../screens/BinderDetail';
 import { Binders } from '../screens/Binders';
 import { authedRoute } from './authed-layout';
-import { binderSearch, catalogueSearch, type BinderSearch } from './search-params';
+import { binderSearch, type BinderSearch } from './search-params';
 
 export const bindersRoute = createRoute({
   getParentRoute: () => authedRoute,
@@ -52,9 +52,6 @@ export const binderDetailRoute = createRoute({
         search={search}
         onSearch={onSearch}
         onOpenLibrary={() => void navigate({ to: '/binders' })}
-        onFindCards={(query) =>
-          void navigate({ to: '/catalogue', search: catalogueSearch.parse({ q: query }) })
-        }
       />
     );
   },

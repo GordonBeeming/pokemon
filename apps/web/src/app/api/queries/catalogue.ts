@@ -33,7 +33,7 @@ const detailResponseSchema = z
 export function catalogueWireParams(
   filters: Pick<
     CatalogueSearch,
-    'q' | 'type' | 'region' | 'rarity' | 'set' | 'language' | 'owned' | 'sort' | 'dex'
+    'q' | 'type' | 'region' | 'rarity' | 'set' | 'language' | 'owned' | 'sort' | 'dex' | 'artist'
   >,
 ): URLSearchParams {
   const params = new URLSearchParams({ includePokemonNumber: 'true' });
@@ -46,6 +46,7 @@ export function catalogueWireParams(
   if (filters.region) params.set('region', filters.region);
   if (filters.language) params.set('language', filters.language);
   if (filters.dex !== undefined) params.set('pokedexNumber', String(filters.dex));
+  if (filters.artist) params.set('artist', filters.artist);
   return params;
 }
 

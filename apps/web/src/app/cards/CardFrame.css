@@ -23,24 +23,41 @@
 .card-frame-selected {
   outline: 3px solid var(--accent-deep);
 }
-.card-frame-peek-left {
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-}
-.card-frame-peek-right {
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
-
-.card-frame-art {
+/* The art box is always 245:337, so every frame is the same size whatever its scan.
+   The picture is centred in it at its own shape: a slightly wider scan fits the
+   width, a slightly taller one the height (CardFrame reads which from the loaded
+   image). Until then it's contained, so the box never jumps. The radius sits on the
+   picture itself, as a share of its own size, so it matches a printed card's corners
+   at any size instead of rounding an empty letterbox. */
+.card-frame-art-box {
+  position: relative;
   display: block;
   width: 100%;
   aspect-ratio: 245 / 337;
+}
+.card-frame-art-box > .card-frame-art {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  margin: auto;
   object-fit: contain;
-  border-radius: 0.5rem;
+  border-radius: 4.6% / 3.35%;
+}
+.card-frame-art-box > .card-frame-art[data-fit='width'] {
+  height: auto;
+}
+.card-frame-art-box > .card-frame-art[data-fit='height'] {
+  width: auto;
 }
 .card-frame-art-placeholder {
   display: flex;
+  width: 100%;
+  aspect-ratio: 245 / 337;
+  border-radius: 0.5rem;
   align-items: center;
   justify-content: center;
   padding: 0.4rem 0.15rem;
@@ -64,6 +81,12 @@
   gap: 0.35rem;
   min-width: 0;
   padding: 0 0.15rem;
+}
+/* A trainer or energy card has no dex number or region, but its top row keeps a
+   line's height so every frame in a grid is the same size. */
+.card-frame-dex:empty::before,
+.card-frame-region:empty::before {
+  content: '\200b';
 }
 .card-frame-dex {
   flex-shrink: 0;

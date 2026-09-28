@@ -253,12 +253,22 @@ an action at the end */
   color: var(--ink);
 }
 
-/* Toolbar: one bar, every control the search input's height */
+/* Header tools: one row beside the title, every control the search input's height;
+   it wraps under the title when the screen is too narrow for both. */
 .binder-toolbar {
   display: flex;
+  flex: 1 1 32rem;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 0.75rem;
+  min-width: 0;
+}
+.binder-page-indicator {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--ink-soft);
+  white-space: nowrap;
 }
 .binder-scope .binder-toolbar button,
 .binder-scope .binder-toolbar select,
@@ -270,10 +280,36 @@ an action at the end */
 .binder-scope .menu-button-trigger {
   font-size: 0.875rem;
 }
-.page-stepper {
+
+/* Pager: one compact control centred under the pages */
+.binder-pager {
   display: flex;
+  align-self: center;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.25rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+}
+.binder-scope .binder-pager .button-icon {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 50%;
+}
+.binder-scope .binder-pager .button-icon:hover:not(:disabled) {
+  background: var(--paper);
+}
+.binder-scope .binder-pager .page-jump button {
+  border-radius: var(--radius-pill);
+}
+.page-stepper .page-jump {
+  padding: 0 0.35rem;
+}
+/* First/last draw two chevrons; overlapped, they read as one double arrow. */
+.page-stepper .button-icon svg + svg {
+  margin-left: -0.55em;
 }
 .page-jump {
   display: flex;
@@ -385,9 +421,6 @@ an action at the end */
   .binder-header h1 {
     font-size: 1.5rem;
   }
-  .page-stepper {
-    gap: 0.25rem;
-  }
   .binder-scope .button-icon {
     width: 2.75rem;
   }
@@ -401,10 +434,14 @@ an action at the end */
   .binder-scope .page-jump input {
     width: 3.5rem;
   }
-  /* The title has the header to itself on a phone; Manage binder lives in Tools. */
+  /* The title shares the header with only the Tools button on a phone; everything
+     else lives in the Tools sheet. */
   .binder-header {
     flex-wrap: nowrap;
     align-items: flex-start;
+  }
+  .binder-header-actions {
+    flex: none;
   }
 }
 
@@ -416,6 +453,7 @@ an action at the end */
 }
 .page-track-frame {
   display: flex;
+  align-items: center;
   justify-content: center;
   width: 100%;
   min-width: 0;
@@ -426,15 +464,94 @@ an action at the end */
   overflow: hidden;
   touch-action: pan-y;
 }
+
+/* Previous/next at the page's sides. Beside the page (desktop) they're 44px with a
+   12px gap to it: PageTrack's EDGE_BESIDE_PX reserves exactly that room. */
+.binder-scope .page-edge {
+  flex: none;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  gap: 0;
+}
+.page-edge-face {
+  display: grid;
+  place-items: center;
+}
+.binder-scope .page-edge-beside {
+  width: 44px;
+  height: 44px;
+  color: var(--muted);
+  background: transparent;
+  border-color: var(--line);
+  border-radius: 50%;
+  transition:
+    background-color 150ms,
+    color 150ms,
+    border-color 150ms;
+}
+.page-edge-beside.page-edge-prev {
+  margin-right: 12px;
+}
+.page-edge-beside.page-edge-next {
+  margin-left: 12px;
+}
+.binder-scope .page-edge-beside:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--surface);
+  border-color: var(--line-strong);
+}
+.binder-scope .page-edge-beside:disabled {
+  opacity: 0.3;
+}
+/* Over the page (phone): a 44px target whose visible dot hugs the edge, so it
+   covers as little of the pockets as it can. */
+.binder-scope .page-edge-overlay {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  display: flex;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  transform: translateY(-50%);
+}
+.page-edge-overlay.page-edge-prev {
+  left: 0;
+  justify-content: flex-start;
+  padding-left: 2px;
+}
+.page-edge-overlay.page-edge-next {
+  right: 0;
+  justify-content: flex-end;
+  padding-right: 2px;
+}
+.page-edge-overlay .page-edge-face {
+  width: 1.75rem;
+  height: 1.75rem;
+  color: #ffffff;
+  background: rgb(15 23 42 / 40%);
+  border-radius: 50%;
+}
+.binder-scope .page-edge-overlay:disabled {
+  visibility: hidden;
+}
+/* A dragged card has to reach the pockets under the buttons. */
+.page-track-dragging .page-edge {
+  pointer-events: none;
+}
 .page-track {
   position: absolute;
   top: 0;
   left: 0;
   height: 100%;
 }
+/* Every page fills the viewport's height (the tallest page's), so pages side by
+   side always end level. */
 .binder-page {
   position: absolute;
   top: 0;
+  bottom: 0;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -493,14 +610,30 @@ an action at the end */
 .binder-scope .pocket-drop-hover {
   outline: 3px solid #f59e0b;
 }
+/* A pocket is sized by its invisible PocketSizer (a full card frame); what it
+   holds is laid over that, filling it exactly, so every pocket is one size. */
+.pocket-sizer {
+  display: block;
+  visibility: hidden;
+}
+.pocket-face {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pocket-face > .card-frame {
+  flex: 1 1 auto;
+  justify-content: space-between;
+}
 .pocket-words,
 .pocket-any {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 0.25rem;
-  aspect-ratio: 245 / 337;
   padding: 0.35rem;
   font-size: 0.75rem;
   color: #475569;
@@ -542,7 +675,6 @@ an action at the end */
 }
 .pocket-skeleton {
   display: block;
-  aspect-ratio: 245 / 337;
   background: rgb(255 255 255 / 45%);
   border-radius: 0.6rem;
 }
@@ -565,16 +697,17 @@ an action at the end */
   text-align: center;
 }
 
-/* Floating pocket action bar (desktop) */
+/* Floating pocket action bar (desktop). It hugs its content on one row; when the
+   actions don't fit they wrap inside their own group, and everything is top-aligned
+   so the × stays at the end of the first row. Every item is at most 44px tall, so a
+   single row lines up exactly. */
 .pocket-actions {
   position: sticky;
   z-index: 15;
   bottom: 1rem;
   display: flex;
-  flex-wrap: wrap;
   align-self: center;
-  align-items: center;
-  justify-content: center;
+  align-items: flex-start;
   gap: 0.4rem;
   max-width: min(84rem, 100%);
   padding: 0.5rem;
@@ -584,17 +717,25 @@ an action at the end */
   box-shadow: 0 12px 32px rgb(15 23 42 / 28%);
 }
 .pocket-actions-thumb {
-  width: 2.5rem;
+  flex: none;
+  width: 2rem;
   aspect-ratio: 245 / 337;
   object-fit: contain;
   border-radius: 4px;
 }
 .pocket-actions-text {
   display: flex;
+  flex: 0 1 auto;
   flex-direction: column;
+  justify-content: center;
   gap: 0.1rem;
-  min-width: 11rem;
+  min-width: 9rem;
+  min-height: 2.75rem;
   padding: 0 0.6rem 0 0.25rem;
+}
+.pocket-actions > .action-bar {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .pocket-actions-title {
   font-size: 0.9375rem;
@@ -621,11 +762,49 @@ an action at the end */
   color: #fda4af;
 }
 .binder-scope .pocket-actions .pocket-actions-close {
+  flex: none;
   width: 2.75rem;
+  height: 2.75rem;
   padding: 0;
+  margin-left: auto;
   color: #cbd5e1;
   background: transparent;
   border: 0;
+  border-radius: 10px;
+}
+.binder-scope .pocket-actions .pocket-actions-close:hover {
+  color: #ffffff;
+  background: #334155;
+}
+/* Below 1280px the labels don't fit on one row beside the card summary, so the
+   actions drop to icons. The label stays in the button (visually hidden) as its
+   accessible name, and the title shows it on hover. */
+@media (max-width: 1279px) {
+  /* The icon row keeps its full width; the card summary beside it wraps instead. */
+  .pocket-actions > .action-bar {
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+  }
+  .pocket-actions-text {
+    flex: 1 1 auto;
+    min-width: 6rem;
+  }
+  .binder-scope .pocket-actions .action-bar-item {
+    width: 2.75rem;
+    padding: 0;
+    justify-content: center;
+  }
+  .pocket-actions .action-bar-item > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+  }
+  .pocket-actions .action-bar-kbd {
+    display: none;
+  }
 }
 .pocket-sheet-card {
   display: flex;
@@ -702,6 +881,11 @@ an action at the end */
   gap: 0.5rem;
   padding: 0.75rem 0;
   border-top: 1px solid var(--line);
+}
+/* The panel's header already draws a rule; a first section doesn't add a second. */
+.binder-panel > .panel-section:first-child {
+  padding-top: 0;
+  border-top: 0;
 }
 .panel-section h3 {
   margin: 0;
@@ -852,6 +1036,12 @@ an action at the end */
   border-color: var(--accent);
   box-shadow: inset 0 0 0 1px var(--accent);
 }
+.find-cards-action {
+  margin-top: 0.15rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--accent-deep);
+}
 .card-picker-name {
   font-size: 0.8125rem;
   font-weight: 600;
@@ -909,6 +1099,9 @@ an action at the end */
   .app-rail,
   .app-tabbar,
   .binder-toolbar,
+  .binder-pager,
+  .binder-page-indicator,
+  .page-edge,
   .binder-display,
   .binder-banner,
   .binder-usage,
@@ -937,30 +1130,19 @@ an action at the end */
   }
 }
 
-/* Phone: one compact row above the pages (stepper + Tools), everything else in sheets */
-.phone-page-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-.phone-page-stepper {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-}
-.binder-scope .phone-page-bar button {
+/* Phone: the compact pager under the pages; everything else in sheets */
+.binder-scope .phone-page-stepper button {
   height: 2.75rem;
   white-space: nowrap;
-}
-.binder-scope .phone-page-bar .button-icon {
-  width: 2.75rem;
 }
 .binder-scope .phone-page-number {
   min-width: 6.5rem;
   font-family: var(--font-mono);
   font-size: 0.9375rem;
   font-weight: 600;
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--radius-pill);
 }
 .binder-sheet {
   display: flex;

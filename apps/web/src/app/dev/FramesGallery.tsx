@@ -95,14 +95,8 @@ export function FramesGallery(): ReactElement {
           <Cell label="unowned, forceSolid (inspector)">
             <CardFrame card={LIGHTNING_FIXTURE} state="unowned" forceSolid />
           </Cell>
-          <Cell label="selected, peekEdge=left (flat left edge)">
-            <CardFrame
-              card={LIGHTNING_FIXTURE}
-              state="owned"
-              selected
-              peekEdge="left"
-              onView={() => undefined}
-            />
+          <Cell label="selected">
+            <CardFrame card={LIGHTNING_FIXTURE} state="owned" selected onView={() => undefined} />
           </Cell>
           <Cell label="long name, missing art">
             <CardFrame card={LONG_NAME_MISSING_ART_FIXTURE} state="owned" />

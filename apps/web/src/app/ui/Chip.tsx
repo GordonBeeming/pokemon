@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from 'react';
-import { Icon } from './icons';
+import { Icon, type IconName } from './icons';
 import './primitives.css';
 
 export function Chip({ children }: { children: ReactNode }): ReactElement {
@@ -9,6 +9,10 @@ export function Chip({ children }: { children: ReactNode }): ReactElement {
 export interface FilterChipItem {
   key: string;
   label: string;
+  /** A symbol standing in for a text prefix (e.g. the illustrator filter's palette
+   * icon instead of an "Artist:" label), decorative — `label` alone still carries
+   * the removal announcement. */
+  icon?: IconName;
 }
 
 /** Removable "Filtered by" pills — one per active filter, each announcing exactly
@@ -31,6 +35,7 @@ export function FilterChips({
           aria-label={`Remove filter ${item.label}`}
           onClick={() => onRemove(item.key)}
         >
+          {item.icon ? <Icon name={item.icon} /> : null}
           {item.label}
           <Icon name="close" />
         </button>

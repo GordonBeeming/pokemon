@@ -3,36 +3,45 @@ import type { ComponentProps, ReactElement } from 'react';
 import {
   useAssignmentCandidates,
   useInsertDestinations,
+  useResolvedCardGroups,
   type BinderSlotView,
 } from '../../../api/queries/binders';
 import { binderErrorMessage } from '../model';
+import { FindCardsPanel } from './FindCardsPanel';
 import { ManageBinderPanel } from './ManageBinderPanel';
-import { FindCardsPanel } from './PocketPanels';
 
 type FindProps = ComponentProps<typeof FindCardsPanel>;
 
-/** Loads the owned copies that fit only while Find cards is open, so selecting pockets
- * never fires candidate requests on its own. */
+/** Loads the owned copies that fit (and their art) only while Find cards is open, so
+ * selecting pockets never fires candidate requests on its own. */
 export function FindCardsPanelContainer({
   versionId,
   slot,
   at,
   slotId,
   ...rest
-}: Omit<FindProps, 'candidates' | 'candidatesLoading' | 'candidatesError'> & {
+}: Omit<FindProps, 'spares' | 'sparesLoading' | 'sparesError' | 'slotId'> & {
   versionId: string;
   slot: BinderSlotView;
   at: BinderSlotLocation;
   slotId: string;
 }): ReactElement {
   const candidates = useAssignmentCandidates(versionId, slotId, at);
+  const [resolved] = useResolvedCardGroups([
+    (candidates.data ?? []).map((candidate) => candidate.cardId),
+  ]);
+  const cardsById = new Map((resolved?.data ?? []).map((card) => [card.id, card]));
   return (
     <FindCardsPanel
       {...rest}
       slot={slot}
-      candidates={candidates.data}
-      candidatesLoading={candidates.isLoading}
-      candidatesError={candidates.isError ? binderErrorMessage(candidates.error) : null}
+      slotId={slotId}
+      spares={candidates.data?.map((candidate) => ({
+        candidate,
+        card: cardsById.get(candidate.cardId),
+      }))}
+      sparesLoading={candidates.isLoading}
+      sparesError={candidates.isError ? binderErrorMessage(candidates.error) : null}
     />
   );
 }

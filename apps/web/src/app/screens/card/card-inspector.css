@@ -166,33 +166,6 @@
   border-radius: var(--radius-md);
 }
 
-.new-binder-row {
-  height: 2.75rem;
-  color: var(--accent);
-  background: transparent;
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-md);
-}
-.new-binder-row-form {
-  display: flex;
-  gap: 0.5rem;
-}
-.new-binder-row-form input {
-  flex-grow: 1;
-  height: 2.75rem;
-  padding: 0 0.75rem;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-md);
-}
-.new-binder-row-form button {
-  height: 2.75rem;
-  padding: 0 1rem;
-  color: #ffffff;
-  background: var(--accent);
-  border: 0;
-  border-radius: var(--radius-md);
-}
-
 .card-inspector-meta .text-button {
   align-self: flex-start;
   min-height: 2.75rem;
@@ -227,6 +200,13 @@
   min-height: 2.75rem;
   font-weight: 600;
   color: var(--accent-deep);
+}
+.card-inspector-artist-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.75rem;
+  color: var(--ink);
 }
 
 .where-from-option {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   binderSearch,
   catalogueSearch,
+  illustratorsSearch,
   pokedexSearch,
   settingsSearch,
   setsSearch,
@@ -26,6 +27,7 @@ describe('catalogueSearch', () => {
       page: '3',
       card: 'abc123',
       dex: '25',
+      artist: 'Ken Sugimori',
     });
     expect(initial).toEqual({
       q: 'pikachu',
@@ -39,6 +41,7 @@ describe('catalogueSearch', () => {
       page: 3,
       card: 'abc123',
       dex: 25,
+      artist: 'Ken Sugimori',
     });
     expect(catalogueSearch.parse(catalogueSearch.serialize(initial))).toEqual(initial);
   });
@@ -100,6 +103,21 @@ describe('setsSearch', () => {
 
   it('defaults to no selected set', () => {
     expect(setsSearch.parse({})).toEqual({});
+  });
+});
+
+describe('illustratorsSearch', () => {
+  it('round-trips', () => {
+    const initial = illustratorsSearch.parse({ q: 'sugimori', sort: 'card-count' });
+    expect(illustratorsSearch.parse(illustratorsSearch.serialize(initial))).toEqual(initial);
+  });
+
+  it('defaults to an empty search sorted A-Z', () => {
+    expect(illustratorsSearch.parse({})).toEqual({ q: '', sort: 'name' });
+  });
+
+  it('drops an invalid sort rather than throwing', () => {
+    expect(illustratorsSearch.parse({ sort: 'nonsense' }).sort).toBe('name');
   });
 });
 

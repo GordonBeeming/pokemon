@@ -22,6 +22,9 @@ export const queryKeys = {
     // facets list above that Catalogue's set filter reads.
     codes: () => ['sets', 'codes'] as const,
   },
+  illustrators: {
+    list: () => ['illustrators', 'list'] as const,
+  },
   binders: {
     list: () => ['binders', 'list'] as const,
     // Every per-version key starts with ['binders', 'version', versionId] so one

@@ -5,14 +5,11 @@ import {
   RARITY_LABELS,
   regionForDex,
 } from '@pokedex/shared';
-import { useQueryClient } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
-import { binderApi } from '../../api/queries/binders';
 import { useCardBinderMatches } from '../../api/queries/card';
 import { useCardDetail } from '../../api/queries/catalogue';
 import { useIncrementCollection, usePatchCollectionNotes } from '../../api/queries/collection';
-import { queryKeys } from '../../api/keys';
 import { useSetNationalRepresentative } from '../../api/queries/pokedex';
 import { CardFrame } from '../../cards/CardFrame';
 import { RARITY_VISUALS } from '../../cards/rarity-visuals';
@@ -195,7 +192,19 @@ export function CardInspector({
               {rarityName}
             </p>
           ) : null}
-          {card.artist ? <p>Illustrated by {card.artist}</p> : null}
+          {card.artist ? (
+            <p>
+              <Link
+                className="card-inspector-artist-link"
+                to="/catalogue"
+                search={catalogueSearch.parse({ artist: card.artist })}
+                onClick={onClose}
+              >
+                <Icon name="illustrator" title="Illustrator" />
+                {card.artist}
+              </Link>
+            </p>
+          ) : null}
           <span className={quantity > 0 ? 'state-chip state-chip-owned' : 'state-chip'}>
             {quantity > 0 ? `Owned ×${quantity}` : 'Not owned'}
           </span>
@@ -335,7 +344,6 @@ export function CardInspector({
             />
           ))
         )}
-        <NewBinderRow />
       </section>
 
       <WhereFromDialog
@@ -351,64 +359,5 @@ export function CardInspector({
         }}
       />
     </div>
-  );
-}
-
-/**
- * "A 'New binder' row at the end. No separate 'Add to a binder' button." Full
- * binder creation (page-face layout choice, capacity) is the Binders screen's own
- * form (ws-screens-b); this row creates one with a sensible 3x3 default so a target
- * exists to fill next time this section is opened, rather than duplicating that form.
- */
-function NewBinderRow(): ReactElement {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [pending, setPending] = useState(false);
-  const toast = useToast();
-
-  const queryClient = useQueryClient();
-
-  async function create(): Promise<void> {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    setPending(true);
-    try {
-      await binderApi.create(trimmed, { kind: '3x3', rows: 3, columns: 3 }, 9);
-      void queryClient.invalidateQueries({ queryKey: queryKeys.binders.list() });
-      setName('');
-      setOpen(false);
-      toast('success', `${trimmed} created. Reopen this card to place it there.`);
-    } catch (cause) {
-      toast('error', cause instanceof Error ? cause.message : 'Could not create that binder.');
-    } finally {
-      setPending(false);
-    }
-  }
-
-  if (!open)
-    return (
-      <button type="button" className="new-binder-row" onClick={() => setOpen(true)}>
-        New binder
-      </button>
-    );
-  return (
-    <form
-      className="new-binder-row-form"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void create();
-      }}
-    >
-      <input
-        autoFocus
-        value={name}
-        maxLength={120}
-        placeholder="Binder name"
-        onChange={(event) => setName(event.target.value)}
-      />
-      <button type="submit" disabled={pending || !name.trim()}>
-        {pending ? 'Creating…' : 'Create'}
-      </button>
-    </form>
   );
 }

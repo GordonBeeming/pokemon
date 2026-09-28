@@ -750,6 +750,38 @@ export const catalogueSetsResponseSchema = z
   .strict();
 export type CatalogueSetsResponse = z.infer<typeof catalogueSetsResponseSchema>;
 
+// The same shape the National Pokédex coverage representative uses (see
+// listNationalPokedexCoverage), so the Illustrators screen can hand it straight to
+// CardFrame without a translation step.
+export const illustratorRepresentativeSchema = z
+  .object({
+    id: cardIdSchema,
+    name: z.string().trim().min(1).max(200),
+    imageLowUrl: artUrlSchema,
+    frameType: frameTypeSchema.nullable(),
+    setCode: z.string().trim().min(1).max(32).nullable(),
+    number: z.string().trim().min(1).max(32),
+    rarityKey: rarityKeySchema.nullable(),
+    pokedexNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE).nullable(),
+  })
+  .strict();
+export type IllustratorRepresentative = z.infer<typeof illustratorRepresentativeSchema>;
+
+export const illustratorSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200),
+    cardCount: z.number().int().positive(),
+    ownedCount: z.number().int().nonnegative(),
+    representative: illustratorRepresentativeSchema,
+  })
+  .strict();
+export type Illustrator = z.infer<typeof illustratorSchema>;
+
+export const illustratorsResponseSchema = z
+  .object({ illustrators: z.array(illustratorSchema) })
+  .strict();
+export type IllustratorsResponse = z.infer<typeof illustratorsResponseSchema>;
+
 export const setCodePatchRequestSchema = z
   .object({
     code: z

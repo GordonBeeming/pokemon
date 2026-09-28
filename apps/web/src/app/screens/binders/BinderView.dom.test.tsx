@@ -35,7 +35,6 @@ function Screen(): ReactElement {
       search={search}
       onSearch={(next) => setSearch(next)}
       onOpenLibrary={() => undefined}
-      onFindCards={() => undefined}
     />
   );
 }

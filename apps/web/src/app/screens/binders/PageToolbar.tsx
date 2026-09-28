@@ -28,7 +28,7 @@ export function PageStepper({
   onGo: (pageIndex: number) => void;
 }): ReactElement {
   return (
-    <nav className="page-stepper" aria-label="Binder pages">
+    <nav className="binder-pager page-stepper" aria-label="Binder pages">
       <button
         type="button"
         className="button-icon"
@@ -121,59 +121,51 @@ export function PageJumpForm({
 }
 
 /**
- * The phone's single control row above the pages: previous, "n / total" (which opens
- * the jump sheet), next, and one Tools button for everything else, so the binder
- * starts right under its title.
+ * The phone's pager under the pages: previous, "n / total" (which opens the jump
+ * sheet) and next, so the full jump form doesn't crowd a narrow screen.
  */
-export function PhonePageBar({
+export function PhonePageStepper({
   pageIndex,
   pageCount,
   pending,
   onGo,
   onOpenJump,
-  onOpenTools,
 }: {
   pageIndex: number;
   pageCount: number;
   pending: boolean;
   onGo: (pageIndex: number) => void;
   onOpenJump: () => void;
-  onOpenTools: () => void;
 }): ReactElement {
   return (
-    <div className="phone-page-bar">
-      <nav className="phone-page-stepper" aria-label="Binder pages">
-        <button
-          type="button"
-          className="button-icon"
-          aria-label="Previous page"
-          disabled={pending || pageIndex === 0}
-          onClick={() => onGo(pageIndex - 1)}
-        >
-          <Icon name="chevron-left" />
-        </button>
-        <button
-          type="button"
-          className="phone-page-number"
-          aria-label={`Page ${pageIndex + 1} of ${pageCount}. Jump to a page or bookmark`}
-          onClick={onOpenJump}
-        >
-          {pageIndex + 1} / {pageCount}
-        </button>
-        <button
-          type="button"
-          className="button-icon"
-          aria-label="Next page"
-          disabled={pending || pageIndex + 1 >= pageCount}
-          onClick={() => onGo(pageIndex + 1)}
-        >
-          <Icon name="chevron-right" />
-        </button>
-      </nav>
-      <button type="button" className="binder-tools-trigger" onClick={onOpenTools}>
-        <Icon name="settings" /> Tools
+    <nav className="binder-pager phone-page-stepper" aria-label="Binder pages">
+      <button
+        type="button"
+        className="button-icon"
+        aria-label="Previous page"
+        disabled={pending || pageIndex === 0}
+        onClick={() => onGo(pageIndex - 1)}
+      >
+        <Icon name="chevron-left" />
       </button>
-    </div>
+      <button
+        type="button"
+        className="phone-page-number"
+        aria-label={`Page ${pageIndex + 1} of ${pageCount}. Jump to a page or bookmark`}
+        onClick={onOpenJump}
+      >
+        {pageIndex + 1} / {pageCount}
+      </button>
+      <button
+        type="button"
+        className="button-icon"
+        aria-label="Next page"
+        disabled={pending || pageIndex + 1 >= pageCount}
+        onClick={() => onGo(pageIndex + 1)}
+      >
+        <Icon name="chevron-right" />
+      </button>
+    </nav>
   );
 }
 

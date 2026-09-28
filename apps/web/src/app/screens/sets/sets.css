@@ -119,6 +119,22 @@
   font-size: 0.875rem;
   color: var(--muted);
 }
+/* Phone-only: the rail has its own Illustrators item, so this exists only where the
+   tab bar (fixed at 6 icons) has no room for a 7th. */
+.sets-illustrators-link {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.4rem;
+  height: 2.75rem;
+  padding: 0 0.85rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+}
 .set-code-edit-button {
   display: flex;
   flex-shrink: 0;

@@ -32,6 +32,7 @@ export const ICON_NAMES = [
   'sync',
   'more',
   'pencil',
+  'illustrator',
 ] as const;
 export type IconName = (typeof ICON_NAMES)[number];
 
@@ -85,6 +86,18 @@ const PATHS: Record<IconName, ReactElement> = {
   ),
   sync: <path d="M4 12a8 8 0 0 1 14-5.3M20 6v5h-5M20 12a8 8 0 0 1-14 5.3M4 18v-5h5" />,
   pencil: <path d="M4 20h4L19 9l-4-4L4 16v4ZM13.5 6.5l4 4" />,
+  // A painter's palette: the outline (with its thumb-hole notch drawn into the
+  // silhouette) plus a few paint-dot circles, drawn thick enough at this stroke
+  // weight to read as filled blobs rather than rings.
+  illustrator: (
+    <>
+      <path d="M12 3.5C7 3.5 3 7.1 3 11.5c0 3.3 2.4 5.5 5.5 5.5h1c.8 0 1.3.8 1 1.5l-.2.6c-.3.8.3 1.6 1.1 1.4C17 19.5 21 15.8 21 11.5c0-4.4-4-8-9-8Z" />
+      <circle cx="8" cy="10.5" r="1.2" />
+      <circle cx="12" cy="7.5" r="1.2" />
+      <circle cx="16" cy="10.5" r="1.2" />
+      <circle cx="9" cy="14.5" r="1.4" />
+    </>
+  ),
   more: (
     <>
       <circle cx="5" cy="12" r="1.2" />

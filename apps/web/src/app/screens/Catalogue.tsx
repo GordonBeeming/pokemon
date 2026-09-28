@@ -10,7 +10,7 @@ import {
   type CatalogueOwnedFilter,
   type CatalogueSearch,
 } from '../routes/search-params';
-import { FilterChips } from '../ui/Chip';
+import { FilterChips, type FilterChipItem } from '../ui/Chip';
 import { Dialog } from '../ui/Dialog';
 import { Icon } from '../ui/icons';
 import { MenuButton, MenuItem } from '../ui/MenuButton';
@@ -176,7 +176,7 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
     return () => globalThis.removeEventListener('keydown', onKeyDown);
   }, [cardOpen]);
 
-  const activeChips: Array<{ key: string; label: string }> = [
+  const activeChips: FilterChipItem[] = [
     ...search.type.map((type) => ({
       key: `type:${type}`,
       label: `Type: ${FRAME_TYPE_LABELS[type as FrameType] ?? type}`,
@@ -190,21 +190,31 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
       label: `Set: ${setsFacet.data?.find((set) => set.setId === setId)?.setName ?? setId}`,
     })),
     ...(search.region ? [{ key: 'region', label: `Region: ${search.region}` }] : []),
+    ...(search.artist
+      ? [{ key: 'artist', label: search.artist, icon: 'illustrator' as const }]
+      : []),
   ];
   const activeFilterCount =
-    search.type.length + search.rarity.length + search.set.length + (search.region ? 1 : 0);
+    search.type.length +
+    search.rarity.length +
+    search.set.length +
+    (search.region ? 1 : 0) +
+    (search.artist ? 1 : 0);
+  // The illustrator is named, not counted: arriving from their tile, the name is the
+  // only sign on a phone of whose cards these are.
+  const countedFilters = activeFilterCount - (search.artist ? 1 : 0);
   const phoneSummary = [
-    search.q ? `“${search.q}”` : 'Search cards',
+    search.q ? `“${search.q}”` : search.artist ? null : 'Search cards',
+    search.artist ?? null,
     search.owned === 'owned' ? 'Owned' : search.owned === 'missing' ? 'Missing' : null,
-    activeFilterCount > 0
-      ? `${activeFilterCount} filter${activeFilterCount === 1 ? '' : 's'}`
-      : null,
+    countedFilters > 0 ? `${countedFilters} filter${countedFilters === 1 ? '' : 's'}` : null,
   ]
     .filter(Boolean)
     .join(' · ');
 
   function removeChip(key: string): void {
     if (key === 'region') return updateSearch({ region: undefined });
+    if (key === 'artist') return updateSearch({ artist: undefined });
     const [kind, value] = key.split(':');
     if (kind === 'type') updateSearch({ type: search.type.filter((item) => item !== value) });
     else if (kind === 'rarity')
@@ -359,7 +369,15 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
               <button
                 type="button"
                 className="text-button"
-                onClick={() => updateSearch({ type: [], rarity: [], set: [], region: undefined })}
+                onClick={() =>
+                  updateSearch({
+                    type: [],
+                    rarity: [],
+                    set: [],
+                    region: undefined,
+                    artist: undefined,
+                  })
+                }
               >
                 Clear all
               </button>
