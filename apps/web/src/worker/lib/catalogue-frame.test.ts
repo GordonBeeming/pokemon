@@ -45,6 +45,27 @@ describe('catalogue frame metadata', () => {
     expect(detail).toMatchObject({ frameType: 'grass', setCode: 'BS', rarityKey: 'HV' });
   });
 
+  it('colours a card with no stored types from its older subtype, in frames and the type filter', async () => {
+    const db = setup();
+    await db
+      .prepare(
+        `INSERT INTO catalogue_cards
+          (id,name,language,category,set_id,set_name,number,subtype,created_at,updated_at)
+         VALUES ('card-5','Squirtle','en','pokemon','base','Base','63','Water',1,1)`,
+      )
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO card_sources(provider,source_id,card_id,language,source_updated_at,checksum,active,imported_at)
+         VALUES ('tcgdex','base-63','card-5','en',1,'checksum',1,1)`,
+      )
+      .run();
+    const detail = await getCardDetail(db, 'owner', 'card-5');
+    expect(detail).toMatchObject({ frameType: 'water' });
+    const water = await searchCards(db, 'owner', { limit: 10, offset: 0, frameTypes: ['water'] });
+    expect(water.cards.map((card) => card.id)).toEqual(['card-5']);
+  });
+
   it('falls back to the set id when the set has no code yet', async () => {
     const db = setup();
     await db

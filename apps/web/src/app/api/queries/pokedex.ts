@@ -1,4 +1,4 @@
-import { NATIONAL_POKEDEX_SIZE, artUrlSchema } from '@pokedex/shared';
+import { NATIONAL_POKEDEX_SIZE, artUrlSchema, rarityKeySchema } from '@pokedex/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { apiFetch } from '../client';
@@ -19,7 +19,9 @@ const nationalPokedexResponseSchema = z
               cardId: z.string(),
               cardName: z.string(),
               setName: z.string(),
+              setCode: z.string().optional(),
               number: z.string(),
+              rarityKey: rarityKeySchema.nullable().optional(),
               imageLowUrl: artUrlSchema,
               imageHighUrl: artUrlSchema,
               explicit: z.boolean(),

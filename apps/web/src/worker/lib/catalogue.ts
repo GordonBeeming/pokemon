@@ -818,7 +818,9 @@ export interface NationalPokedexCoverage {
     cardId: string;
     cardName: string;
     setName: string;
+    setCode: string;
     number: string;
+    rarityKey: RarityKey | null;
     imageLowUrl: string | null;
     imageHighUrl: string | null;
     explicit: boolean;
@@ -843,7 +845,8 @@ export async function listNationalPokedexCoverage(
            AND (c.owner_id IS NULL OR c.owner_id = ?1)
          GROUP BY c.pokedex_number
        ), ranked AS (
-         SELECT c.pokedex_number, c.id, c.name, c.set_name, c.number,
+         SELECT c.pokedex_number, c.id, c.name, c.set_name, c.number, c.rarity,
+           COALESCE(set_meta.abbreviation, upper(c.set_id)) AS set_code,
            low.object_key AS low_key, high.object_key AS high_key,
            EXISTS (
              SELECT 1 FROM card_sources source
@@ -863,7 +866,8 @@ export async function listNationalPokedexCoverage(
            AND c.pokedex_number BETWEEN 1 AND 1025
            AND (c.owner_id IS NULL OR c.owner_id = ?1)
        ), preferred AS (
-         SELECT choice.pokedex_number, card.id, card.name, card.set_name, card.number,
+         SELECT choice.pokedex_number, card.id, card.name, card.set_name, card.number, card.rarity,
+           COALESCE(preferred_set.abbreviation, upper(card.set_id)) AS set_code,
            low.object_key AS low_key, high.object_key AS high_key,
            EXISTS (
              SELECT 1 FROM card_sources source
@@ -873,6 +877,8 @@ export async function listNationalPokedexCoverage(
          JOIN catalogue_cards card ON card.id = choice.card_id
            AND card.is_active = 1 AND card.category = 'pokemon'
            AND (card.owner_id IS NULL OR card.owner_id = ?1)
+         LEFT JOIN catalogue_sets preferred_set
+           ON preferred_set.set_id = card.set_id AND preferred_set.language = card.language
          LEFT JOIN art_manifest low ON low.card_id = card.id AND low.variant = 'low'
          LEFT JOIN art_manifest high ON high.card_id = card.id AND high.variant = 'high'
          WHERE choice.owner_id = ?1
@@ -882,6 +888,8 @@ export async function listNationalPokedexCoverage(
          CASE WHEN preferred.id IS NOT NULL THEN preferred.name ELSE ranked.name END AS name,
          CASE WHEN preferred.id IS NOT NULL THEN preferred.set_name ELSE ranked.set_name END AS set_name,
          CASE WHEN preferred.id IS NOT NULL THEN preferred.number ELSE ranked.number END AS number,
+         CASE WHEN preferred.id IS NOT NULL THEN preferred.set_code ELSE ranked.set_code END AS set_code,
+         CASE WHEN preferred.id IS NOT NULL THEN preferred.rarity ELSE ranked.rarity END AS rarity,
          CASE WHEN preferred.id IS NOT NULL THEN preferred.low_key ELSE ranked.low_key END AS low_key,
          CASE WHEN preferred.id IS NOT NULL THEN preferred.high_key ELSE ranked.high_key END AS high_key,
          CASE WHEN preferred.id IS NOT NULL THEN preferred.has_tcgdex_source
@@ -901,7 +909,9 @@ export async function listNationalPokedexCoverage(
       id: string;
       name: string;
       set_name: string;
+      set_code: string;
       number: string;
+      rarity: string | null;
       low_key: string | null;
       high_key: string | null;
       has_tcgdex_source: number;
@@ -923,7 +933,9 @@ export async function listNationalPokedexCoverage(
       cardId: row.id,
       cardName: row.name,
       setName: row.set_name,
+      setCode: row.set_code,
       number: row.number,
+      rarityKey: rarityKeyFor(row.rarity),
       imageLowUrl:
         row.low_key || row.has_tcgdex_source === 1
           ? `/api/art/${encodeURIComponent(row.id)}/low`
@@ -1026,11 +1038,23 @@ interface FrameFields {
   rarityKey: RarityKey | null;
 }
 
+// Cards imported before the `types` column carry a Pokémon's elemental types in
+// `subtype` ("Water", or "Fire, Water" for dual types), so frames and the type
+// filter fall back to it until a catalogue sync fills `types`.
+function pokemonSubtypeTypes(row: CardRow): string[] | null {
+  if (row.category !== 'pokemon' || !row.subtype) return null;
+  const types = row.subtype
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return types.length > 0 ? types : null;
+}
+
 function frameFields(row: CardRow): FrameFields {
   return {
     frameType: frameTypeFor({
       category: row.category,
-      types: rowTypes(row),
+      types: rowTypes(row) ?? pokemonSubtypeTypes(row),
       subtype: row.subtype,
       name: row.name,
     }),
@@ -1210,7 +1234,9 @@ function frameTypeWhere(types: FrameType[], values: unknown[]): string {
     const typedPlaceholders = rawNames.map((_, index) => `?${values.length + index + 1}`);
     values.push(...rawNames.map((name) => name.toLowerCase()));
     clauses.push(
-      `(c.category = 'pokemon' AND lower(json_extract(c.types, '$[0]')) IN (${typedPlaceholders.join(',')}))`,
+      `(c.category = 'pokemon' AND lower(trim(COALESCE(json_extract(c.types, '$[0]'),
+         CASE WHEN instr(c.subtype, ',') > 0 THEN substr(c.subtype, 1, instr(c.subtype, ',') - 1)
+           ELSE c.subtype END))) IN (${typedPlaceholders.join(',')}))`,
     );
     const energyTypedPlaceholders = rawNames.map((_, index) => `?${values.length + index + 1}`);
     values.push(...rawNames.map((name) => name.toLowerCase()));

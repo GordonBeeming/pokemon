@@ -205,10 +205,8 @@ export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
             const state = coverageByNumber.get(entry.number);
             const owned = (state?.ownedCards ?? 0) > 0;
             const representative = state?.representative;
-            // The representative sub-object carries no frameType/rarityKey of its
-            // own (contract A never widened for it), but the coverage entry's own
-            // `types` does — the same derivation the worker uses for every other
-            // card, just run here since this one card has no server-computed frame.
+            // The coverage entry's own `types` gives the frame colour, derived the
+            // same way the worker does for every other card.
             const frameType = state
               ? frameTypeFor({ category: 'pokemon', types: state.types, name: entry.name })
               : null;
@@ -221,9 +219,9 @@ export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
                         id: representative.cardId,
                         name: entry.name,
                         frameType,
-                        setCode: null,
+                        setCode: representative.setCode ?? null,
                         number: representative.number,
-                        rarityKey: null,
+                        rarityKey: representative.rarityKey ?? null,
                         pokedexNumber: entry.number,
                         imageUrl: representative.imageLowUrl,
                       }
