@@ -6,6 +6,7 @@ import {
   cardRowsForPriceSources,
   cardSourcePage,
   extractTcgdexPrices,
+  inUseCardSourceIds,
   prunePricingData,
   setPriceSyncCursor,
   stagePriceTargets,
@@ -18,6 +19,11 @@ import { nowSeconds } from '../lib/db';
 import { recordWorkflowFailure } from '../lib/workflow-failure';
 
 const PRICE_SOURCE_PAGE = 1_000;
+// Same outage tolerance as the catalogue fetches: back off from 30s for about half an hour.
+const OUTBOUND_STEP_CONFIG = {
+  retries: { limit: 6, delay: 30_000, backoff: 'exponential' },
+  timeout: '10 minutes',
+} as const;
 const OUTBOUND_CONCURRENCY = 5;
 const DETAIL_MAX_BYTES = 2 * 1024 * 1024;
 const PRICE_OBJECT_MAX_BYTES = 25 * 1024 * 1024;
@@ -112,6 +118,9 @@ async function ensureFxRates(db: D1Database, currencies: string[]): Promise<stri
 interface PriceWorkflowPayload {
   objectKey?: string;
   fxDate?: string;
+  /** 'in-use' prices the cards people own or hold in binders; otherwise the next page
+   * of the whole catalogue, continuing from the stored cursor. */
+  scope?: 'in-use' | 'catalogue';
 }
 
 export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWorkflowPayload> {
@@ -120,6 +129,10 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
     step: WorkflowStep,
   ): Promise<void> {
     const runId = `price_sync_${event.instanceId}`;
+    // The in-use pass never moves the catalogue cursor, so it can't skip cards the
+    // rolling catalogue pass hasn't reached yet.
+    const inUse = event.payload.scope === 'in-use';
+    const movesCursor = !event.payload.objectKey && !inUse;
     const startedAt = Date.now();
     let currentStep = 'begin-price-run';
     try {
@@ -140,12 +153,19 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
         targetCardIds = [...new Set(rows.map((row) => row.cardId))];
       } else {
         currentStep = 'select-price-sources';
-        const page = await step.do('select-price-sources', () =>
-          cardSourcePage(this.env.DB, PRICE_SOURCE_PAGE),
+        const page = await step.do('select-price-sources', async () =>
+          inUse
+            ? // Capped at one page so a large shared collection still fits one step; the
+              // catalogue pass picks up anything beyond it.
+              {
+                ids: (await inUseCardSourceIds(this.env.DB)).slice(0, PRICE_SOURCE_PAGE),
+                cursor: null,
+              }
+            : cardSourcePage(this.env.DB, PRICE_SOURCE_PAGE),
         );
         cursor = page.cursor;
         currentStep = 'fetch-price-sources';
-        const prices = await step.do('fetch-price-sources', () =>
+        const prices = await step.do('fetch-price-sources', OUTBOUND_STEP_CONFIG, () =>
           mapConcurrent(page.ids, async (sourceId) =>
             extractTcgdexPrices(
               await fetchJson(`https://api.tcgdex.net/v2/en/cards/${encodeURIComponent(sourceId)}`),
@@ -169,7 +189,7 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
           )
             .bind(nowSeconds(), runId)
             .run();
-          if (!event.payload.objectKey) await setPriceSyncCursor(this.env.DB, cursor);
+          if (movesCursor) await setPriceSyncCursor(this.env.DB, cursor);
           return null;
         });
         return;
@@ -203,7 +223,7 @@ export class PriceSyncWorkflow extends WorkflowEntrypoint<CloudflareEnv, PriceWo
       );
       currentStep = 'cleanup-prices';
       await step.do('cleanup-prices', async () => {
-        if (!event.payload.objectKey) await setPriceSyncCursor(this.env.DB, cursor);
+        if (movesCursor) await setPriceSyncCursor(this.env.DB, cursor);
         if (event.payload.objectKey?.startsWith('staged/prices/'))
           await this.env.ART.delete(event.payload.objectKey);
         await prunePricingData(this.env.DB);

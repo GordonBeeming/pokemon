@@ -179,3 +179,24 @@ export function useCatalogueSyncProgress(workflowId: string | null) {
     retry: false,
   });
 }
+
+/** POST /api/prices/refresh — prices the cards people own or hold in binders now. */
+export function startPriceRefresh() {
+  return apiFetch('/api/prices/refresh', syncStartEnvelope, { method: 'POST' }).then(
+    (body) => body.workflowId,
+  );
+}
+
+export function usePriceRefreshProgress(workflowId: string | null) {
+  return useQuery({
+    queryKey: ['settings', 'price-refresh', workflowId ?? ''] as const,
+    queryFn: ({ signal }) =>
+      apiFetch(`/api/prices/refresh/${encodeURIComponent(workflowId ?? '')}`, syncStatusEnvelope, {
+        signal,
+      }).then((body) => body.status),
+    enabled: workflowId !== null,
+    refetchInterval: (query) =>
+      query.state.data === 'complete' || query.state.error ? false : 4000,
+    retry: false,
+  });
+}

@@ -61,6 +61,8 @@
     "run_worker_first": true,
   },
   "triggers": {
-    "crons": ["17 3 * * *"],
+    // 17:00 UTC is 3am in Brisbane (no daylight saving): nightly exchange rates, prices
+    // and backups, plus the weekly catalogue sync on Sunday mornings.
+    "crons": ["0 17 * * *"],
   },
 }

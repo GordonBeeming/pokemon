@@ -12,3 +12,4 @@ apps/web/.env*
 .playwright-cli/
 playwright-report/
 test-results/
+worker-startup.cpuprofile

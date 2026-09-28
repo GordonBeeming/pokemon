@@ -463,6 +463,28 @@ export async function cardSourcePage(
   };
 }
 
+/**
+ * TCGdex source ids for the cards whose prices people actually see: any card someone
+ * owns, or holds or targets in a binder. Pricing these first keeps collection
+ * estimates and shortages current without walking the whole catalogue each night.
+ */
+export async function inUseCardSourceIds(db: D1Database): Promise<string[]> {
+  const result = await db
+    .prepare(
+      `WITH in_use(card_id) AS (
+         SELECT card_id FROM collection_cards WHERE quantity > 0
+         UNION SELECT card_id FROM binder_slots WHERE card_id IS NOT NULL
+         UNION SELECT assigned_card_id FROM binder_slots WHERE assigned_card_id IS NOT NULL
+       )
+       SELECT DISTINCT source.source_id
+       FROM card_sources source JOIN in_use ON in_use.card_id = source.card_id
+       WHERE source.provider = 'tcgdex' AND source.language = 'en' AND source.active = 1
+       ORDER BY source.source_id`,
+    )
+    .all<{ source_id: string }>();
+  return result.results.map((row) => row.source_id);
+}
+
 export async function cardRowsForPriceSources(
   db: D1Database,
   prices: Array<{ sourceId: string; candidates: PriceCandidate[] }>,

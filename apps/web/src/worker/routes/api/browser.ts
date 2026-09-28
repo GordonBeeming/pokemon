@@ -39,6 +39,7 @@ import { cachedTcgdexSpeciesPreviews, discoverTcgdexSpecies } from '../../lib/tc
 import { collectionSummary } from '../../lib/collection';
 import { asPositiveInt } from '../../lib/db';
 import { requireAdmin, requireSession } from '../../lib/guards';
+import { runningCatalogueSync } from '../../lib/nightly';
 import { logAudit } from '../../lib/auth';
 import { ApplicationError } from '../../lib/log';
 import { priceCoverage } from '../../lib/pricing';
@@ -142,6 +143,7 @@ browserApiRoutes.use('/art*', requireSession);
 // Every member can browse set codes; only editing one is admin-only, so that
 // guard is inline on the PATCH route below rather than on this wildcard.
 browserApiRoutes.use('/sets*', requireSession);
+browserApiRoutes.use('/prices*', requireSession);
 
 browserApiRoutes.get('/dashboard', async (c) => {
   try {
@@ -367,27 +369,11 @@ browserApiRoutes.post('/catalogue/national/discover', async (c) => {
 });
 browserApiRoutes.post('/catalogue/full-sync', requireAdmin, async (c) => {
   try {
-    const running = await c.env.DB.prepare(
-      `SELECT id FROM sync_runs
-       WHERE provider = 'tcgdex' AND language = 'en' AND complete_source = 1
-         AND status = 'running'
-       ORDER BY started_at DESC LIMIT 1`,
-    ).first<{ id: string }>();
-    if (running) {
-      const workflowId = running.id.replace(/^sync_/u, '');
-      // A run whose workflow errored or was terminated never reaches its own
-      // completion step, so its row would stay 'running' and block every later
-      // sync; retire it here and start a fresh one instead of handing back a dead id.
-      const status = await (await c.env.CATALOGUE_SYNC.get(workflowId)).status();
-      if (status.status !== 'errored' && status.status !== 'terminated')
-        return c.json({ ok: true, workflowId }, 202);
-      await c.env.DB.prepare(
-        `UPDATE sync_runs SET completed_at = ?1, status = 'failed', refusal_reason = ?2
-         WHERE id = ?3 AND status = 'running'`,
-      )
-        .bind(Math.floor(Date.now() / 1000), `workflow_${status.status}`, running.id)
-        .run();
-    }
+    const running = await runningCatalogueSync(
+      c.env.DB,
+      async (id) => (await (await c.env.CATALOGUE_SYNC.get(id)).status()).status,
+    );
+    if (running) return c.json({ ok: true, workflowId: running }, 202);
     const ownerId = sessionOwner(c);
     const rate = await c.env.AUTH_COORDINATOR.getByName(`catalogue:${ownerId}`).rateLimit(
       'full-sync',
@@ -420,6 +406,46 @@ browserApiRoutes.get('/catalogue/full-sync/:id', async (c) => {
     const status = await workflow.status();
     if (status.status === 'errored' || status.status === 'terminated')
       return c.json({ ok: false, error: 'catalogue_sync_failed' }, 503);
+    return c.json({ ok: true, status: status.status }, status.status === 'complete' ? 200 : 202);
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+// Prices the cards people own or hold in binders now, rather than waiting for the
+// nightly run. The run fetches its own exchange rates if today's are missing.
+browserApiRoutes.post('/prices/refresh', requireAdmin, async (c) => {
+  try {
+    const ownerId = sessionOwner(c);
+    const rate = await c.env.AUTH_COORDINATOR.getByName(`prices:${ownerId}`).rateLimit(
+      'price-refresh',
+      6,
+      24 * 60 * 60,
+      Math.floor(Date.now() / 1000),
+    );
+    if (!rate.allowed) {
+      c.header('retry-after', String(rate.retryAfter));
+      return c.json({ ok: false, error: 'rate_limited' }, 429);
+    }
+    const workflow = await c.env.PRICE_SYNC.create({
+      id: `prices-refresh-${crypto.randomUUID()}`,
+      params: { scope: 'in-use' },
+    });
+    await logAudit(c.env.DB, {
+      actor: ownerId,
+      action: 'prices.refresh_started',
+      target: workflow.id,
+      meta: { requestId: c.get('requestId') },
+    });
+    return c.json({ ok: true, workflowId: workflow.id }, 202);
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.get('/prices/refresh/:id', requireAdmin, async (c) => {
+  try {
+    const status = await (await c.env.PRICE_SYNC.get(c.req.param('id'))).status();
+    if (status.status === 'errored' || status.status === 'terminated')
+      return c.json({ ok: false, error: 'price_refresh_failed' }, 503);
     return c.json({ ok: true, status: status.status }, status.status === 'complete' ? 200 : 202);
   } catch (error) {
     return apiFailure(c, error);

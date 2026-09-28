@@ -562,6 +562,7 @@ describe('catalogue sync rewrites the shared catalogue, so only admins may start
     '/catalogue/sync/runs',
     '/catalogue/sync/runs/any-run/cards',
     '/catalogue/sync/runs/any-run/finalize',
+    '/prices/refresh',
   ])('member B gets 403 on POST %s', async (path) => {
     const response = await apiRoutes.request(path, browserInit(cookieB, 'POST', {}), env);
     expect(response.status).toBe(403);

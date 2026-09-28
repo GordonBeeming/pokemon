@@ -8,7 +8,8 @@ import type { ChallengeKind, RateLimitResult } from './lib/guards';
 import { ApplicationError, describeError, logError, logInfo } from './lib/log';
 import { applySecurityHeaders } from './lib/security-headers';
 import { latestFullEnglishCatalogueSync } from './lib/catalogue';
-import { runScheduledBackups, signedBackupWorkflowId } from './lib/backup';
+import { signedBackupWorkflowId } from './lib/backup';
+import { runNightlyJobs, runningCatalogueSync } from './lib/nightly';
 import type { AuthVars } from './lib/types';
 export { BackupWorkflow } from './workflows/backup';
 export { CatalogueFetcher, CatalogueSyncWorkflow } from './workflows/catalogue';
@@ -247,17 +248,31 @@ app.onError((error, c) => {
 });
 
 function scheduled(
-  _controller: ScheduledController,
+  controller: ScheduledController,
   env: CloudflareEnv,
   ctx: ExecutionContext,
 ): void {
   ctx.waitUntil(
-    runScheduledBackups(env.DB, async (ownerId) =>
-      env.BACKUP.create({
-        id: await signedBackupWorkflowId('backup', ownerId, env.SESSION_SECRET),
-        params: { ownerId, operation: 'create' },
-      }),
-    ).catch((error) => logError({ evt: 'backup.scheduled_run_failed', err: describeError(error) })),
+    runNightlyJobs({
+      db: env.DB,
+      now: new Date(controller.scheduledTime),
+      startFx: (id) => env.FX_SYNC.create({ id, params: { currencies: ['USD', 'EUR'] } }),
+      startPrices: (id, scope) => env.PRICE_SYNC.create({ id, params: { scope } }),
+      startCatalogue: (id) =>
+        env.CATALOGUE_SYNC.create({ id, params: { language: 'en', actorId: 'scheduled' } }),
+      startBackup: async (ownerId) =>
+        env.BACKUP.create({
+          id: await signedBackupWorkflowId('backup', ownerId, env.SESSION_SECRET),
+          params: { ownerId, operation: 'create' },
+        }),
+      runningCatalogueSync: () =>
+        runningCatalogueSync(
+          env.DB,
+          async (id) => (await (await env.CATALOGUE_SYNC.get(id)).status()).status,
+        ),
+    }).catch((error: unknown) =>
+      logError({ evt: 'nightly.run_failed', err: describeError(error) }),
+    ),
   );
 }
 

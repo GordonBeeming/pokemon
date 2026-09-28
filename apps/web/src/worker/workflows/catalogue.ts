@@ -25,8 +25,11 @@ const LIST_MAX_BYTES = 25 * 1024 * 1024;
 const DETAIL_MAX_BYTES = 2 * 1024 * 1024;
 const CATALOGUE_STAGE_CHUNK_SIZE = 250;
 const OUTBOUND_CONCURRENCY = 5;
+// TCGdex has short outages (it answered 521/526 then 404 for a minute once), so
+// fetches back off from 30s and keep trying for about half an hour before a run
+// gives up; the nightly runs have nobody watching to press retry.
 const FETCH_STEP_CONFIG = {
-  retries: { limit: 4, delay: 1_000, backoff: 'exponential' },
+  retries: { limit: 6, delay: 30_000, backoff: 'exponential' },
   timeout: '5 minutes',
 } as const;
 

@@ -154,10 +154,9 @@ test('pagination text and the grid agree on which page is showing', async ({ pag
     .getByRole('navigation', { name: 'Catalogue pages' })
     .getByRole('button', { name: '2', exact: true })
     .click();
-  // The text already says page 2's range …
-  await expect(status).toHaveText(/^Showing 51 to 100 of \d+ cards\.$/);
-  // … but the first tile is still page 1's card. This is the bug: on a passing
-  // run this assertion should hold immediately (no page-1 leftovers under a
-  // page-2 header), so it's written to fail while the bug exists.
+  // The status line stays blank while page 2 loads (the grid shows its skeleton), and a
+  // cold server can take a while on this filtered query, hence the longer wait. Once it
+  // reads page 2's range, the first tile must already be a page 2 card.
+  await expect(status).toHaveText(/^Showing 51 to 100 of \d+ cards\.$/, { timeout: 20_000 });
   expect(await firstCard.getAttribute('aria-label')).not.toBe(page1Label);
 });

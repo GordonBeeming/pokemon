@@ -3,8 +3,10 @@ import { useEffect, useState, type ReactElement } from 'react';
 import { ApiError } from '../../api/client';
 import {
   startCatalogueSync,
+  startPriceRefresh,
   useCatalogueLastSynced,
   useCatalogueSyncProgress,
+  usePriceRefreshProgress,
 } from '../../api/queries/settings';
 import { Icon } from '../../ui/icons';
 import { useToast } from '../../ui/Toast';
@@ -79,34 +81,105 @@ export function CatalogueSyncTab(): ReactElement {
 
   const running = workflowId !== null && !progress.isError && progress.data !== 'complete';
   return (
-    <section className="settings-card" aria-labelledby="sync-heading">
+    <>
+      <section className="settings-card" aria-labelledby="sync-heading">
+        <div className="settings-card-header">
+          <h2 id="sync-heading">Catalogue</h2>
+          <span className="settings-help">Admins</span>
+        </div>
+        <p className="settings-help">
+          Last synced from TCGdex{' '}
+          <strong>
+            {lastSynced.isLoading
+              ? '…'
+              : lastSynced.data
+                ? formatDateTime(lastSynced.data)
+                : lastSynced.isError
+                  ? 'unknown'
+                  : 'never'}
+          </strong>
+          . New sets and cards appear for everyone. It also runs by itself every Sunday at 3am
+          Brisbane time.
+        </p>
+        {running ? (
+          <p role="status" className="sync-progress">
+            <span className="sync-spinner" aria-hidden="true" />
+            {STATUS_LABELS[progress.data ?? 'queued'] ?? `Sync ${progress.data ?? 'starting'}…`}
+          </p>
+        ) : null}
+        {progress.isError ? (
+          <p role="alert" className="panel-error">
+            The sync stopped before it finished. Nothing already in the catalogue was removed. Try
+            again.
+          </p>
+        ) : null}
+        <button
+          type="button"
+          className="settings-start"
+          disabled={starting || running}
+          onClick={() => void start()}
+        >
+          <Icon name="sync" />
+          {running ? 'Syncing…' : 'Sync now'}
+        </button>
+      </section>
+      <PriceRefreshCard />
+    </>
+  );
+}
+
+function PriceRefreshCard(): ReactElement {
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  const [workflowId, setWorkflowId] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const progress = usePriceRefreshProgress(workflowId);
+
+  useEffect(() => {
+    if (progress.data !== 'complete') return;
+    void queryClient.invalidateQueries({ queryKey: ['catalogue'] });
+    void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    toast('success', 'Prices are up to date.');
+    setWorkflowId(null);
+  }, [progress.data, queryClient, toast]);
+
+  async function start(): Promise<void> {
+    setStarting(true);
+    try {
+      setWorkflowId(await startPriceRefresh());
+    } catch (cause) {
+      toast(
+        'error',
+        cause instanceof ApiError && cause.code === 'rate_limited'
+          ? 'Prices can be refreshed a few times a day. Try again later.'
+          : 'The price refresh could not be started. Try again.',
+      );
+    } finally {
+      setStarting(false);
+    }
+  }
+
+  const running = workflowId !== null && !progress.isError && progress.data !== 'complete';
+  return (
+    <section className="settings-card" aria-labelledby="prices-heading">
       <div className="settings-card-header">
-        <h2 id="sync-heading">Catalogue</h2>
+        <h2 id="prices-heading">Prices</h2>
         <span className="settings-help">Admins</span>
       </div>
       <p className="settings-help">
-        Last synced from TCGdex{' '}
-        <strong>
-          {lastSynced.isLoading
-            ? '…'
-            : lastSynced.data
-              ? formatDateTime(lastSynced.data)
-              : lastSynced.isError
-                ? 'unknown'
-                : 'never'}
-        </strong>
-        . New sets and cards appear for everyone.
+        Prices for every card someone owns or has in a binder, converted to A$. They refresh by
+        themselves every night at 3am Brisbane time, along with the rest of the catalogue a little
+        at a time.
       </p>
       {running ? (
         <p role="status" className="sync-progress">
           <span className="sync-spinner" aria-hidden="true" />
-          {STATUS_LABELS[progress.data ?? 'queued'] ?? `Sync ${progress.data ?? 'starting'}…`}
+          Fetching prices from TCGdex…
         </p>
       ) : null}
       {progress.isError ? (
         <p role="alert" className="panel-error">
-          The sync stopped before it finished. Nothing already in the catalogue was removed. Try
-          again.
+          The price refresh stopped before it finished. Existing prices were kept. Try again.
         </p>
       ) : null}
       <button
@@ -116,7 +189,7 @@ export function CatalogueSyncTab(): ReactElement {
         onClick={() => void start()}
       >
         <Icon name="sync" />
-        {running ? 'Syncing…' : 'Sync now'}
+        {running ? 'Refreshing…' : 'Refresh prices'}
       </button>
     </section>
   );

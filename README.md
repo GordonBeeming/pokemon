@@ -63,7 +63,7 @@ Local Worker state is isolated by Wrangler despite sharing the production bindin
 
 ## Production catalogue
 
-The production Worker exposes catalogue, pricing, FX, and backup Workflows without paid-plan schedules. Start the initial English catalogue import with:
+The production Worker exposes catalogue, pricing, FX, and backup Workflows. Start an English catalogue import by hand with:
 
 ```sh
 pnpm --dir apps/web exec wrangler workflows trigger pokedex-catalogue-sync \
@@ -77,4 +77,4 @@ pnpm --dir apps/web exec wrangler workflows instances list pokedex-catalogue-syn
   --config wrangler.jsonc
 ```
 
-Cloudflare requires a paid Workers plan before schedules can be attached directly to these Workflows; on-demand imports remain available without those schedule declarations.
+The Worker's cron trigger (`0 17 * * *`, 3am in Brisbane) starts the scheduled work each night: exchange rates, prices for every card someone owns or has in a binder, the next 1,000 catalogue cards' prices, and a backup per active user. On Sunday mornings it also runs the full catalogue sync. Admins can start a catalogue sync or a price refresh from Settings › Catalogue at any time.

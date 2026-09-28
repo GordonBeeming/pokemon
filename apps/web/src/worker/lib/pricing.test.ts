@@ -6,6 +6,7 @@ import {
   beginPriceSyncRun,
   cardRowsForPriceSources,
   cardSourcePage,
+  inUseCardSourceIds,
   priceForCard,
   stagePrices,
   stagePriceTargets,
@@ -109,5 +110,42 @@ describe('price source availability', () => {
     expect(database.prepare('SELECT COUNT(*) AS count FROM price_snapshots').get()).toEqual({
       count: 1,
     });
+  });
+});
+
+describe('in-use price sources', () => {
+  it('selects cards that are owned, targeted in a binder, or placed in one, and nothing else', async () => {
+    const { database, db } = priceDatabase();
+    database.exec(`
+      INSERT INTO users (id, label, created_at) VALUES ('owner', 'Owner', 1);
+      INSERT INTO catalogue_cards
+        (id, name, language, category, set_id, set_name, number, created_at, updated_at)
+      VALUES
+        ('card-owned', 'Owned', 'en', 'pokemon', 'set-1', 'Set', '1', 1, 1),
+        ('card-target', 'Target', 'en', 'pokemon', 'set-1', 'Set', '2', 1, 1),
+        ('card-placed', 'Placed', 'en', 'pokemon', 'set-1', 'Set', '3', 1, 1),
+        ('card-zero', 'Zero copies', 'en', 'pokemon', 'set-1', 'Set', '4', 1, 1),
+        ('card-unused', 'Unused', 'en', 'pokemon', 'set-1', 'Set', '5', 1, 1);
+      INSERT INTO card_sources (provider, source_id, card_id, language, source_updated_at, checksum, active, imported_at)
+      VALUES
+        ('tcgdex', 'src-owned', 'card-owned', 'en', 1, 'c', 1, 1),
+        ('tcgdex', 'src-target', 'card-target', 'en', 1, 'c', 1, 1),
+        ('tcgdex', 'src-placed', 'card-placed', 'en', 1, 'c', 1, 1),
+        ('tcgdex', 'src-zero', 'card-zero', 'en', 1, 'c', 1, 1),
+        ('tcgdex', 'src-unused', 'card-unused', 'en', 1, 'c', 1, 1);
+      INSERT INTO collection_cards (owner_id, card_id, quantity, revision, updated_at)
+      VALUES ('owner', 'card-owned', 1, 1, 1), ('owner', 'card-zero', 0, 1, 1),
+        ('owner', 'card-placed', 1, 1, 1);
+      INSERT INTO binders (id, owner_id, name, created_at, updated_at)
+      VALUES ('binder-1', 'owner', 'Binder', 1, 1);
+      INSERT INTO binder_versions (id, binder_id, version_number, status, layout_kind, rows, columns, created_at)
+      VALUES ('version-1', 'binder-1', 1, 'draft', '2x2', 2, 2, 1);
+      INSERT INTO binder_pages (id, binder_version_id, position, kind) VALUES ('page-1', 'version-1', 0, 'slots');
+      INSERT INTO binder_slots (binder_page_id, row_index, column_index, card_id, entry_kind, assigned_card_id)
+      VALUES
+        ('page-1', 0, 0, 'card-target', 'exact-card', NULL),
+        ('page-1', 0, 1, 'card-placed', 'exact-card', 'card-placed');
+    `);
+    expect(await inUseCardSourceIds(db)).toEqual(['src-owned', 'src-placed', 'src-target']);
   });
 });
