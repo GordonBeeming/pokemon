@@ -63,7 +63,7 @@ test('tapping a tile filters the catalogue to that illustrator', async ({ page }
   await expect(tile).toBeVisible();
   await tile.click();
 
-  await expect(page.getByRole('heading', { name: 'Find a physical card.' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: target.name })).toBeVisible();
   await expect.poll(() => new URL(page.url()).searchParams.get('artist')).toBe(target.name);
   // Phones keep the chips behind the summary pill, which names the illustrator instead.
   const indicator = isPhoneProject(test.info())
@@ -89,10 +89,20 @@ test('the inspector artist link filters the catalogue and closes the inspector',
   await expect(dialog).toHaveCount(0);
 });
 
+/** The e2e database is shared by every project in a run, so each star test starts and
+ * ends with the illustrator unstarred. */
+async function unstar(request: APIRequestContext, name: string): Promise<void> {
+  const response = await request.put('/api/illustrators/favorites', {
+    data: { name, favorite: false },
+  });
+  expect(response.ok(), 'unstar illustrator').toBe(true);
+}
+
 test('a starred illustrator moves into Favourites at the top and stays there after a reload', async ({
   page,
 }) => {
   const target = await firstIllustrator(page.request);
+  await unstar(page.request, target.name);
   await page.goto('/illustrators');
   await page.getByLabel('Find an illustrator').fill(target.name);
 
@@ -106,4 +116,27 @@ test('a starred illustrator moves into Favourites at the top and stays there aft
 
   await page.getByRole('button', { name: `Unfavourite ${target.name}`, exact: true }).click();
   await expect(favorites).toHaveCount(0);
+});
+
+test("an illustrator's catalogue page is titled with their name and can star them", async ({
+  page,
+}) => {
+  const target = await firstIllustrator(page.request);
+  await unstar(page.request, target.name);
+  await page.goto(`/catalogue?artist=${encodeURIComponent(target.name)}`);
+  await expect(page.getByRole('heading', { level: 1, name: target.name })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Back to Illustrators' })).toBeVisible();
+
+  await page.getByRole('button', { name: `Favourite ${target.name}`, exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: `Unfavourite ${target.name}`, exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole('link', { name: 'Back to Illustrators' }).click();
+  await expect(
+    page
+      .getByRole('region', { name: 'Favourites' })
+      .locator('.illustrator-name', { hasText: target.name }),
+  ).toBeVisible();
+  await unstar(page.request, target.name);
 });

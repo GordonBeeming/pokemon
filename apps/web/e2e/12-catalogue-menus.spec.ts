@@ -22,20 +22,15 @@ test('the catalogue opens on its bar and cards, with copy and bulk tools behind 
   await expect(page).toHaveURL(/\/binders$/);
 });
 
-test('the More menu opens each rare action in its own dialog, and the copy cap lives in the Copy menu', async ({
+test('the More menu opens bulk add in its own dialog, and the copy cap lives in the Copy menu', async ({
   page,
 }) => {
   await page.goto('/catalogue');
   await ensureCatalogueControlsOpen(page);
 
   await page.getByRole('button', { name: 'More catalogue actions' }).click();
-  await page.getByRole('menuitem', { name: /^Add a card that is not in TCGdex/ }).click();
-  const custom = page.getByRole('dialog', { name: 'Add a card that is not in TCGdex' });
-  await expect(custom.getByLabel('Custom card name')).toBeVisible();
-  await custom.getByRole('button', { name: 'Cancel' }).click();
-  await expect(custom).toHaveCount(0);
-
-  await page.getByRole('button', { name: 'More catalogue actions' }).click();
+  // Custom cards moved to Settings: the catalogue menu no longer offers them.
+  await expect(page.getByRole('menuitem', { name: /not in TCGdex/ })).toHaveCount(0);
   await page.getByRole('menuitem', { name: /^Add these results to a binder/ }).click();
   const bulk = page.getByRole('dialog', { name: 'Add these results to a binder' });
   // The full catalogue is over the 2,000 cap, so the dialog says so and won't add.
@@ -55,4 +50,15 @@ test('the More menu opens each rare action in its own dialog, and the copy cap l
   ).toBeVisible();
   await expect(copyMenu.getByRole('menuitem', { name: /^Displayed order/ })).toBeDisabled();
   await expect(copyMenu.getByRole('menuitem', { name: /^This page/ })).toBeEnabled();
+});
+
+test('Settings adds a custom card, which the catalogue then finds by name', async ({ page }) => {
+  const name = `Custom e2e ${Date.now()}`;
+  await page.goto('/settings?tab=custom-cards');
+  await page.getByLabel('Card name').fill(name);
+  await page.getByRole('button', { name: 'Add custom card' }).click();
+  await expect(page.getByLabel('Card name')).toHaveValue('');
+
+  await page.goto(`/catalogue?q=${encodeURIComponent(name)}`);
+  await expect(page.locator('.catalogue-grid button.card-frame').first()).toBeVisible();
 });

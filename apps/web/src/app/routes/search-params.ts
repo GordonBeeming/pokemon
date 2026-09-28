@@ -138,6 +138,7 @@ export const settingsTabs = [
   'passkeys',
   'frame-colours',
   'api-tokens',
+  'custom-cards',
   'catalogue-sync',
   'people',
 ] as const;

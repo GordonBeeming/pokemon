@@ -4,6 +4,7 @@ import type { SettingsSearch } from '../routes/search-params';
 import { Icon, type IconName } from '../ui/icons';
 import { ApiTokensTab } from './settings/ApiTokensTab';
 import { CatalogueSyncTab } from './settings/CatalogueSyncTab';
+import { CustomCardsTab } from './settings/CustomCardsTab';
 import { FrameColoursTab } from './settings/FrameColoursTab';
 import { PasskeysTab } from './settings/PasskeysTab';
 import { PeopleTab } from './settings/PeopleTab';
@@ -42,6 +43,14 @@ const TABS: ReadonlyArray<{
     adminOnly: false,
     blurb: 'For the AI card skill and scripts.',
     cta: 'Manage tokens',
+  },
+  {
+    tab: 'custom-cards',
+    label: 'Custom cards',
+    icon: 'plus',
+    adminOnly: false,
+    blurb: 'Add a physical card TCGdex doesn’t list.',
+    cta: 'Add a custom card',
   },
   {
     tab: 'catalogue-sync',
@@ -97,6 +106,7 @@ export function Settings({
           {active === 'passkeys' ? <PasskeysTab /> : null}
           {active === 'frame-colours' ? <FrameColoursTab /> : null}
           {active === 'api-tokens' ? <ApiTokensTab /> : null}
+          {active === 'custom-cards' ? <CustomCardsTab /> : null}
           {active === 'catalogue-sync' && admin ? <CatalogueSyncTab /> : null}
           {active === 'people' && admin ? <PeopleTab meId={me.data?.id ?? null} /> : null}
         </div>

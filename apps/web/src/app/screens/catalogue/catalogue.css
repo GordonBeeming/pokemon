@@ -7,6 +7,10 @@
   display: inline-block;
   margin-bottom: 0.25rem;
 }
+/* "Back to …" and "Show full catalogue" sit side by side; keep them apart. */
+.back-link + .back-link {
+  margin-left: 1.25rem;
+}
 .indexing-status {
   margin: 0.4rem 0 0;
   font-size: 0.875rem;
@@ -227,4 +231,42 @@
   .catalogue-search-bar .copy-menu .menu-button-trigger {
     width: 100%;
   }
+}
+
+.artist-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.artist-heading h1 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.artist-heading h1 svg {
+  flex-shrink: 0;
+  font-size: 0.8em;
+  color: var(--muted);
+}
+.artist-favorite {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  font-size: 1.4rem;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+}
+.artist-favorite[aria-pressed='true'] {
+  color: #b45309;
+}
+.artist-favorite[aria-pressed='true'] svg {
+  fill: currentColor;
+}
+.artist-favorite:focus-visible {
+  outline: 3px solid var(--accent-deep);
+  outline-offset: 2px;
 }

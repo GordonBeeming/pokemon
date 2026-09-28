@@ -121,10 +121,13 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] keep · A species indexing status line (checking, result, or inline retry on failure), backed by
       a time-limited re-check cache · done when: opening the same species gallery twice within a few
       hours doesn't re-trigger a fresh TCGdex lookup, but "Try again" still works after a failure.
-- [ ] keep · "Add a card that is not in TCGdex…" (in the control bar's More (⋯) menu, opening a
-      dialog on desktop or a sheet on phone) creates a custom card with fixed language, category,
-      and set metadata · done when: submitting a custom card name adds a findable card without
-      choosing a language, set, or category.
+- [ ] changed · Adding a card that is not in TCGdex lives in Settings → Custom cards (rarely
+      used, so not in the catalogue's menus) and creates a custom card with fixed language,
+      category, and set metadata · done when: submitting a custom card name there adds a card the
+      catalogue finds by name, without choosing a language, set, or category.
+- [ ] new · Filtered to one illustrator, the catalogue is titled with their name (palette icon),
+      offers "Back to Illustrators", and has a star to favourite them · done when: opening an
+      illustrator shows their name as the heading and starring them there puts them in Favourites.
 - [ ] keep · A live "Showing X to Y of Z cards." status, a card gallery grid with a clear selected
       state, and an empty state "No cards match this search." · done when: an unmatched search shows
       that empty-state text instead of an empty grid.

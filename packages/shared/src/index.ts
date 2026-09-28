@@ -3,6 +3,7 @@ export * from './binder-search';
 import { NATIONAL_POKEDEX_SIZE } from './national-pokedex';
 import { FRAME_TYPES, RARITY_KEYS } from './frame';
 
+export * from './artists';
 export * from './national-pokedex';
 export * from './frame';
 export * from './people';

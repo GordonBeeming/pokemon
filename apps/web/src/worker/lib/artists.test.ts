@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
-import { artistKey, artistSpellings, preferredArtistName } from './artists';
+import { artistKey } from '@pokedex/shared';
+import { artistSpellings, preferredArtistName } from './artists';
 import { applyAllMigrations, sqliteD1 } from './d1-test-helper';
 
 const databases: DatabaseSync[] = [];

@@ -1,11 +1,19 @@
-import { NATIONAL_POKEDEX, RARITY_LABELS, type FrameType, type RarityKey } from '@pokedex/shared';
+import {
+  artistKey,
+  NATIONAL_POKEDEX,
+  RARITY_LABELS,
+  type FrameType,
+  type RarityKey,
+} from '@pokedex/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { useCatalogueSearch } from '../api/queries/catalogue';
+import { useIllustrators, useSetIllustratorFavorite } from '../api/queries/illustrators';
 import { recentlyDiscoveredSpecies, useDiscoverSpecies } from '../api/queries/pokedex';
 import { useSets } from '../api/queries/sets';
 import {
   catalogueSearch,
+  illustratorsSearch,
   pokedexSearch,
   type CatalogueOwnedFilter,
   type CatalogueSearch,
@@ -22,7 +30,6 @@ import { useToast } from '../ui/Toast';
 import { BulkAddToBinder } from './catalogue/BulkAddToBinder';
 import { CatalogueGallery } from './catalogue/CatalogueGallery';
 import { CopyMenu } from './catalogue/CopyMenu';
-import { CustomCardForm } from './catalogue/CustomCardForm';
 import { FiltersPanel, FRAME_TYPE_LABELS } from './catalogue/FiltersPanel';
 import { Pagination } from './catalogue/Pagination';
 import { useIsDesktop } from './catalogue/useIsDesktop';
@@ -33,6 +40,7 @@ import './catalogue/catalogue.css';
 // defaults rather than duplicated here, so it never drifts from search-params.ts.
 const BLANK_SEARCH = catalogueSearch.parse({});
 const BLANK_POKEDEX_SEARCH = pokedexSearch.parse({});
+const BLANK_ILLUSTRATORS_SEARCH = illustratorsSearch.parse({});
 
 const PAGE_SIZE = 50;
 
@@ -44,7 +52,7 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
   // Phones open straight to the cards; search, filters and the copy/bulk tools sit
   // behind one summary pill until it's tapped.
   const [phoneControlsOpen, setPhoneControlsOpen] = useState(false);
-  const [rareAction, setRareAction] = useState<'bulk-add' | 'custom-card' | null>(null);
+  const [rareAction, setRareAction] = useState<'bulk-add' | null>(null);
   const discover = useDiscoverSpecies();
   const galleryRef = useRef<HTMLDivElement>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -85,7 +93,15 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
   // must not show them under the new page's "Showing X to Y" line, so it skeletons
   // until the cards for this exact URL arrive (the total still drives pagination).
   const galleryLoading = query.isLoading || query.isPlaceholderData;
-  const contextual = Boolean(speciesEntry) || search.set.length === 1;
+  // An illustrator's gallery: arrived from their tile or a card's artist link, with
+  // nothing else narrowing it, so it gets their name as the title and their star.
+  const artistGallery = Boolean(search.artist) && !speciesEntry && search.set.length === 0;
+  const illustrators = useIllustrators({ enabled: artistGallery });
+  const setFavorite = useSetIllustratorFavorite();
+  const galleryArtist = artistGallery
+    ? illustrators.data?.find((entry) => artistKey(entry.name) === artistKey(search.artist ?? ''))
+    : undefined;
+  const contextual = Boolean(speciesEntry) || search.set.length === 1 || artistGallery;
   const contextSetName = search.set.length === 1 ? cards[0]?.setName : undefined;
 
   function moveToPage(nextPage: number): void {
@@ -236,19 +252,57 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
             <Link className="text-button back-link" to="/sets">
               Back to Sets
             </Link>
+          ) : artistGallery ? (
+            <Link
+              className="text-button back-link"
+              to="/illustrators"
+              search={BLANK_ILLUSTRATORS_SEARCH}
+            >
+              Back to Illustrators
+            </Link>
           ) : null}
           {contextual ? (
             <Link className="text-button back-link" to="/catalogue" search={BLANK_SEARCH}>
               Show full catalogue
             </Link>
           ) : null}
-          <h1>
-            {speciesEntry
-              ? `${speciesEntry.name} card gallery.`
-              : contextSetName
-                ? `${contextSetName} card gallery.`
-                : 'Find a physical card.'}
-          </h1>
+          {artistGallery && search.artist ? (
+            <div className="artist-heading">
+              <h1>
+                <Icon name="illustrator" title="Illustrator" />{' '}
+                {galleryArtist?.name ?? search.artist}
+              </h1>
+              {galleryArtist ? (
+                <button
+                  type="button"
+                  className="artist-favorite"
+                  aria-pressed={galleryArtist.favorite}
+                  aria-label={
+                    galleryArtist.favorite
+                      ? `Unfavourite ${galleryArtist.name}`
+                      : `Favourite ${galleryArtist.name}`
+                  }
+                  title={galleryArtist.favorite ? 'Unfavourite' : 'Favourite'}
+                  onClick={() =>
+                    setFavorite.mutate({
+                      name: galleryArtist.name,
+                      favorite: !galleryArtist.favorite,
+                    })
+                  }
+                >
+                  <Icon name="star" />
+                </button>
+              ) : null}
+            </div>
+          ) : (
+            <h1>
+              {speciesEntry
+                ? `${speciesEntry.name} card gallery.`
+                : contextSetName
+                  ? `${contextSetName} card gallery.`
+                  : 'Find a physical card.'}
+            </h1>
+          )}
           {speciesEntry ? (
             <p className="indexing-status">
               {discover.isPending ? (
@@ -348,16 +402,6 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
                       setRareAction('bulk-add');
                     }}
                   />
-                  {!speciesEntry ? (
-                    <MenuItem
-                      label="Add a card that is not in TCGdex…"
-                      hint="A custom card with just a name."
-                      onSelect={() => {
-                        close();
-                        setRareAction('custom-card');
-                      }}
-                    />
-                  ) : null}
                 </>
               )}
             </MenuButton>
@@ -429,14 +473,6 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
         title="Add these results to a binder"
       >
         <BulkAddToBinder filters={search} total={total} onClose={() => setRareAction(null)} />
-      </RareActionOverlay>
-      <RareActionOverlay
-        desktop={isDesktop}
-        open={rareAction === 'custom-card'}
-        onClose={() => setRareAction(null)}
-        title="Add a card that is not in TCGdex"
-      >
-        <CustomCardForm onClose={() => setRareAction(null)} />
       </RareActionOverlay>
 
       {search.card ? (

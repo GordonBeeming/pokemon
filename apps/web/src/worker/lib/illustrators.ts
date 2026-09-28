@@ -1,4 +1,5 @@
 import {
+  artistKey,
   cardIdSchema,
   frameTypeFor,
   NATIONAL_POKEDEX_SIZE,
@@ -6,7 +7,7 @@ import {
   type CardCategory,
   type Illustrator,
 } from '@pokedex/shared';
-import { artistKey, preferredArtistName } from './artists';
+import { preferredArtistName } from './artists';
 import { cardTypes } from './catalogue';
 import { getFavoriteIllustrators } from './settings';
 
