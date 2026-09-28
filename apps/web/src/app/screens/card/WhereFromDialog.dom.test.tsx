@@ -201,6 +201,33 @@ describe('WhereFromDialog', () => {
     expect(calls.at(-1)).toEqual({ body: { source: 'miscount', slotId: 'p2:1:1' } });
     expect(onRemoved).toHaveBeenCalledTimes(1);
   });
+
+  it('on a lost race (collection_revision_conflict) keeps the dialog open, clears the choice and says the counts changed', async () => {
+    stubFetch(() => ({
+      status: 409,
+      json: { ok: false, error: 'collection_revision_conflict', requestId: 'req-1' },
+    }));
+    const onRemoved = vi.fn();
+    await renderDialog({ looseCopies: 2, onRemoved });
+
+    const looseRadio = container.querySelectorAll<HTMLInputElement>(
+      'input[name="remove-source"]',
+    )[1];
+    await step(() => looseRadio?.click());
+    const confirmButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Remove 1 copy',
+    );
+    await step(() => confirmButton?.click());
+
+    expect(calls).toEqual([{ body: { source: 'loose' } }]);
+    expect(onRemoved).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('This card changed somewhere else');
+    expect(
+      Array.from(container.querySelectorAll<HTMLInputElement>('input[name="remove-source"]')).some(
+        (radio) => radio.checked,
+      ),
+    ).toBe(false);
+  });
 });
 
 async function step(action: () => unknown): Promise<void> {

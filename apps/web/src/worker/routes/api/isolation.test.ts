@@ -12,6 +12,7 @@ import { restoreBackup } from '../../lib/backup';
 import { applyAllMigrations, sqliteD1 } from '../../lib/d1-test-helper';
 import { encodeSlotId } from '../../lib/db';
 import { ApplicationError } from '../../lib/log';
+import { patchPerson } from '../../lib/people';
 import { apiRoutes } from './index';
 import { passkeyRoutes } from '../auth/passkey';
 
@@ -564,5 +565,119 @@ describe('catalogue sync rewrites the shared catalogue, so only admins may start
   ])('member B gets 403 on POST %s', async (path) => {
     const response = await apiRoutes.request(path, browserInit(cookieB, 'POST', {}), env);
     expect(response.status).toBe(403);
+  });
+});
+
+describe("another owner's custom card stays private through art and collection routes", () => {
+  beforeAll(() => {
+    database.exec(`
+      INSERT INTO art_manifest (card_id, variant, object_key, sha256, bytes, version, updated_at)
+      VALUES
+        ('${CARD_1}', 'high', 'cards/${CARD_1}/high/${'1'.repeat(64)}.webp', '${'1'.repeat(64)}', 10, 1, 1),
+        ('${CUSTOM_A}', 'high', 'cards/${CUSTOM_A}/high/${'2'.repeat(64)}.webp', '${'2'.repeat(64)}', 10, 1, 1);
+    `);
+  });
+
+  it("leaves A's custom card out of B's art manifest", async () => {
+    const response = await apiRoutes.request('/art/manifest', browserInit(cookieB, 'GET'), env);
+    expect(response.status).toBe(200);
+    const body: { entries: Array<{ cardId: string }> } = await response.json();
+    expect(body.entries.map((entry) => entry.cardId)).toEqual([CARD_1]);
+  });
+
+  it("404s B's read of A's custom card art", async () => {
+    const response = await apiRoutes.request(
+      `/art/${CUSTOM_A}/high`,
+      browserInit(cookieB, 'GET'),
+      env,
+    );
+    expect(response.status).toBe(404);
+  });
+
+  it("404s B's upload ticket request for A's custom card and issues nothing", async () => {
+    const response = await apiRoutes.request(
+      '/desktop/art/upload-tokens',
+      desktopInit(DESKTOP_TOKEN_B, 'POST', {
+        cardId: CUSTOM_A,
+        variant: 'high',
+        sha256: '3'.repeat(64),
+        maxBytes: 100,
+      }),
+      env,
+    );
+    expect(response.status).toBe(404);
+    expect(
+      await db
+        .prepare('SELECT COUNT(*) AS count FROM art_upload_tokens WHERE card_id = ?1')
+        .bind(CUSTOM_A)
+        .first(),
+    ).toEqual({ count: 0 });
+  });
+
+  it("404s B's collection writes naming A's custom card and creates no row", async () => {
+    const set = await apiRoutes.request(
+      `/collection/${CUSTOM_A}`,
+      browserInit(cookieB, 'PUT', {
+        mutationId: '00000000-0000-4000-8000-0000000000c1',
+        expectedRevision: 0,
+        quantity: 1,
+        notes: null,
+      }),
+      env,
+    );
+    expect(set.status).toBe(404);
+    const increment = await apiRoutes.request(
+      `/collection/${CUSTOM_A}/increment`,
+      browserInit(cookieB, 'POST', {
+        mutationId: '00000000-0000-4000-8000-0000000000c2',
+        delta: 1,
+      }),
+      env,
+    );
+    expect(increment.status).toBe(404);
+    expect(
+      await db
+        .prepare('SELECT COUNT(*) AS count FROM collection_cards WHERE card_id = ?1')
+        .bind(CUSTOM_A)
+        .first(),
+    ).toEqual({ count: 0 });
+  });
+});
+
+// ws-harden-auth: end-to-end proof for review finding 4, through the real
+// HTTP routes and guards rather than the lib-level unit tests in
+// auth.test.ts/desktop-auth.test.ts. Disables B (a plain member, so no
+// last-admin concern) and must be the last block in this file — every
+// earlier describe above assumes B is still an active account.
+describe('disabling a user closes every one of their live credentials, end to end', () => {
+  it('401s an existing cookie session and an existing desktop bearer token the moment the owner is disabled', async () => {
+    const beforeDisable = await apiRoutes.request('/people/me', browserInit(cookieB, 'GET'), env);
+    expect(beforeDisable.status).toBe(200);
+    const desktopBeforeDisable = await apiRoutes.request(
+      '/desktop/binders',
+      desktopInit(DESKTOP_TOKEN_B, 'GET'),
+      env,
+    );
+    expect(desktopBeforeDisable.status).toBe(200);
+
+    await patchPerson(db, userB, { disabled: true });
+
+    const afterDisable = await apiRoutes.request('/people/me', browserInit(cookieB, 'GET'), env);
+    expect(afterDisable.status).toBe(401);
+    const desktopAfterDisable = await apiRoutes.request(
+      '/desktop/binders',
+      desktopInit(DESKTOP_TOKEN_B, 'GET'),
+      env,
+    );
+    expect(desktopAfterDisable.status).toBe(401);
+  });
+
+  it('refuses a passkey registration ceremony started for the now-disabled account', async () => {
+    const response = await passkeyRoutes.request(
+      '/register/options',
+      browserInit(cookieB, 'POST', {}),
+      env,
+    );
+    expect(response.status).toBe(401);
   });
 });

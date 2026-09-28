@@ -586,3 +586,219 @@ describe('backup restore', () => {
     ).toEqual({ delta: 1, source: 'add' });
   });
 });
+
+describe('backups keep custom cards with their owner', () => {
+  // setup()'s custom-a becomes 'owner's; 'other' gets a custom card of their
+  // own, with a source and art, that 'owner' must never carry away.
+  function twoUsers() {
+    const context = setup();
+    context.database.exec(`
+      UPDATE catalogue_cards SET owner_id = 'owner' WHERE id = 'custom-a';
+      INSERT INTO binder_slots (binder_page_id, row_index, column_index, card_id)
+      VALUES ('page-1', 0, 1, NULL), ('page-1', 1, 0, NULL), ('page-1', 1, 1, NULL);
+      INSERT INTO users (id, label, created_at) VALUES ('other', 'Other', 1);
+      INSERT INTO catalogue_cards
+        (id, name, language, category, set_id, set_name, number, number_sort, is_custom, owner_id, created_at, updated_at)
+      VALUES ('custom-other', 'Other secret', 'en', 'custom', 'custom', 'Custom', '9', 9, 1, 'other', 1, 1);
+      INSERT INTO card_sources
+        (provider, source_id, card_id, language, source_updated_at, checksum, active, imported_at)
+      VALUES ('manual', 'source-other', 'custom-other', 'en', 1, '${'e'.repeat(64)}', 1, 1);
+      INSERT INTO art_manifest (card_id, variant, object_key, sha256, bytes, version, updated_at)
+      VALUES ('custom-other', 'high', 'cards/custom-other/high/hash.webp', '${'e'.repeat(64)}', 20, 1, 1);
+      INSERT INTO collection_cards (owner_id, card_id, quantity, revision, updated_at)
+      VALUES ('owner', 'custom-a', 1, 1, 1), ('other', 'custom-other', 2, 1, 1);
+    `);
+    return context;
+  }
+
+  async function seedAllArt(art: R2Bucket): Promise<void> {
+    await seedReferencedArt(art);
+    await art.put('cards/custom-other/high/hash.webp', Uint8Array.from([7, 8, 9]));
+  }
+
+  async function backedUpRows(
+    art: R2Bucket,
+    ownerId: string,
+    backupId: string,
+  ): Promise<Record<string, Array<Record<string, unknown>>>> {
+    const manifest = JSON.parse(
+      await readObjectText(art, `backups/${ownerId}/${backupId}/manifest.json`),
+    ) as { chunks: Array<{ kind: string; objectKey: string }> };
+    const rows: Record<string, Array<Record<string, unknown>>> = {};
+    for (const chunk of manifest.chunks)
+      rows[chunk.kind] = [
+        ...(rows[chunk.kind] ?? []),
+        ...(JSON.parse(await readObjectText(art, chunk.objectKey)) as Array<
+          Record<string, unknown>
+        >),
+      ];
+    return rows;
+  }
+
+  function snapshot(database: DatabaseSync): Record<string, unknown[]> {
+    return Object.fromEntries(
+      [
+        'SELECT * FROM catalogue_cards ORDER BY id',
+        'SELECT * FROM card_sources ORDER BY source_id',
+        'SELECT * FROM art_manifest ORDER BY card_id, variant',
+        'SELECT * FROM collection_cards ORDER BY owner_id, card_id',
+        'SELECT * FROM binders ORDER BY id',
+        'SELECT * FROM binder_slots ORDER BY binder_page_id, row_index, column_index',
+      ].map((sql) => [sql, database.prepare(sql).all()]),
+    );
+  }
+
+  async function legacyBackup(
+    database: DatabaseSync,
+    art: R2Bucket,
+    backupId: string,
+    content: { catalogue?: unknown[]; collection?: unknown[] },
+  ): Promise<void> {
+    const body = JSON.stringify({
+      version: 2,
+      ownerId: 'owner',
+      mutationEpoch: 0,
+      createdAt: '2026-09-27T00:00:00.000Z',
+      catalogue: content.catalogue ?? [],
+      sources: [],
+      collection: content.collection ?? [],
+      binders: [],
+      versions: [],
+      pages: [],
+      slots: [],
+      artManifest: [],
+    });
+    const key = `backups/owner/${backupId}/legacy.json`;
+    await art.put(key, body);
+    database
+      .prepare(
+        "INSERT INTO backup_runs(id,owner_id,object_key,checksum,backup_epoch,created_at) VALUES(?1,'owner',?2,?3,0,1)",
+      )
+      .run(backupId, key, await checksum(body));
+  }
+
+  it("exports only the owner's own custom cards, sources and art, even when a stray row references another's", async () => {
+    const { database, db, art } = twoUsers();
+    await seedAllArt(art);
+    // A reference to someone else's custom card, as the pre-ownership
+    // collection check allowed.
+    database.exec(`INSERT INTO collection_cards (owner_id, card_id, quantity, revision, updated_at)
+      VALUES ('owner', 'custom-other', 1, 1, 1)`);
+    const backup = await createBackup(db, art, 'owner', { backupId: 'backup_scoped' });
+    const rows = await backedUpRows(art, 'owner', backup.id);
+    expect(rows.catalogue?.map((row) => [row.id, row.owner_id])).toEqual([
+      ['card-binder', null],
+      ['custom-a', 'owner'],
+    ]);
+    expect(rows.sources?.map((row) => row.card_id)).toEqual(['custom-a']);
+    expect(rows.art_manifest?.map((row) => row.card_id)).toEqual(['card-binder', 'custom-a']);
+  });
+
+  it('round-trips two users without either custom card changing hands or becoming shared', async () => {
+    const { database, db, art } = twoUsers();
+    await seedAllArt(art);
+    const ownerBackup = await createBackup(db, art, 'owner', { backupId: 'backup_owner_rt' });
+    const otherBackup = await createBackup(db, art, 'other', { backupId: 'backup_other_rt' });
+    const otherRows = await backedUpRows(art, 'other', otherBackup.id);
+    expect(otherRows.catalogue?.map((row) => row.id)).toEqual(['custom-other']);
+
+    const before = snapshot(database);
+    await restoreBackup(db, art, 'owner', ownerBackup.id);
+    await restoreBackup(db, art, 'other', otherBackup.id);
+
+    expect(
+      database
+        .prepare('SELECT id, owner_id FROM catalogue_cards WHERE is_custom = 1 ORDER BY id')
+        .all(),
+    ).toEqual([
+      { id: 'custom-a', owner_id: 'owner' },
+      { id: 'custom-other', owner_id: 'other' },
+    ]);
+    expect(snapshot(database)).toEqual(before);
+  });
+
+  it("restores a missing custom card as the restoring user's own, never as shared", async () => {
+    const { database, db, art } = twoUsers();
+    await seedAllArt(art);
+    const backup = await createBackup(db, art, 'owner', { backupId: 'backup_missing_custom' });
+    database.exec(`
+      DELETE FROM collection_cards WHERE owner_id = 'owner';
+      DELETE FROM card_sources WHERE card_id = 'custom-a';
+      DELETE FROM art_manifest WHERE card_id = 'custom-a';
+      DELETE FROM catalogue_search WHERE card_id = 'custom-a';
+      DELETE FROM catalogue_cards WHERE id = 'custom-a';
+    `);
+    await restoreBackup(db, art, 'owner', backup.id);
+    expect(
+      database.prepare('SELECT owner_id FROM catalogue_cards WHERE id = ?').get('custom-a'),
+    ).toEqual({ owner_id: 'owner' });
+  });
+
+  it('gives a legacy backup without owner info custom cards owned by the restoring user', async () => {
+    const { database, db, art } = twoUsers();
+    await legacyBackup(database, art, 'backup_legacy_custom', {
+      catalogue: [
+        {
+          id: 'legacy-custom',
+          name: 'Legacy custom',
+          language: 'en',
+          category: 'custom',
+          set_id: 'custom',
+          set_name: 'Custom',
+          number: '5',
+          supertype: null,
+          subtype: null,
+          species: null,
+          rarity: null,
+          artist: null,
+          release_date: null,
+          pokedex_number: null,
+          number_sort: 5,
+          is_custom: 1,
+          is_active: 1,
+          created_at: 1,
+          updated_at: 1,
+        },
+      ],
+      collection: [
+        { card_id: 'legacy-custom', quantity: 1, notes: null, revision: 1, updated_at: 1 },
+      ],
+    });
+    await restoreBackup(db, art, 'owner', 'backup_legacy_custom');
+    expect(
+      database.prepare('SELECT owner_id FROM catalogue_cards WHERE id = ?').get('legacy-custom'),
+    ).toEqual({ owner_id: 'owner' });
+  });
+
+  it("refuses a backup that references another user's custom card and changes nothing", async () => {
+    const { database, db, art } = twoUsers();
+    await legacyBackup(database, art, 'backup_foreign_ref', {
+      collection: [
+        { card_id: 'custom-other', quantity: 1, notes: null, revision: 1, updated_at: 1 },
+      ],
+    });
+    const before = snapshot(database);
+    await expect(restoreBackup(db, art, 'owner', 'backup_foreign_ref')).rejects.toMatchObject({
+      code: 'backup_owner_mismatch',
+      status: 403,
+    });
+    expect(snapshot(database)).toEqual(before);
+  });
+
+  it('refuses a backup whose catalogue row claims another owner', async () => {
+    const { database, db, art } = twoUsers();
+    await seedAllArt(art);
+    const backup = await createBackup(db, art, 'other', { backupId: 'backup_claims_other' });
+    // 'other's exported rows, re-registered as one of 'owner's backups: the
+    // catalogue row still says owner_id = 'other'.
+    const rows = await backedUpRows(art, 'other', backup.id);
+    await legacyBackup(database, art, 'backup_claims_owner', {
+      catalogue: rows.catalogue ?? [],
+    });
+    const before = snapshot(database);
+    await expect(restoreBackup(db, art, 'owner', 'backup_claims_owner')).rejects.toMatchObject({
+      code: 'backup_owner_mismatch',
+    });
+    expect(snapshot(database)).toEqual(before);
+  });
+});

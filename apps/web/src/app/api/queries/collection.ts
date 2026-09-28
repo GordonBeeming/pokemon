@@ -14,7 +14,7 @@ import {
 } from '@pokedex/shared';
 import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
-import { apiFetch } from '../client';
+import { apiFetch, ApiError } from '../client';
 import { queryKeys } from '../keys';
 
 const mutationResponseSchema = z
@@ -120,6 +120,19 @@ export function useRemoveCollectionCopy(cardId: string) {
       applyCollectionState(queryClient, cardId, state);
       void queryClient.invalidateQueries({ queryKey: queryKeys.catalogue.binderMatches(cardId) });
       void queryClient.invalidateQueries({ queryKey: ['binders'] });
+    },
+    onError: (cause) => {
+      // The server re-checks counts and pockets inside its transaction, so these two
+      // mean another tab or device changed this card first: refetch so the dialog
+      // offers the choices that are true now instead of retrying a stale one.
+      if (
+        cause instanceof ApiError &&
+        (cause.code === 'collection_revision_conflict' ||
+          cause.code === 'collection_remove_slot_not_found')
+      ) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.catalogue.card(cardId) });
+        void queryClient.invalidateQueries({ queryKey: ['binders'] });
+      }
     },
   });
 }

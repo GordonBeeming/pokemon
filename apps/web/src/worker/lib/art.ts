@@ -288,12 +288,13 @@ export async function createArtUploadTokens(
         COALESCE(manifest.version, 0) + 1 AS expected_version
        FROM json_each(?1) input
        JOIN catalogue_cards card ON card.id = json_extract(input.value, '$.cardId')
+         AND (card.owner_id IS NULL OR card.owner_id = ?2)
        LEFT JOIN art_manifest manifest
          ON manifest.card_id = card.id
          AND manifest.variant = json_extract(input.value, '$.variant')
        ORDER BY CAST(input.key AS INTEGER)`,
     )
-    .bind(requested)
+    .bind(requested, ownerId)
     .all<{ request_index: number; expected_version: number }>();
   if (versions.results.length !== requests.length)
     throw new ApplicationError('card_not_found', 404);
@@ -362,6 +363,9 @@ async function claimUpload(
   const tokenHash = await hashToken(token);
   if (ticketId(tokenHash) !== suppliedTicketId && token !== suppliedTicketId)
     throw new ApplicationError('art_upload_token_invalid', 400);
+  // Ownership is checked again at redemption, not only at issue, so a ticket
+  // that was issued for someone else's custom card can never write its art,
+  // and a ticket outstanding when its holder was disabled stops working.
   const upload = await db
     .prepare(
       `SELECT token.owner_id, token.card_id, token.variant, token.expected_sha256,
@@ -372,7 +376,11 @@ async function claimUpload(
        FROM art_upload_tokens token
        LEFT JOIN art_manifest manifest
          ON manifest.card_id = token.card_id AND manifest.variant = token.variant
-       WHERE token.token_hash = ?1`,
+       JOIN users holder ON holder.id = token.owner_id AND holder.disabled_at IS NULL
+       WHERE token.token_hash = ?1 AND EXISTS (
+         SELECT 1 FROM catalogue_cards card WHERE card.id = token.card_id
+           AND (card.owner_id IS NULL OR card.owner_id = token.owner_id)
+       )`,
     )
     .bind(tokenHash)
     .first<UploadTokenRow>();
@@ -534,13 +542,27 @@ function normalizedRange(range: R2Range, size: number): { offset: number; length
   return { offset, length: range.length ?? Math.max(0, size - offset) };
 }
 
+// A custom card's art is as private as the card: someone else's custom card
+// reads exactly like a card that doesn't exist.
+async function artVisibleTo(db: D1Database, ownerId: string, cardId: string): Promise<boolean> {
+  const hidden = await db
+    .prepare(
+      'SELECT 1 FROM catalogue_cards WHERE id = ?1 AND owner_id IS NOT NULL AND owner_id <> ?2',
+    )
+    .bind(cardId, ownerId)
+    .first();
+  return !hidden;
+}
+
 export async function getArtResponse(
   db: D1Database,
   art: R2Bucket,
+  ownerId: string,
   cardId: string,
   variant: ArtVariant,
   request: Request,
 ): Promise<Response | null> {
+  if (!(await artVisibleTo(db, ownerId, cardId))) return null;
   let manifest = await db
     .prepare('SELECT object_key FROM art_manifest WHERE card_id = ?1 AND variant = ?2')
     .bind(cardId, variant)
@@ -715,6 +737,7 @@ export async function getTcgdexPreviewArtResponse(
 
 export async function listArtManifest(
   db: D1Database,
+  ownerId: string,
   cursor: string | null,
   limit: number,
 ): Promise<{
@@ -724,9 +747,13 @@ export async function listArtManifest(
   const [cardId, variant] = cursor?.split('|', 2) ?? ['', ''];
   const result = await db
     .prepare(
-      'SELECT card_id, variant, sha256, bytes FROM art_manifest WHERE card_id > ?1 OR (card_id = ?1 AND variant > ?2) ORDER BY card_id, variant LIMIT ?3',
+      `SELECT manifest.card_id, manifest.variant, manifest.sha256, manifest.bytes
+       FROM art_manifest manifest JOIN catalogue_cards card ON card.id = manifest.card_id
+       WHERE (card.owner_id IS NULL OR card.owner_id = ?4)
+         AND (manifest.card_id > ?1 OR (manifest.card_id = ?1 AND manifest.variant > ?2))
+       ORDER BY manifest.card_id, manifest.variant LIMIT ?3`,
     )
-    .bind(cardId, variant, limit + 1)
+    .bind(cardId, variant, limit + 1, ownerId)
     .all<{ card_id: string; variant: ArtVariant; sha256: string; bytes: number }>();
   const rows = result.results.slice(0, limit);
   return {

@@ -157,17 +157,18 @@ export async function requireEnrolAuth<Path extends string, Input extends object
   const rate = enrolSecret
     ? await enforceRateLimit(c.env, `enrol:${clientIp(c.req.raw)}`, 10, 15 * 60)
     : null;
-  const existingPasskey = await c.env.DB.prepare('SELECT 1 FROM passkeys LIMIT 1').first();
-  if (
-    !enrolSecret ||
-    !rate?.allowed ||
-    !enrolSecretMatches(enrolSecret, c.env) ||
-    existingPasskey
-  ) {
+  // Closed on "any user exists", not "any passkey exists": a user created
+  // without a passkey (an interrupted registration, or old data predating
+  // the fix that made account+passkey creation atomic) must not reopen
+  // enrolment. createBootstrapAccount re-checks this same condition
+  // atomically at write time; this is only the early, cheap gate for
+  // register/options, which never reaches that write.
+  const existingUser = await c.env.DB.prepare('SELECT 1 FROM users LIMIT 1').first();
+  if (!enrolSecret || !rate?.allowed || !enrolSecretMatches(enrolSecret, c.env) || existingUser) {
     logWarn({
       evt: 'auth.enrol.denied',
       requestId: c.get('requestId'),
-      reason: existingPasskey
+      reason: existingUser
         ? 'bootstrap_closed'
         : rate && !rate.allowed
           ? 'rate_limited'

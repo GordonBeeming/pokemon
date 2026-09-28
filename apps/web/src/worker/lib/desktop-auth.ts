@@ -63,12 +63,17 @@ export async function redeemPairCode(
   const tokenHash = await hashText(token);
   const now = nowSeconds();
   try {
+    // Joins to users and requires the code's owner still active at the
+    // moment the token is minted — a code issued before the owner was
+    // disabled must not still hand out a working token afterward.
     const [inserted] = await db.batch([
       db
         .prepare(
           `INSERT INTO desktop_tokens (token_hash, owner_id, label, scopes, pair_code_hash, expires_at, created_at)
-           SELECT ?1, owner_id, ?2, scopes, code_hash, ?3, ?4 FROM desktop_pair_codes
-           WHERE code_hash = ?5 AND consumed_at IS NULL AND expires_at > ?4`,
+           SELECT ?1, dpc.owner_id, ?2, dpc.scopes, dpc.code_hash, ?3, ?4 FROM desktop_pair_codes dpc
+           JOIN users u ON u.id = dpc.owner_id
+           WHERE dpc.code_hash = ?5 AND dpc.consumed_at IS NULL AND dpc.expires_at > ?4
+             AND u.disabled_at IS NULL`,
         )
         .bind(tokenHash, label, now + DESKTOP_TOKEN_MAX_AGE, now, codeHash),
       db
@@ -92,9 +97,16 @@ export async function requireDesktopToken(
 ): Promise<string> {
   const tokenHash = await hashText(token);
   const now = nowSeconds();
+  // Joined to users so a token whose owner has since been disabled stops
+  // validating on its very next use, the same request it's revoked on
+  // disable notwithstanding (belt-and-braces against any token that slips
+  // past that revoke, e.g. one minted in the same race window as the
+  // disable itself).
   const row = await db
     .prepare(
-      'SELECT owner_id, scopes, expires_at, revoked_at, last_used_at FROM desktop_tokens WHERE token_hash = ?1',
+      `SELECT dt.owner_id, dt.scopes, dt.expires_at, dt.revoked_at, dt.last_used_at
+       FROM desktop_tokens dt JOIN users u ON u.id = dt.owner_id
+       WHERE dt.token_hash = ?1 AND u.disabled_at IS NULL`,
     )
     .bind(tokenHash)
     .first<{

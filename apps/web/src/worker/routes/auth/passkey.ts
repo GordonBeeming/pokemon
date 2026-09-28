@@ -10,19 +10,19 @@ import { inviteTokenSchema } from '@pokedex/shared';
 import { base64UrlDecode } from '../../lib/crypto';
 import {
   clearSessionCookie,
+  createBootstrapAccount,
   createSession,
-  createUser,
   deletePasskey,
   getPasskey,
   getPasskeys,
   getUserById,
   insertPasskey,
-  insertBootstrapPasskey,
   logAudit,
   renamePasskey,
   setSessionCookie,
   updatePasskeyUsage,
 } from '../../lib/auth';
+import { newId } from '../../lib/db';
 import {
   claimChallenge,
   clientIp,
@@ -250,40 +250,55 @@ passkeyRoutes.post('/register/verify', requireEnrolAuth, async (c) => {
   const credential = verification.registrationInfo.credential;
 
   // Only session (adding a passkey to yourself) has a user already; bootstrap
-  // and invite each create the account here, now that the ceremony proved a
-  // real authenticator is behind it.
+  // and invite each create the account and the passkey together, atomically,
+  // now that the ceremony proved a real authenticator is behind it — see
+  // createBootstrapAccount/claimInviteForNewUser for why the account and the
+  // credential can't be written as two separate steps.
   let user: { id: string; label: string };
   if (method === 'session' && session) {
     user = { id: session.sub, label: session.label };
+    await insertPasskey(c.env.DB, {
+      id: credential.id,
+      userId: user.id,
+      publicKey: credential.publicKey,
+      counter: credential.counter,
+      transports: credential.transports?.join(',') ?? null,
+      deviceLabel: null,
+      name: parsed.data.name ?? null,
+      createdAt: Math.floor(Date.now() / 1000),
+    });
   } else if (method === 'invite') {
+    const userId = newId('user');
     user = await claimInviteForNewUser(
       c.env.DB,
       c.get('inviteToken') ?? '',
+      userId,
       c.get('inviteLabel') ?? 'New member',
+      {
+        id: credential.id,
+        userId,
+        publicKey: credential.publicKey,
+        counter: credential.counter,
+        transports: credential.transports?.join(',') ?? null,
+        deviceLabel: null,
+        name: parsed.data.name ?? null,
+        createdAt: Math.floor(Date.now() / 1000),
+      },
     );
   } else {
-    user = await createUser(c.env.DB, c.env.OWNER_LABEL, 'admin');
-  }
-
-  const passkey = {
-    id: credential.id,
-    userId: user.id,
-    publicKey: credential.publicKey,
-    counter: credential.counter,
-    transports: credential.transports?.join(',') ?? null,
-    deviceLabel: null,
-    name: parsed.data.name ?? null,
-    createdAt: Math.floor(Date.now() / 1000),
-  };
-  if (method === 'bootstrap') {
-    if (!(await insertBootstrapPasskey(c.env.DB, passkey))) {
-      // Lost the race to a concurrent bootstrap attempt — don't leave an
-      // orphan admin account with no passkey behind.
-      await c.env.DB.prepare('DELETE FROM users WHERE id = ?1').bind(user.id).run();
-      return c.json({ ok: false, error: 'bootstrap_closed' }, 409);
-    }
-  } else {
-    await insertPasskey(c.env.DB, passkey);
+    const userId = newId('user');
+    const created = await createBootstrapAccount(c.env.DB, userId, c.env.OWNER_LABEL, {
+      id: credential.id,
+      userId,
+      publicKey: credential.publicKey,
+      counter: credential.counter,
+      transports: credential.transports?.join(',') ?? null,
+      deviceLabel: null,
+      name: parsed.data.name ?? null,
+      createdAt: Math.floor(Date.now() / 1000),
+    });
+    if (!created) return c.json({ ok: false, error: 'bootstrap_closed' }, 409);
+    user = created;
   }
   await logAudit(c.env.DB, { actor: user.id, action: 'passkey.register', target: credential.id });
   setSessionCookie(c, await createSession(c.env.DB, { sub: user.id, label: user.label }, c.env));

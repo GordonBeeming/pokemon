@@ -80,15 +80,18 @@ async function completedWorkflow(workflowId, cookie, allowReauthentication = fal
 try {
   await run(['d1', 'migrations', 'apply', 'DB', '--local', '--persist-to', persist]);
   await d1(
-    `INSERT INTO users (id,label,created_at,role) VALUES ('owner','Owner',1,'admin');
-     INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,is_custom,is_active,created_at,updated_at)
-       VALUES ('custom_fixture','Custom Fixture','en','special','custom','Custom cards','custom',1,1,1,1);
+    `INSERT INTO users (id,label,created_at,role) VALUES ('owner','Owner',1,'admin'),('other','Other',1,'member');
+     INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,is_custom,owner_id,is_active,created_at,updated_at)
+       VALUES ('custom_fixture','Custom Fixture','en','special','custom','Custom cards','custom',1,'owner',1,1,1),
+         ('other_custom','Other Secret','en','special','custom','Custom cards','other',1,'other',1,1,1);
+     INSERT INTO collection_cards (owner_id,card_id,quantity,notes,revision,updated_at)
+       VALUES ('other','other_custom',4,'other private',1,1);
      WITH RECURSIVE sequence(value) AS (
        SELECT 1 UNION ALL SELECT value + 1 FROM sequence WHERE value < 300
      )
-     INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,is_custom,is_active,created_at,updated_at)
+     INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,is_custom,owner_id,is_active,created_at,updated_at)
        SELECT printf('custom_bulk_%03d', value), printf('Custom Bulk %03d', value), 'en',
-         'special', 'custom', 'Custom cards', printf('%03d', value), 1, 1, 1, 1 FROM sequence;
+         'special', 'custom', 'Custom cards', printf('%03d', value), 1, 'owner', 1, 1, 1 FROM sequence;
      INSERT INTO collection_cards (owner_id,card_id,quantity,notes,revision,updated_at)
        VALUES ('owner','custom_fixture',2,'private fixture',3,2);
      INSERT INTO collection_mutations (owner_id,mutation_id,card_id,response_json,created_at)
@@ -334,7 +337,7 @@ try {
      DELETE FROM collection_events WHERE owner_id='owner';
      DELETE FROM art_upload_tokens WHERE card_id='custom_fixture';
      DELETE FROM art_manifest WHERE card_id='custom_fixture';
-     DELETE FROM catalogue_cards WHERE is_custom=1;`,
+     DELETE FROM catalogue_cards WHERE is_custom=1 AND owner_id='owner';`,
   );
   const restoreLogin = await json('/api/auth/dev-login', { method: 'POST' });
   cookie = restoreLogin.response.headers.get('set-cookie')?.split(';', 1)[0];
@@ -364,10 +367,14 @@ try {
        (SELECT show_frame FROM binders WHERE id='binder_fixture') AS show_frame,
        (SELECT value_json FROM user_settings WHERE owner_id='owner' AND key='frame-palette') AS palette,
        (SELECT COUNT(*) FROM collection_events WHERE owner_id='owner' AND card_id='custom_fixture') AS events,
-       (SELECT COUNT(*) FROM backup_runs WHERE id='${backupId}' AND owner_id='owner' AND restored_at IS NOT NULL) AS restored;`,
+       (SELECT COUNT(*) FROM backup_runs WHERE id='${backupId}' AND owner_id='owner' AND restored_at IS NOT NULL) AS restored,
+       (SELECT COUNT(*) FROM catalogue_cards WHERE is_custom=1 AND owner_id='owner') AS owned_custom,
+       (SELECT COUNT(*) FROM catalogue_cards WHERE is_custom=1 AND owner_id IS NULL) AS shared_custom,
+       (SELECT owner_id FROM catalogue_cards WHERE id='other_custom') AS other_owner,
+       (SELECT quantity FROM collection_cards WHERE owner_id='other' AND card_id='other_custom') AS other_quantity;`,
   );
   const match = verified.stdout.match(
-    /"catalogue":\s*1,\s*"bulk_catalogue":\s*300,\s*"quantity":\s*2,\s*"binders":\s*1,\s*"slots":\s*1,\s*"mutations":\s*0,\s*"epoch":\s*(\d+),\s*"peek_columns":\s*2,\s*"show_frame":\s*0,\s*"palette":\s*"\{\\"grass\\":\\"#123456\\"\}",\s*"events":\s*2,\s*"restored":\s*1/s,
+    /"catalogue":\s*1,\s*"bulk_catalogue":\s*300,\s*"quantity":\s*2,\s*"binders":\s*1,\s*"slots":\s*1,\s*"mutations":\s*0,\s*"epoch":\s*(\d+),\s*"peek_columns":\s*2,\s*"show_frame":\s*0,\s*"palette":\s*"\{\\"grass\\":\\"#123456\\"\}",\s*"events":\s*2,\s*"restored":\s*1,\s*"owned_custom":\s*301,\s*"shared_custom":\s*0,\s*"other_owner":\s*"other",\s*"other_quantity":\s*4/s,
   );
   if (!match) throw new Error(`backup round-trip mismatch: ${verified.stdout}`);
   if (Number(match[1]) < 1) throw new Error(`restore did not advance mutation epoch: ${match[1]}`);
@@ -383,6 +390,18 @@ try {
   const restoredBytes = Buffer.from(await restoredArt.arrayBuffer());
   if (!restoredArt.ok || !restoredBytes.equals(webp))
     throw new Error(`custom art did not survive backup restore: ${restoredArt.status}`);
+  // Custom cards stay private after a restore: the restored card's art is
+  // still hidden from a second user's desktop token.
+  const otherToken = 'f'.repeat(64);
+  await d1(
+    `INSERT INTO desktop_tokens (token_hash,owner_id,label,scopes,created_at)
+     VALUES ('${createHash('sha256').update(otherToken).digest('hex')}','other','Other desktop','["art:read"]',1);`,
+  );
+  const otherArt = await fetch(`${base}/api/desktop/art/custom_fixture/high`, {
+    headers: { authorization: `Bearer ${otherToken}` },
+  });
+  if (otherArt.status !== 404)
+    throw new Error(`another user could read restored custom art: ${otherArt.status}`);
   process.stdout.write('real D1/R2 backup round-trip passed\n');
 } finally {
   worker?.kill('SIGTERM');

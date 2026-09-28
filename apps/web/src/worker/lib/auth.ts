@@ -4,6 +4,7 @@ import { jwtVerify, SignJWT } from 'jose';
 import type { UserRole } from '@pokedex/shared';
 import { timingSafeStringEqual } from './crypto';
 import { newId, nowSeconds } from './db';
+import { ApplicationError } from './log';
 import type { AuditInsert, PasskeyInsert, PasskeyRow, SessionPayload, UserRow } from './types';
 
 export const SESSION_COOKIE = 'pokedex_session';
@@ -77,13 +78,19 @@ export async function createSession(
   env: SessionEnv,
 ): Promise<string> {
   const owner = await db
-    .prepare('SELECT mutation_epoch FROM users WHERE id = ?1')
+    .prepare('SELECT mutation_epoch FROM users WHERE id = ?1 AND disabled_at IS NULL')
     .bind(payload.sub)
     .first<{ mutation_epoch: number }>();
-  if (!owner) throw new Error('session_owner_not_found');
+  if (!owner) throw new ApplicationError('user_disabled', 403);
   const sid = randomIdentifier();
   const now = nowSeconds();
-  await db.batch([
+  // The insert re-checks disabled_at and mutation_epoch against the live
+  // users row, inside the same batch as the write: a disable that lands
+  // between the read above and this statement (the passkey-login race) makes
+  // the SELECT in this INSERT match nothing, so the session is never
+  // created, rather than being created and relying on a revoke sweep that
+  // already ran before this row existed.
+  const [, inserted] = await db.batch([
     db
       .prepare(
         'DELETE FROM web_sessions WHERE expires_at <= ?1 OR (revoked_at IS NOT NULL AND revoked_at <= ?2)',
@@ -91,7 +98,9 @@ export async function createSession(
       .bind(now, now - SESSION_MAX_AGE),
     db
       .prepare(
-        'INSERT INTO web_sessions (id_hash, user_id, mutation_epoch, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)',
+        `INSERT INTO web_sessions (id_hash, user_id, mutation_epoch, expires_at, created_at)
+         SELECT ?1, ?2, ?3, ?4, ?5 FROM users
+         WHERE id = ?2 AND disabled_at IS NULL AND mutation_epoch = ?3`,
       )
       .bind(
         await hashIdentifier(sid),
@@ -101,6 +110,7 @@ export async function createSession(
         now,
       ),
   ]);
+  if (!inserted || inserted.meta.changes !== 1) throw new ApplicationError('user_disabled', 403);
   return signSession({ ...payload, sid, epoch: owner.mutation_epoch }, env);
 }
 
@@ -124,7 +134,8 @@ export async function getSession<Path extends string, Input extends object>(
   const stored = await c.env.DB.prepare(
     `SELECT s.last_seen_at FROM web_sessions s JOIN users u ON u.id = s.user_id
      WHERE s.id_hash = ?1 AND s.user_id = ?2 AND s.mutation_epoch = ?3
-       AND u.mutation_epoch = s.mutation_epoch AND s.revoked_at IS NULL AND s.expires_at > ?4`,
+       AND u.mutation_epoch = s.mutation_epoch AND u.disabled_at IS NULL
+       AND s.revoked_at IS NULL AND s.expires_at > ?4`,
   )
     .bind(await hashIdentifier(session.sid), session.sub, session.epoch, now)
     .first<{ last_seen_at: number | null }>();
@@ -227,17 +238,11 @@ export async function getPasskey(db: D1Database, id: string): Promise<PasskeyRow
     .first<PasskeyRow>();
 }
 
-function passkeyInsert(db: D1Database, input: PasskeyInsert, bootstrapOnly: boolean) {
-  const values = '(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)';
-  // Bootstrap's guard is global ("no passkey exists anywhere yet"), not
-  // per-user: with multiple real users now possible, checking only this
-  // user's own passkeys would let bootstrap re-fire for every new invitee.
-  const sql = bootstrapOnly
-    ? `INSERT INTO passkeys (id, user_id, public_key, counter, transports, device_label, name, created_at)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8 WHERE NOT EXISTS (SELECT 1 FROM passkeys)`
-    : `INSERT INTO passkeys (id, user_id, public_key, counter, transports, device_label, name, created_at) VALUES ${values}`;
-  return db
-    .prepare(sql)
+export async function insertPasskey(db: D1Database, input: PasskeyInsert): Promise<void> {
+  await db
+    .prepare(
+      'INSERT INTO passkeys (id, user_id, public_key, counter, transports, device_label, name, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)',
+    )
     .bind(
       input.id,
       input.userId,
@@ -247,21 +252,48 @@ function passkeyInsert(db: D1Database, input: PasskeyInsert, bootstrapOnly: bool
       input.deviceLabel,
       input.name,
       input.createdAt,
-    );
+    )
+    .run();
 }
 
-export async function insertPasskey(db: D1Database, input: PasskeyInsert): Promise<void> {
-  await passkeyInsert(db, input, false).run();
-}
-
-export async function insertBootstrapPasskey(
+// Bootstrap creates the account and its one passkey together, guarded by
+// "no user exists yet" (not "no passkey exists yet" — a user with no
+// passkey, from an interrupted or since-fixed registration bug, must not
+// reopen enrolment). Both inserts are conditioned on that same live check
+// inside one batch, so a losing concurrent bootstrap attempt writes nothing
+// at all rather than leaving an admin account with no passkey behind.
+export async function createBootstrapAccount(
   db: D1Database,
-  input: PasskeyInsert,
-): Promise<boolean> {
-  // Safe to trust meta.changes here, unlike deletePasskey below: passkeys
-  // only has an AFTER DELETE trigger (migration 006), nothing on INSERT.
-  const result = await passkeyInsert(db, input, true).run();
-  return result.meta.changes === 1;
+  userId: string,
+  label: string,
+  passkey: PasskeyInsert,
+): Promise<UserRow | null> {
+  const now = nowSeconds();
+  const [userInsert] = await db.batch([
+    db
+      .prepare(
+        `INSERT INTO users (id, label, role, created_at)
+         SELECT ?1, ?2, 'admin', ?3 WHERE NOT EXISTS (SELECT 1 FROM users)`,
+      )
+      .bind(userId, label, now),
+    db
+      .prepare(
+        `INSERT INTO passkeys (id, user_id, public_key, counter, transports, device_label, name, created_at)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8 WHERE EXISTS (SELECT 1 FROM users WHERE id = ?2)`,
+      )
+      .bind(
+        passkey.id,
+        userId,
+        passkey.publicKey,
+        passkey.counter,
+        passkey.transports,
+        passkey.deviceLabel,
+        passkey.name,
+        passkey.createdAt,
+      ),
+  ]);
+  if (!userInsert || userInsert.meta.changes !== 1) return null;
+  return getUserById(db, userId);
 }
 
 export async function updatePasskeyUsage(

@@ -298,8 +298,9 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       previewFullPokedexInsert(env.DB, ownerId, versionId, at, regionPageBreaks, expectedRevision),
     listSets: () => listCatalogueSets(env.DB),
     setSetCode: (setId: string, code: string | null) => setCatalogueSetCode(env.DB, setId, code),
-    artManifest: (cursor: string | null, limit: number) => listArtManifest(env.DB, cursor, limit),
+    artManifest: (cursor: string | null, limit: number) =>
+      listArtManifest(env.DB, ownerId, cursor, limit),
     art: (cardId: string, variant: 'high' | 'low', request: Request) =>
-      getArtResponse(env.DB, env.ART, cardId, variant, request),
+      getArtResponse(env.DB, env.ART, ownerId, cardId, variant, request),
   };
 }

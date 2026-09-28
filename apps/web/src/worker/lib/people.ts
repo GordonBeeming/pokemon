@@ -2,7 +2,7 @@ import type { InviteSummary, Person, UserRole } from '@pokedex/shared';
 import { getUserById } from './auth';
 import { isoFromSeconds, newId, nowSeconds } from './db';
 import { ApplicationError } from './log';
-import type { UserRow } from './types';
+import type { PasskeyInsert, UserRow } from './types';
 
 const INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
 
@@ -57,13 +57,6 @@ export async function getPerson(db: D1Database, id: string): Promise<Person | nu
   return row ? personView(row) : null;
 }
 
-async function activeAdminCount(db: D1Database): Promise<number> {
-  const row = await db
-    .prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'admin' AND disabled_at IS NULL")
-    .first<{ count: number }>();
-  return row?.count ?? 0;
-}
-
 export interface PatchPersonInput {
   role?: UserRole;
   disabled?: boolean;
@@ -80,38 +73,64 @@ export async function patchPerson(
   const nextRole = patch.role ?? target.role;
   const nextDisabled = patch.disabled ?? target.disabled_at !== null;
   const stillActiveAdmin = nextRole === 'admin' && !nextDisabled;
-  if (wasActiveAdmin && !stillActiveAdmin && (await activeAdminCount(db)) <= 1)
-    throw new ApplicationError('last_admin', 409);
+  const removesActiveAdmin = wasActiveAdmin && !stillActiveAdmin;
 
   const now = nowSeconds();
+  const nextDisabledAt = nextDisabled ? (target.disabled_at ?? now) : null;
   // Only a transition from active to disabled needs to revoke anything —
   // enabling, or a role-only change, leaves existing sessions/tokens alone
   // (there's nothing stale to invalidate; a live session already re-checks
   // role on every admin-guarded request).
   const disablesNow = !target.disabled_at && nextDisabled;
+
+  // The last-admin invariant is re-checked against the live table inside
+  // this same UPDATE, not from the wasActiveAdmin/stillActiveAdmin values
+  // computed above: two concurrent demotions/disables of two different
+  // admins would each see "2 active admins" from a separate pre-check read,
+  // and both would then succeed. Counting every OTHER active admin at the
+  // moment this statement actually runs closes that race regardless of
+  // which of two concurrent requests' batches commits first.
   const statements = [
     db
-      .prepare('UPDATE users SET role = ?1, disabled_at = ?2 WHERE id = ?3')
-      .bind(nextRole, nextDisabled ? (target.disabled_at ?? now) : null, targetId),
+      .prepare(
+        `UPDATE users SET role = ?1, disabled_at = ?2
+         WHERE id = ?3
+           AND (
+             ?4 = 0
+             OR (SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled_at IS NULL AND id != ?3) >= 1
+           )`,
+      )
+      .bind(nextRole, nextDisabledAt, targetId, removesActiveAdmin ? 1 : 0),
   ];
   if (disablesNow) {
+    // Each follow-on write is conditioned on the primary update above having
+    // actually applied disabled_at = now to this row — if the last-admin
+    // guard aborted it (0 rows), these must not revoke a still-active
+    // admin's sessions, tokens, or pair codes.
+    const disabledNowGuard = `EXISTS (SELECT 1 FROM users WHERE id = ?2 AND disabled_at = ?1)`;
     statements.push(
       db
-        .prepare('UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = ?1')
-        .bind(targetId),
+        .prepare(
+          `UPDATE users SET mutation_epoch = mutation_epoch + 1 WHERE id = ?1 AND disabled_at = ?2`,
+        )
+        .bind(targetId, now),
       db
         .prepare(
-          'UPDATE web_sessions SET revoked_at = ?1 WHERE user_id = ?2 AND revoked_at IS NULL',
+          `UPDATE web_sessions SET revoked_at = ?1 WHERE user_id = ?2 AND revoked_at IS NULL AND ${disabledNowGuard}`,
         )
         .bind(now, targetId),
       db
         .prepare(
-          'UPDATE desktop_tokens SET revoked_at = ?1 WHERE owner_id = ?2 AND revoked_at IS NULL',
+          `UPDATE desktop_tokens SET revoked_at = ?1 WHERE owner_id = ?2 AND revoked_at IS NULL AND ${disabledNowGuard}`,
         )
+        .bind(now, targetId),
+      db
+        .prepare(`DELETE FROM desktop_pair_codes WHERE owner_id = ?2 AND ${disabledNowGuard}`)
         .bind(now, targetId),
     );
   }
-  await db.batch(statements);
+  const [primary] = await db.batch(statements);
+  if (!primary || primary.meta.changes !== 1) throw new ApplicationError('last_admin', 409);
   const updated = await getPerson(db, targetId);
   if (!updated) throw new ApplicationError('person_not_found', 404);
   return updated;
@@ -231,14 +250,26 @@ export async function lookupInvite(db: D1Database, token: string): Promise<Invit
 }
 
 // Called from passkey registration verify, after the WebAuthn ceremony
-// itself already succeeded. Creates the new member account and marks the
-// invite redeemed in one transaction; if a concurrent request already
-// claimed the same link, the just-created account is removed rather than
-// left as an orphan with no passkey.
+// itself already succeeded (the caller already generated userId and built
+// the credential row, since the credential's user_id must be known before
+// this can insert it). Creates the new member account, marks the invite
+// redeemed, and stores the passkey — all three gated on the SAME live
+// invite-row check, inside one batch:
+//   - the user insert only fires while the invite is still unredeemed,
+//   - the invite claim only succeeds under that same condition,
+//   - the passkey insert only fires once the invite shows THIS user as the
+//     one who just redeemed it (set by the claim statement immediately
+//     before, visible to later statements in the same transaction).
+// A losing concurrent attempt — or a real failure partway through, which
+// aborts the whole batch outright — therefore writes nothing at all: no
+// orphan user, no wasted passkey, and the invite stays claimed by whichever
+// attempt actually won.
 export async function claimInviteForNewUser(
   db: D1Database,
   token: string,
+  userId: string,
   label: string,
+  passkey: PasskeyInsert,
 ): Promise<UserRow> {
   const tokenHash = await hashInviteToken(token);
   const now = nowSeconds();
@@ -259,23 +290,41 @@ export async function claimInviteForNewUser(
     throw new ApplicationError('invite_used', 409);
   if (invite.expires_at <= now) throw new ApplicationError('invite_expired', 409);
 
-  const userId = newId('user');
-  const results = await db.batch([
+  const [, claimed] = await db.batch([
     db
-      .prepare('INSERT INTO users (id, label, role, created_at) VALUES (?1, ?2, ?3, ?4)')
-      .bind(userId, label, invite.role, now),
+      .prepare(
+        `INSERT INTO users (id, label, role, created_at)
+         SELECT ?1, ?2, invites.role, ?3 FROM invites
+         WHERE invites.id = ?4 AND invites.redeemed_at IS NULL AND invites.cancelled_at IS NULL
+           AND invites.expires_at > ?3`,
+      )
+      .bind(userId, label, now, invite.id),
     db
       .prepare(
         `UPDATE invites SET redeemed_at = ?1, redeemed_by = ?2
          WHERE id = ?3 AND redeemed_at IS NULL AND cancelled_at IS NULL AND expires_at > ?1`,
       )
       .bind(now, userId, invite.id),
+    db
+      .prepare(
+        `INSERT INTO passkeys (id, user_id, public_key, counter, transports, device_label, name, created_at)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8 FROM invites
+         WHERE invites.id = ?9 AND invites.redeemed_by = ?2 AND invites.redeemed_at = ?10`,
+      )
+      .bind(
+        passkey.id,
+        userId,
+        passkey.publicKey,
+        passkey.counter,
+        passkey.transports,
+        passkey.deviceLabel,
+        passkey.name,
+        passkey.createdAt,
+        invite.id,
+        now,
+      ),
   ]);
-  const claimed = results[1];
-  if (!claimed || claimed.meta.changes !== 1) {
-    await db.prepare('DELETE FROM users WHERE id = ?1').bind(userId).run();
-    throw new ApplicationError('invite_used', 409);
-  }
+  if (!claimed || claimed.meta.changes !== 1) throw new ApplicationError('invite_used', 409);
   const created = await getUserById(db, userId);
   if (!created) throw new ApplicationError('internal_error', 500);
   return created;

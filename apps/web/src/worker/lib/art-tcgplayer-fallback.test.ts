@@ -93,7 +93,7 @@ describe('TCGplayer art fallback', () => {
         throw new Error(`unexpected fetch: ${url}`);
       }),
     );
-    const response = await getArtResponse(db, art, 'card', 'low', request());
+    const response = await getArtResponse(db, art, 'owner', 'card', 'low', request());
     expect(response?.status).toBe(200);
     expect(response?.headers.get('content-type')).toBe('image/jpeg');
     const manifest = await db
@@ -116,7 +116,7 @@ describe('TCGplayer art fallback', () => {
         ),
       ),
     );
-    const response = await getArtResponse(db, art, 'card', 'low', request());
+    const response = await getArtResponse(db, art, 'owner', 'card', 'low', request());
     expect(response).toBeNull();
   });
 
@@ -140,7 +140,7 @@ describe('TCGplayer art fallback', () => {
         return Promise.resolve(new Response(null, { status: 404 }));
       }),
     );
-    const response = await getArtResponse(db, art, 'card', 'low', request());
+    const response = await getArtResponse(db, art, 'owner', 'card', 'low', request());
     expect(response).toBeNull();
   });
 });

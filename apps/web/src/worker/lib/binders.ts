@@ -35,8 +35,8 @@ import {
 } from '@pokedex/shared';
 import { decodeSlotId, encodeSlotId, newId, nowSeconds } from './db';
 import {
+  appliedEventInsert,
   CollectionDomainError,
-  eventInsert,
   getCollectionState,
   incrementQuantityStatement,
   quantityCapAssertion,
@@ -1096,6 +1096,9 @@ export async function getBinderAssignmentCandidates(
   if (!target) domainError('binder_slot_not_found');
   if (target.entry_kind !== 'exact-card' && target.entry_kind !== 'pokemon')
     domainError('binder_slot_not_found');
+  // The owner filter repeats the collection write-side check on purpose: a
+  // collection row naming someone else's custom card (written before that
+  // check existed) must still never surface that card's name here.
   const result = await db
     .prepare(
       `WITH assignments AS (
@@ -1114,8 +1117,9 @@ export async function getBinderAssignmentCandidates(
        FROM catalogue_cards card JOIN collection_cards collection
          ON collection.owner_id = ?2 AND collection.card_id = card.id AND collection.quantity > 0
        LEFT JOIN assignments ON assignments.card_id = card.id
-       WHERE (?5 = 'exact-card' AND card.id = ?6)
-          OR (?5 = 'pokemon' AND card.category = 'pokemon' AND card.pokedex_number = ?7)
+       WHERE (card.owner_id IS NULL OR card.owner_id = ?2)
+         AND ((?5 = 'exact-card' AND card.id = ?6)
+          OR (?5 = 'pokemon' AND card.category = 'pokemon' AND card.pokedex_number = ?7))
        ORDER BY available DESC, card.set_name, card.number, card.name, card.id LIMIT 500`,
     )
     .bind(
@@ -1510,6 +1514,7 @@ export async function setBinderSlot(
   await requireCard(db, ownerId, cardId);
   const now = nowSeconds();
   const collectionStatements: D1PreparedStatement[] = [];
+  const addMutationId = crypto.randomUUID();
   if (cardId && copyChoice?.action === 'add') {
     const current = await getCollectionState(db, ownerId, cardId);
     if ((current?.revision ?? 0) !== copyChoice.expectedCollectionRevision)
@@ -1526,12 +1531,14 @@ export async function setBinderSlot(
         .bind(ownerId, cardId, copyChoice.expectedCollectionRevision),
       db
         .prepare(
-          `INSERT INTO collection_cards (owner_id, card_id, quantity, revision, updated_at)
-        VALUES (?1, ?2, 1, 1, ?3)
+          `INSERT INTO collection_cards (owner_id, card_id, quantity, revision, updated_at, last_mutation_id)
+        VALUES (?1, ?2, 1, 1, ?3, ?4)
         ON CONFLICT(owner_id, card_id) DO UPDATE SET quantity = quantity + 1,
-          revision = revision + 1, updated_at = excluded.updated_at, last_mutation_id = NULL`,
+          revision = revision + 1, updated_at = excluded.updated_at,
+          last_mutation_id = excluded.last_mutation_id`,
         )
-        .bind(ownerId, cardId, now),
+        .bind(ownerId, cardId, now, addMutationId),
+      appliedEventInsert(db, ownerId, cardId, addMutationId, 1, 'add', now),
     );
   }
   const placeCopy = copyChoice?.action === 'existing' || copyChoice?.action === 'add';
@@ -3312,6 +3319,17 @@ export async function placeCard(
   return placeCardWithNewCopy(db, ownerId, versionId, at, cardId, requestedRevision);
 }
 
+// A failed assertion surfaces from D1 only as a generic SQL error, so the
+// reason is read back from state after the batch has rolled back.
+async function copyWouldExceedCap(
+  db: D1Database,
+  ownerId: string,
+  cardId: string,
+): Promise<boolean> {
+  const current = await getCollectionState(db, ownerId, cardId);
+  return (current?.quantity ?? 0) + 1 > 9999;
+}
+
 // Converts an empty pocket into an exact-card target for this printing and
 // fills it in the same batch, so it's never possible to observe a slot that
 // names this card as its target without also holding it (or vice versa).
@@ -3350,11 +3368,12 @@ async function placeCardIntoEmptySlot(
   // assertion's live SELECT reads collection_cards.quantity it already
   // reflects the pending add - counting it a second time here would let one
   // more copy get assigned than the owner actually has.
+  const mutationId = crypto.randomUUID();
   const statements = addCopy
     ? [
         quantityCapAssertion(db, ownerId, cardId, 1),
-        incrementQuantityStatement(db, ownerId, cardId, 1, crypto.randomUUID(), now),
-        eventInsert(db, ownerId, cardId, 1, 'add', now),
+        incrementQuantityStatement(db, ownerId, cardId, 1, mutationId, now),
+        appliedEventInsert(db, ownerId, cardId, mutationId, 1, 'add', now),
         emptySlotAssertion,
         assignmentQuantityAssertion(db, ownerId, version, page.id, at, cardId),
       ]
@@ -3367,8 +3386,7 @@ async function placeCardIntoEmptySlot(
     ]);
   } catch (error) {
     if (error instanceof BinderDomainError) throw error;
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes('collection_quantity_out_of_bounds'))
+    if (addCopy && (await copyWouldExceedCap(db, ownerId, cardId)))
       throw new CollectionDomainError('collection_quantity_out_of_bounds');
     throw error;
   }
@@ -3402,7 +3420,7 @@ async function placeCardWithNewCopy(
     await runVersionBatch(db, ownerId, versionId, version.revision, false, [
       quantityCapAssertion(db, ownerId, cardId, 1),
       incrementQuantityStatement(db, ownerId, cardId, 1, mutationId, now),
-      eventInsert(db, ownerId, cardId, 1, 'add', now),
+      appliedEventInsert(db, ownerId, cardId, mutationId, 1, 'add', now),
       assignableSlotAssertion(db, page.id, at),
       assignmentQuantityAssertion(db, ownerId, version, page.id, at, cardId),
       assignmentUpdateStatement(db, cardId, page.id, at),
@@ -3410,8 +3428,7 @@ async function placeCardWithNewCopy(
     ]);
   } catch (error) {
     if (error instanceof BinderDomainError) throw error;
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes('collection_quantity_out_of_bounds'))
+    if (await copyWouldExceedCap(db, ownerId, cardId))
       throw new CollectionDomainError('collection_quantity_out_of_bounds');
     throw error;
   }

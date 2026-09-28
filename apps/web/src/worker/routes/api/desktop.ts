@@ -171,9 +171,10 @@ desktopApiRoutes.get('/desktop/catalogue/search', async (c) => {
 });
 desktopApiRoutes.get('/desktop/catalogue/sources', async (c) => {
   try {
-    await desktopOwner(c, 'catalogue:read');
+    const ownerId = await desktopOwner(c, 'catalogue:read');
     const result = await listCatalogueSources(
       c.env.DB,
+      ownerId,
       c.req.query('cursor') ?? null,
       asPositiveInt(c.req.query('limit'), 5_000, 5_000),
     );

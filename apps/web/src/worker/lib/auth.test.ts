@@ -2,13 +2,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   cookieSecureFor,
+  createBootstrapAccount,
+  createSession,
   createUser,
   deletePasskey,
   enrolSecretMatches,
   getFirstActiveAdmin,
   getPasskeys,
   getUserById,
-  insertBootstrapPasskey,
   insertPasskey,
   isLoopbackHost,
   signSession,
@@ -16,6 +17,7 @@ import {
 } from './auth';
 import { timingSafeStringEqual } from './crypto';
 import { applyAllMigrations, sqliteD1 } from './d1-test-helper';
+import { patchPerson } from './people';
 
 const current = '01234567890123456789012345678901';
 const previous = '98765432109876543210987654321098';
@@ -87,15 +89,55 @@ describe('multi-user accounts', () => {
     expect(await getUserById(db, 'missing')).toBeNull();
   });
 
-  it('lets exactly one bootstrap passkey claim the system, ever', async () => {
+  it('lets exactly one bootstrap account claim the system, ever', async () => {
     const db = setup();
-    const admin = await createUser(db, 'Gordon', 'admin');
-    expect(await insertBootstrapPasskey(db, fakePasskey(admin.id, 'first'))).toBe(true);
+    const created = await createBootstrapAccount(
+      db,
+      'admin-1',
+      'Gordon',
+      fakePasskey('admin-1', 'first'),
+    );
+    expect(created).toMatchObject({ id: 'admin-1', role: 'admin' });
+    expect(await getPasskeys(db, 'admin-1')).toHaveLength(1);
 
-    const second = await createUser(db, 'Someone else', 'admin');
-    // A passkey already exists anywhere in the system, so bootstrap refuses
-    // to insert a second one even for a different, brand-new user.
-    expect(await insertBootstrapPasskey(db, fakePasskey(second.id, 'second'))).toBe(false);
+    // A user already exists (finding 8: closed on user existence, not
+    // passkey existence), so a second bootstrap attempt writes nothing —
+    // neither a second user nor a second passkey.
+    expect(
+      await createBootstrapAccount(db, 'admin-2', 'Someone else', fakePasskey('admin-2')),
+    ).toBeNull();
+    expect(await getUserById(db, 'admin-2')).toBeNull();
+  });
+
+  // Reproduces finding 8's original bug directly: a user that exists with no
+  // passkey (however it got there) must close bootstrap, not just an
+  // existing passkey.
+  it('refuses bootstrap once a user exists, even one with no passkey yet', async () => {
+    const db = setup();
+    await createUser(db, 'Orphan', 'admin');
+    expect(
+      await createBootstrapAccount(db, 'admin-2', 'Someone else', fakePasskey('admin-2')),
+    ).toBeNull();
+    expect(await getUserById(db, 'admin-2')).toBeNull();
+  });
+
+  // Reproduces finding 8's race: two concurrent bootstrap attempts against a
+  // brand-new deploy must not both create an admin. Deterministic via
+  // Promise.all for the same reason as the last-admin/invite races.
+  it('lets only one of two concurrent bootstrap attempts through', async () => {
+    const db = setup();
+    const results = await Promise.allSettled([
+      createBootstrapAccount(db, 'admin-1', 'Gordon', fakePasskey('admin-1')),
+      createBootstrapAccount(db, 'admin-2', 'Someone else', fakePasskey('admin-2')),
+    ]);
+    const created = results.flatMap((result) =>
+      result.status === 'fulfilled' ? [result.value] : [],
+    );
+    expect(created.filter((value) => value !== null)).toHaveLength(1);
+    const totalUsers = await db.prepare('SELECT COUNT(*) AS count FROM users').first<{
+      count: number;
+    }>();
+    expect(totalUsers?.count).toBe(1);
   });
 
   it('finds the earliest-created active admin and skips disabled or member accounts', async () => {
@@ -114,6 +156,55 @@ describe('multi-user accounts', () => {
 
     await db.prepare('UPDATE users SET disabled_at = 1 WHERE id = ?1').bind(firstAdmin.id).run();
     expect((await getFirstActiveAdmin(db))?.id).toBe(secondAdmin.id);
+  });
+});
+
+const sessionEnv = { SESSION_SECRET: current, SESSION_SECRET_PREV: undefined };
+
+describe('createSession refuses a disabled user', () => {
+  it('refuses outright for an already-disabled user', async () => {
+    const db = setup();
+    const admin = await createUser(db, 'Admin', 'admin');
+    const member = await createUser(db, 'Member', 'member');
+    await patchPerson(db, member.id, { disabled: true });
+    void admin;
+    await expect(
+      createSession(db, { sub: member.id, label: member.label }, sessionEnv),
+    ).rejects.toMatchObject({ code: 'user_disabled' });
+    const sessions = await db
+      .prepare('SELECT COUNT(*) AS count FROM web_sessions WHERE user_id = ?1')
+      .bind(member.id)
+      .first<{ count: number }>();
+    expect(sessions?.count).toBe(0);
+  });
+
+  // Reproduces finding 4's passkey-login race: a login in flight for a user
+  // who gets disabled mid-request must not leave behind a working session.
+  // Promise.all order matters here — patchPerson (the disable) is started
+  // first so its write executes between createSession's read and its own
+  // write, the exact danger window the finding describes.
+  it('does not create a usable session for a login racing a concurrent disable', async () => {
+    const db = setup();
+    const admin = await createUser(db, 'Admin', 'admin');
+    const member = await createUser(db, 'Member', 'member');
+    void admin;
+
+    const [disableResult, sessionResult] = await Promise.allSettled([
+      patchPerson(db, member.id, { disabled: true }),
+      createSession(db, { sub: member.id, label: member.label }, sessionEnv),
+    ]);
+    expect(disableResult.status).toBe('fulfilled');
+    expect(sessionResult.status).toBe('rejected');
+    if (sessionResult.status === 'fulfilled') throw new Error('unreachable');
+    expect(sessionResult.reason).toMatchObject({ code: 'user_disabled' });
+
+    const sessions = await db
+      .prepare(
+        'SELECT COUNT(*) AS count FROM web_sessions WHERE user_id = ?1 AND revoked_at IS NULL',
+      )
+      .bind(member.id)
+      .first<{ count: number }>();
+    expect(sessions?.count).toBe(0);
   });
 });
 

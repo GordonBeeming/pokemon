@@ -3,7 +3,7 @@ import { newId, nowSeconds } from './db';
 import { ApplicationError, describeError, logError, logInfo } from './log';
 
 const LEGACY_BACKUP_VERSION = 2 as const;
-const BACKUP_VERSION = 7 as const;
+const BACKUP_VERSION = 8 as const;
 const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 const MAX_BACKUP_CHUNK_BYTES = 1_500_000;
 const MAX_BACKUP_MANIFEST_BYTES = 1_000_000;
@@ -33,6 +33,9 @@ const catalogueRow = z
     is_active: z.number().int(),
     created_at: z.number().int(),
     updated_at: z.number().int(),
+    // Optional: backups before version 8 carry no owner, and restore treats
+    // every custom card in them as the restoring user's, never as shared.
+    owner_id: z.string().min(1).nullable().optional(),
   })
   .strict();
 const sourceRow = z
@@ -210,6 +213,7 @@ const backupManifestSchema = z
       z.literal(4),
       z.literal(5),
       z.literal(6),
+      z.literal(7),
       z.literal(BACKUP_VERSION),
     ]),
     ownerId: z.string().min(1),
@@ -264,15 +268,19 @@ interface BackupQuery {
   sql: string;
 }
 
+// The catalogue, sources and art projections carry the shared cards this
+// owner references plus only this owner's own custom cards: someone else's
+// custom card never enters the backup, even if a stray reference names it.
 const backupQueries: readonly BackupQuery[] = [
   {
     kind: 'catalogue',
     sql: `SELECT c.rowid AS backup_cursor, c.id, c.name, c.language, c.category, c.set_id,
       c.set_name, c.number, c.supertype, c.subtype, c.species, c.rarity, c.artist,
       set_meta.release_date, c.pokedex_number, c.number_sort, c.is_custom, c.is_active,
-      c.created_at, c.updated_at
+      c.created_at, c.updated_at, c.owner_id
      FROM catalogue_cards c LEFT JOIN catalogue_sets set_meta ON set_meta.set_id=c.set_id AND set_meta.language=c.language
-     WHERE c.rowid > ?2 AND (c.is_custom = 1
+     WHERE c.rowid > ?2 AND (c.owner_id IS NULL OR c.owner_id = ?1)
+       AND ((c.is_custom = 1 AND c.owner_id = ?1)
        OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
        OR EXISTS (SELECT 1 FROM species_representatives representative
          WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
@@ -286,7 +294,8 @@ const backupQueries: readonly BackupQuery[] = [
     sql: `SELECT s.rowid AS backup_cursor, s.provider, s.source_id, s.card_id, s.language,
       s.source_updated_at, s.checksum, s.active, s.imported_at
      FROM card_sources s WHERE s.rowid > ?2 AND EXISTS (
-       SELECT 1 FROM catalogue_cards c WHERE c.id = s.card_id AND (c.is_custom = 1
+       SELECT 1 FROM catalogue_cards c WHERE c.id = s.card_id
+         AND (c.owner_id IS NULL OR c.owner_id = ?1) AND ((c.is_custom = 1 AND c.owner_id = ?1)
          OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
          OR EXISTS (SELECT 1 FROM species_representatives representative
            WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
@@ -350,7 +359,8 @@ const backupQueries: readonly BackupQuery[] = [
     sql: `SELECT m.rowid AS backup_cursor, m.card_id, m.variant, m.object_key, NULL AS backup_object_key,
       m.sha256, m.bytes, m.version, m.updated_at, c.is_custom AS backup_is_custom
      FROM art_manifest m JOIN catalogue_cards c ON c.id = m.card_id
-     WHERE m.rowid > ?2 AND (c.is_custom = 1
+     WHERE m.rowid > ?2 AND (c.owner_id IS NULL OR c.owner_id = ?1)
+       AND ((c.is_custom = 1 AND c.owner_id = ?1)
        OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
        OR EXISTS (SELECT 1 FROM species_representatives representative
          WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
@@ -764,6 +774,38 @@ function chunks<T>(rows: T[]): T[][] {
   return output;
 }
 
+// A custom card belongs to the user who made it (NULL owner_id = shared), so
+// a backup can only ever carry the restoring user's custom cards and shared
+// ones. Rows from before version 8 have no owner_id, and an ownerless custom
+// card is a leftover of a pre-ownership restore; both pass here, and restore
+// assigns their custom cards to the restoring user.
+function assertCatalogueOwnership(ownerId: string, rows: z.infer<typeof catalogueRow>[]): void {
+  for (const row of rows) {
+    if (row.owner_id === undefined || row.owner_id === null) continue;
+    if (row.is_custom !== 1 || row.owner_id !== ownerId)
+      throw new ApplicationError('backup_owner_mismatch', 403);
+  }
+}
+
+// Art is written to R2 before the finalize batch runs, so a row naming
+// another user's custom card has to be refused here rather than by the
+// batch's own ownership assertion, which can't undo an R2 write.
+async function assertArtCardsRestorable(
+  db: D1Database,
+  ownerId: string,
+  rows: BackupBundle['artManifest'],
+): Promise<void> {
+  if (rows.length === 0) return;
+  const foreign = await db
+    .prepare(
+      `SELECT 1 FROM catalogue_cards WHERE owner_id IS NOT NULL AND owner_id <> ?2
+         AND id IN (SELECT value FROM json_each(?1)) LIMIT 1`,
+    )
+    .bind(JSON.stringify(rows.map((row) => row.card_id)), ownerId)
+    .first();
+  if (foreign) throw new ApplicationError('backup_owner_mismatch', 403);
+}
+
 async function stageRestore(db: D1Database, runId: string, ownerId: string, bundle: BackupBundle) {
   const groups: Array<[string, unknown[]]> = [
     ['catalogue', bundle.catalogue],
@@ -853,8 +895,13 @@ async function stageManifestRestore(
           .some((binder) => binder.owner_id !== ownerId)
       )
         throw new ApplicationError('backup_owner_mismatch', 403);
-      if (chunk.kind === 'art_manifest')
-        await restoreBackupArt(art, ownerId, backupId, z.array(artRow).parse(rows.data));
+      if (chunk.kind === 'catalogue')
+        assertCatalogueOwnership(ownerId, z.array(catalogueRow).parse(rows.data));
+      if (chunk.kind === 'art_manifest') {
+        const artRows = z.array(artRow).parse(rows.data);
+        await assertArtCardsRestorable(db, ownerId, artRows);
+        await restoreBackupArt(art, ownerId, backupId, artRows);
+      }
       await db
         .prepare(
           `INSERT INTO backup_restore_chunks
@@ -872,6 +919,28 @@ async function stageManifestRestore(
 
 const jsonRows =
   'backup_restore_chunks c, json_each(c.payload_json) j WHERE c.run_id = ?1 AND c.owner_id = ?2';
+
+// Any staged row that names a card another user owns: restoring it would put
+// that user's private card into this owner's collection, binders or art.
+const foreignCardReferenceSql = `SELECT 1 FROM ${jsonRows}
+  AND c.kind IN ('catalogue','sources','collection','species_representatives','slots','art_manifest','collection_events')
+  AND EXISTS (
+    SELECT 1 FROM catalogue_cards card
+    WHERE card.owner_id IS NOT NULL AND card.owner_id <> ?2
+      AND card.id IN (
+        CASE c.kind WHEN 'catalogue' THEN json_extract(j.value,'$.id')
+          ELSE json_extract(j.value,'$.card_id') END,
+        json_extract(j.value,'$.assigned_card_id')
+      )
+  )`;
+
+function foreignCardReference(
+  db: D1Database,
+  restoreRunId: string,
+  ownerId: string,
+): D1PreparedStatement {
+  return db.prepare(`${foreignCardReferenceSql} LIMIT 1`).bind(restoreRunId, ownerId);
+}
 
 export async function restoreBackup(
   db: D1Database,
@@ -912,10 +981,16 @@ export async function restoreBackup(
         legacy.data.binders.some((binder) => binder.owner_id !== ownerId)
       )
         throw new ApplicationError('backup_owner_mismatch', 403);
+      assertCatalogueOwnership(ownerId, legacy.data.catalogue);
+      await assertArtCardsRestorable(db, ownerId, legacy.data.artManifest);
       await restoreBackupArt(art, ownerId, backupId, legacy.data.artManifest);
       await stageRestore(db, restoreRunId, ownerId, legacy.data);
     }
     await runStep('restore-finalize', async () => {
+      // Checked up front only to give a typed error; the same check runs again
+      // inside the batch, which is what actually keeps it atomic.
+      if (await foreignCardReference(db, restoreRunId, ownerId).first())
+        throw new ApplicationError('backup_owner_mismatch', 403);
       await db.batch([
         db.prepare('DELETE FROM collection_mutations WHERE owner_id = ?1').bind(ownerId),
         db.prepare('DELETE FROM collection_cards WHERE owner_id = ?1').bind(ownerId),
@@ -935,9 +1010,28 @@ export async function restoreBackup(
           .bind(restoreRunId, ownerId),
         db
           .prepare(
-            `INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,supertype,subtype,species,rarity,artist,release_date,pokedex_number,number_sort,is_custom,is_active,created_at,updated_at)
-           SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.name'),json_extract(j.value,'$.language'),json_extract(j.value,'$.category'),json_extract(j.value,'$.set_id'),json_extract(j.value,'$.set_name'),json_extract(j.value,'$.number'),json_extract(j.value,'$.supertype'),json_extract(j.value,'$.subtype'),json_extract(j.value,'$.species'),json_extract(j.value,'$.rarity'),json_extract(j.value,'$.artist'),NULL,json_extract(j.value,'$.pokedex_number'),json_extract(j.value,'$.number_sort'),json_extract(j.value,'$.is_custom'),json_extract(j.value,'$.is_active'),json_extract(j.value,'$.created_at'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='catalogue'
+            `INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,supertype,subtype,species,rarity,artist,release_date,pokedex_number,number_sort,is_custom,is_active,created_at,updated_at,owner_id)
+           SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.name'),json_extract(j.value,'$.language'),json_extract(j.value,'$.category'),json_extract(j.value,'$.set_id'),json_extract(j.value,'$.set_name'),json_extract(j.value,'$.number'),json_extract(j.value,'$.supertype'),json_extract(j.value,'$.subtype'),json_extract(j.value,'$.species'),json_extract(j.value,'$.rarity'),json_extract(j.value,'$.artist'),NULL,json_extract(j.value,'$.pokedex_number'),json_extract(j.value,'$.number_sort'),json_extract(j.value,'$.is_custom'),json_extract(j.value,'$.is_active'),json_extract(j.value,'$.created_at'),json_extract(j.value,'$.updated_at'),
+             CASE WHEN json_extract(j.value,'$.is_custom') = 1 THEN ?2 END FROM ${jsonRows} AND c.kind='catalogue'
            ON CONFLICT(id) DO NOTHING`,
+          )
+          .bind(restoreRunId, ownerId),
+        // A custom card with no owner is only ever the leftover of a restore
+        // that predates ownership; the user whose backup holds it takes it
+        // back rather than leaving it visible to everyone.
+        db
+          .prepare(
+            `UPDATE catalogue_cards SET owner_id = ?2
+             WHERE is_custom = 1 AND owner_id IS NULL AND id IN (
+               SELECT json_extract(j.value,'$.id') FROM ${jsonRows}
+               AND c.kind='catalogue' AND json_extract(j.value,'$.is_custom') = 1
+             )`,
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `SELECT CASE WHEN EXISTS (${foreignCardReferenceSql})
+               THEN json_extract('backup_owner_mismatch', '$') ELSE 1 END AS valid`,
           )
           .bind(restoreRunId, ownerId),
         db

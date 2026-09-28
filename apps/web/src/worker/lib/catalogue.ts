@@ -319,8 +319,12 @@ function decodeSourceCursor(cursor: string | null): SourceCursor | null {
   }
 }
 
+// Custom cards are filtered by owner even though only tcgdex sources are
+// listed: nothing stops a custom card from carrying a tcgdex source row, and
+// its id alone would reveal that another user's private card exists.
 export async function listCatalogueSources(
   db: D1Database,
+  ownerId: string,
   cursor: string | null,
   limit: number,
 ): Promise<{ entries: CatalogueSourceEntry[]; cursor: string | null }> {
@@ -329,15 +333,17 @@ export async function listCatalogueSources(
     ? `SELECT s.card_id, s.provider, s.source_id, s.language, s.source_updated_at, s.checksum
        FROM card_sources s JOIN catalogue_cards c ON c.id = s.card_id
        WHERE s.provider = 'tcgdex' AND s.active = 1 AND c.is_active = 1
+         AND (c.owner_id IS NULL OR c.owner_id = ?5)
          AND (s.card_id > ?1 OR (s.card_id = ?1 AND s.language > ?2) OR (s.card_id = ?1 AND s.language = ?2 AND s.source_id > ?3))
        ORDER BY s.card_id, s.language, s.source_id LIMIT ?4`
     : `SELECT s.card_id, s.provider, s.source_id, s.language, s.source_updated_at, s.checksum
        FROM card_sources s JOIN catalogue_cards c ON c.id = s.card_id
        WHERE s.provider = 'tcgdex' AND s.active = 1 AND c.is_active = 1
+         AND (c.owner_id IS NULL OR c.owner_id = ?2)
        ORDER BY s.card_id, s.language, s.source_id LIMIT ?1`;
   const statement = decoded
-    ? db.prepare(query).bind(decoded.cardId, decoded.language, decoded.sourceId, limit + 1)
-    : db.prepare(query).bind(limit + 1);
+    ? db.prepare(query).bind(decoded.cardId, decoded.language, decoded.sourceId, limit + 1, ownerId)
+    : db.prepare(query).bind(limit + 1, ownerId);
   const rows = await statement.all<{
     card_id: string;
     provider: string;

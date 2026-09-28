@@ -72,6 +72,18 @@ export function WhereFromDialog({
         setMiscountCandidates(cause.details.candidates);
         return;
       }
+      if (
+        cause instanceof ApiError &&
+        (cause.code === 'collection_revision_conflict' ||
+          cause.code === 'collection_remove_slot_not_found')
+      ) {
+        setSelected(null);
+        setMiscountCandidates(null);
+        setError(
+          'This card changed somewhere else while you were choosing. The counts are up to date now; pick where the copy comes from again.',
+        );
+        return;
+      }
       setError(cause instanceof Error ? cause.message : 'That copy could not be removed.');
     }
   }
