@@ -7,11 +7,21 @@ import type {
   CollectionNotesPatchRequest,
   CollectionSetRequest,
 } from '@pokedex/shared';
-import { cardCategorySchema, languageSchema } from '@pokedex/shared';
+import {
+  cardCategorySchema,
+  frameTypeSchema,
+  languageSchema,
+  rarityKeySchema,
+  regionSchema,
+} from '@pokedex/shared';
 import { getArtResponse, listArtManifest } from '../../lib/art';
 import {
   createBinder,
   deleteBinder,
+  patchBinderDisplay,
+  getCardBinderMatches,
+  listInactiveBinderTargets,
+  placeCard,
   addCardsToBinderVersion,
   cloneBinderVersion,
   activateBinderVersion,
@@ -46,21 +56,50 @@ import { getCardDetail, searchCards, type CatalogueFilters } from '../../lib/cat
 import {
   incrementCollectionQuantity,
   patchCollectionNotes,
+  removeCollectionCopy,
+  type CollectionRemoveInput,
   setCollectionState,
 } from '../../lib/collection';
 import { ApplicationError } from '../../lib/log';
 import { asPositiveInt } from '../../lib/db';
 
+export interface RepeatedCatalogueFilters {
+  type?: string[];
+  rarity?: string[];
+  set?: string[];
+}
+
 export function catalogueFilters(
   query: Record<string, string>,
   includeOwned: boolean,
+  repeated: RepeatedCatalogueFilters = {},
 ): CatalogueFilters {
   if (query.sort !== undefined && query.sort !== 'release')
     throw new ApplicationError('invalid_filter', 400);
   const language = query.language ? languageSchema.safeParse(query.language) : undefined;
   const category = query.category ? cardCategorySchema.safeParse(query.category) : undefined;
-  if ((language && !language.success) || (category && !category.success))
+  const region = query.region ? regionSchema.safeParse(query.region) : undefined;
+  if (
+    (language && !language.success) ||
+    (category && !category.success) ||
+    (region && !region.success)
+  )
     throw new ApplicationError('invalid_filter', 400);
+  const frameTypes = repeated.type?.length
+    ? repeated.type.map((value) => {
+        const parsed = frameTypeSchema.safeParse(value);
+        if (!parsed.success) throw new ApplicationError('invalid_filter', 400);
+        return parsed.data;
+      })
+    : undefined;
+  const rarityKeys = repeated.rarity?.length
+    ? repeated.rarity.map((value) => {
+        const parsed = rarityKeySchema.safeParse(value);
+        if (!parsed.success) throw new ApplicationError('invalid_filter', 400);
+        return parsed.data;
+      })
+    : undefined;
+  const setIds = repeated.set?.length ? repeated.set : undefined;
   const owned =
     !includeOwned || query.owned === undefined
       ? undefined
@@ -83,8 +122,12 @@ export function catalogueFilters(
     language: language?.success ? language.data : undefined,
     category: category?.success ? category.data : undefined,
     setId: query.setId,
+    setIds,
     species: pokedexNumber === undefined ? query.species : undefined,
     pokedexNumber,
+    region: region?.success ? region.data : undefined,
+    frameTypes,
+    rarityKeys,
     owned,
     limit: asPositiveInt(query.limit, 50, 100),
     offset: Math.max(0, Number.parseInt(query.offset ?? '0', 10) || 0),
@@ -117,6 +160,21 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       getBinderInsertDestinations(env.DB, ownerId, versionId, cardId),
     deleteBinder: (binderId: string, confirmationName: string) =>
       deleteBinder(env.DB, ownerId, binderId, confirmationName),
+    patchBinderDisplay: (
+      binderId: string,
+      patch: { peekColumns?: 0 | 1 | 2; showFrame?: boolean },
+    ) => patchBinderDisplay(env.DB, ownerId, binderId, patch),
+    cardBinderMatches: (cardId: string) => getCardBinderMatches(env.DB, ownerId, cardId),
+    inactiveBinderTargets: () => listInactiveBinderTargets(env.DB, ownerId),
+    placeCard: (
+      cardId: string,
+      binderId: string,
+      slotId: string,
+      addCopy: boolean,
+      expectedRevision: number,
+    ) => placeCard(env.DB, ownerId, cardId, binderId, slotId, addCopy, expectedRevision),
+    removeCollectionCopy: (cardId: string, input: CollectionRemoveInput) =>
+      removeCollectionCopy(env.DB, ownerId, cardId, input),
     binderVersion: (versionId: string, page = 0, limit = 1) =>
       getBinderVersion(env.DB, ownerId, versionId, page, limit),
     binderShortages: (versionId: string, offset = 0, limit = 100) =>

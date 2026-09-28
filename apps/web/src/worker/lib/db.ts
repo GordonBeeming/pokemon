@@ -36,6 +36,29 @@ export async function requireCard(db: D1Database, cardId: string): Promise<void>
   if (!found) throw new Error('card_not_found');
 }
 
+// A binder slot's public address: the (already-exposed) page id plus its grid
+// coordinates. Stable for the life of the page, unlike an array index. Lives
+// here rather than in binders.ts/collection.ts so both can use it without a
+// circular import.
+export function encodeSlotId(pageId: string, row: number, column: number): string {
+  return `${pageId}:${row}:${column}`;
+}
+
+export function decodeSlotId(
+  slotId: string,
+): { pageId: string; row: number; column: number } | null {
+  const lastColon = slotId.lastIndexOf(':');
+  if (lastColon < 0) return null;
+  const secondLastColon = slotId.lastIndexOf(':', lastColon - 1);
+  if (secondLastColon < 0) return null;
+  const pageId = slotId.slice(0, secondLastColon);
+  const row = Number.parseInt(slotId.slice(secondLastColon + 1, lastColon), 10);
+  const column = Number.parseInt(slotId.slice(lastColon + 1), 10);
+  if (!pageId || !Number.isInteger(row) || row < 0 || !Number.isInteger(column) || column < 0)
+    return null;
+  return { pageId, row, column };
+}
+
 export async function scalarCount(
   db: D1Database,
   sql: string,

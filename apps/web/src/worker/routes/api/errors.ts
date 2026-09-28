@@ -35,6 +35,7 @@ const binderStatuses = {
   binder_paste_confirmation_required: 409,
   binder_page_contains_targets: 409,
   binder_bookmark_reserved_page: 409,
+  binder_display_patch_empty: 400,
   card_not_found: 404,
 } as const satisfies Record<BinderErrorCode, PublicStatus>;
 
@@ -45,6 +46,9 @@ const collectionStatuses = {
   collection_mutation_conflict: 409,
   collection_quantity_out_of_bounds: 409,
   collection_quantity_below_active_assignments: 409,
+  collection_remove_no_loose_copies: 409,
+  collection_remove_slot_not_found: 404,
+  collection_remove_slot_required: 409,
   invalid_stored_mutation: 500,
 } as const satisfies Record<CollectionErrorCode, PublicStatus>;
 

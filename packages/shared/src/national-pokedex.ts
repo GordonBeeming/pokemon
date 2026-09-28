@@ -1054,3 +1054,11 @@ export function pokemonDiscoveryCategory(number: number): PokemonDiscoveryCatego
   if (!entry || entry.number !== number) throw new RangeError('national_pokedex_number_invalid');
   return entry.discoveryCategory;
 }
+
+// "Region" is the catalogue/search-facing name for a Pokemon's discovery category.
+export type Region = PokemonDiscoveryCategory;
+
+export function regionForDex(dex: number): Region | null {
+  const entry = NATIONAL_POKEDEX[dex - 1];
+  return entry && entry.number === dex ? entry.discoveryCategory : null;
+}

@@ -3,7 +3,7 @@ import { newId, nowSeconds } from './db';
 import { ApplicationError } from './log';
 
 const LEGACY_BACKUP_VERSION = 2 as const;
-const BACKUP_VERSION = 6 as const;
+const BACKUP_VERSION = 7 as const;
 const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 const MAX_BACKUP_CHUNK_BYTES = 1_500_000;
 const MAX_BACKUP_MANIFEST_BYTES = 1_000_000;
@@ -72,6 +72,10 @@ const binderRow = z
     active_version_id: z.string().nullable(),
     created_at: z.number().int().nonnegative(),
     updated_at: z.number().int().nonnegative(),
+    // Optional: a backup made before these display columns existed still
+    // restores fine, defaulting to the same values the column DEFAULTs give.
+    peek_columns: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
+    show_frame: z.union([z.literal(0), z.literal(1)]).optional(),
   })
   .strict();
 const versionRow = z
@@ -134,6 +138,24 @@ const artRow = z
     updated_at: z.number().int().nonnegative(),
   })
   .strict();
+const userSettingRow = z
+  .object({
+    key: z.string().min(1),
+    value_json: z.string(),
+    updated_at: z.number().int().nonnegative(),
+  })
+  .strict();
+const collectionEventRow = z
+  .object({
+    id: z.string().min(1),
+    card_id: z.string().min(1),
+    delta: z.number().int(),
+    source: z.enum(['add', 'pocket', 'loose', 'miscount', 'set', 'import']),
+    slot_id: z.string().nullable(),
+    reason: z.string().nullable().optional(),
+    created_at: z.number().int().nonnegative(),
+  })
+  .strict();
 
 const backupBundleSchema = z
   .object({
@@ -165,6 +187,8 @@ const backupKindSchema = z.enum([
   'slots',
   'bookmarks',
   'art_manifest',
+  'user_settings',
+  'collection_events',
 ]);
 type BackupKind = z.infer<typeof backupKindSchema>;
 
@@ -181,7 +205,13 @@ const backupChunkSchema = z
 
 const backupManifestSchema = z
   .object({
-    version: z.union([z.literal(3), z.literal(4), z.literal(5), z.literal(BACKUP_VERSION)]),
+    version: z.union([
+      z.literal(3),
+      z.literal(4),
+      z.literal(5),
+      z.literal(6),
+      z.literal(BACKUP_VERSION),
+    ]),
     ownerId: z.string().min(1),
     mutationEpoch: z.number().int().nonnegative(),
     createdAt: z.string().datetime(),
@@ -225,6 +255,8 @@ const backupRowSchemas = {
   slots: slotRow,
   bookmarks: bookmarkRow,
   art_manifest: artRow,
+  user_settings: userSettingRow,
+  collection_events: collectionEventRow,
 } as const satisfies Record<BackupKind, z.ZodType>;
 
 interface BackupQuery {
@@ -280,7 +312,7 @@ const backupQueries: readonly BackupQuery[] = [
   {
     kind: 'binders',
     sql: `SELECT b.rowid AS backup_cursor, b.id, b.owner_id, b.name, b.active_version_id,
-      b.created_at, b.updated_at FROM binders b
+      b.created_at, b.updated_at, b.peek_columns, b.show_frame FROM binders b
      WHERE b.owner_id = ?1 AND b.rowid > ?2 ORDER BY b.rowid LIMIT ?3`,
   },
   {
@@ -326,6 +358,17 @@ const backupQueries: readonly BackupQuery[] = [
          JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
          WHERE b.owner_id = ?1 AND (s.card_id = c.id OR s.assigned_card_id = c.id)))
      ORDER BY m.rowid LIMIT ?3`,
+  },
+  {
+    kind: 'user_settings',
+    sql: `SELECT s.rowid AS backup_cursor, s.key, s.value_json, s.updated_at
+     FROM user_settings s WHERE s.owner_id = ?1 AND s.rowid > ?2 ORDER BY s.rowid LIMIT ?3`,
+  },
+  {
+    kind: 'collection_events',
+    sql: `SELECT e.rowid AS backup_cursor, e.id, e.card_id, e.delta, e.source, e.slot_id, e.reason,
+      e.created_at
+     FROM collection_events e WHERE e.owner_id = ?1 AND e.rowid > ?2 ORDER BY e.rowid LIMIT ?3`,
   },
 ];
 
@@ -793,6 +836,8 @@ export async function restoreBackup(
         db.prepare('DELETE FROM collection_cards WHERE owner_id = ?1').bind(ownerId),
         db.prepare('DELETE FROM species_representatives WHERE owner_id = ?1').bind(ownerId),
         db.prepare('DELETE FROM binders WHERE owner_id = ?1').bind(ownerId),
+        db.prepare('DELETE FROM user_settings WHERE owner_id = ?1').bind(ownerId),
+        db.prepare('DELETE FROM collection_events WHERE owner_id = ?1').bind(ownerId),
         db
           .prepare(
             `INSERT INTO catalogue_sets(set_id,language,set_name,release_date,updated_at)
@@ -841,8 +886,10 @@ export async function restoreBackup(
           .bind(restoreRunId, ownerId),
         db
           .prepare(
-            `INSERT INTO binders (id,owner_id,name,active_version_id,created_at,updated_at)
-           SELECT json_extract(j.value,'$.id'),?2,json_extract(j.value,'$.name'),NULL,json_extract(j.value,'$.created_at'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='binders'`,
+            `INSERT INTO binders (id,owner_id,name,active_version_id,created_at,updated_at,peek_columns,show_frame)
+           SELECT json_extract(j.value,'$.id'),?2,json_extract(j.value,'$.name'),NULL,json_extract(j.value,'$.created_at'),json_extract(j.value,'$.updated_at'),
+             COALESCE(json_extract(j.value,'$.peek_columns'),1),COALESCE(json_extract(j.value,'$.show_frame'),1)
+           FROM ${jsonRows} AND c.kind='binders'`,
           )
           .bind(restoreRunId, ownerId),
         db
@@ -941,6 +988,20 @@ export async function restoreBackup(
             `INSERT INTO art_manifest (card_id,variant,object_key,sha256,bytes,version,updated_at)
            SELECT json_extract(j.value,'$.card_id'),json_extract(j.value,'$.variant'),json_extract(j.value,'$.object_key'),json_extract(j.value,'$.sha256'),json_extract(j.value,'$.bytes'),json_extract(j.value,'$.version'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='art_manifest'
            ON CONFLICT(card_id,variant) DO NOTHING`,
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO user_settings (owner_id,key,value_json,updated_at)
+           SELECT ?2,json_extract(j.value,'$.key'),json_extract(j.value,'$.value_json'),json_extract(j.value,'$.updated_at') FROM ${jsonRows} AND c.kind='user_settings'
+           ON CONFLICT(owner_id,key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at`,
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO collection_events (id,owner_id,card_id,delta,source,slot_id,reason,created_at)
+           SELECT json_extract(j.value,'$.id'),?2,json_extract(j.value,'$.card_id'),json_extract(j.value,'$.delta'),json_extract(j.value,'$.source'),json_extract(j.value,'$.slot_id'),json_extract(j.value,'$.reason'),json_extract(j.value,'$.created_at') FROM ${jsonRows} AND c.kind='collection_events'
+           ON CONFLICT(id) DO NOTHING`,
           )
           .bind(restoreRunId, ownerId),
         db

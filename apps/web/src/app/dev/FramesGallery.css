@@ -1,0 +1,27 @@
+.frames-gallery {
+  padding: 1.5rem;
+  background: var(--paper);
+}
+.frames-gallery section {
+  margin-bottom: 2rem;
+}
+.frames-gallery-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.frames-gallery-pair {
+  display: flex;
+  gap: 0.5rem;
+}
+.frames-gallery-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+}
+.frames-gallery-cell figcaption {
+  max-width: 9.5rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}

@@ -1,0 +1,155 @@
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--paper);
+}
+.app-content {
+  flex-grow: 1;
+  min-width: 0;
+  padding: 1.5rem 1rem calc(var(--shell-tabbar-height) + var(--safe-area-bottom) + 1rem);
+}
+
+/* Phone: bottom tab bar, rail hidden. */
+.app-rail {
+  display: none;
+}
+.app-tabbar {
+  position: fixed;
+  z-index: 10;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: grid;
+  height: calc(var(--shell-tabbar-height) + var(--safe-area-bottom));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  padding-bottom: var(--safe-area-bottom);
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+.app-tabbar .nav-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  padding: 0.25rem;
+  overflow: hidden;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-tabbar .nav-item svg {
+  font-size: 1.35rem;
+}
+.app-tabbar .nav-item-active {
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* Desktop: left rail, tab bar hidden. */
+@media (min-width: 768px) {
+  .app-shell {
+    flex-direction: row;
+  }
+  .app-rail {
+    display: flex;
+    position: sticky;
+    top: 0;
+    flex-direction: column;
+    flex-shrink: 0;
+    gap: 0.25rem;
+    width: var(--shell-rail-width);
+    height: 100vh;
+    padding: 1.5rem 0.75rem;
+    background: var(--rail-bg);
+  }
+  .app-tabbar {
+    display: none;
+  }
+  .app-content {
+    padding: 2rem 3rem;
+  }
+  .app-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0 0.75rem 1.5rem;
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--rail-text-active);
+  }
+  .app-brand-mark {
+    display: grid;
+    width: 2rem;
+    height: 2rem;
+    place-items: center;
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--rail-text-active);
+    background: var(--accent);
+    border-radius: var(--radius-md);
+  }
+  .app-rail .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.6rem 0.75rem;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--rail-text);
+    text-decoration: none;
+    border-radius: var(--radius-md);
+  }
+  .app-rail .nav-item svg {
+    flex-shrink: 0;
+    font-size: 1.125rem;
+  }
+  .app-rail .nav-item-active {
+    font-weight: 600;
+    color: var(--rail-text-active);
+    background: var(--rail-active-bg);
+  }
+}
+
+.sign-in-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 1.5rem;
+  background: var(--paper);
+}
+.sign-in-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  width: min(24rem, 100%);
+  padding: 2rem;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.sign-in-card button {
+  height: 2.75rem;
+  padding: 0 1rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--accent);
+  border: 0;
+  border-radius: var(--radius-md);
+}
+.sign-in-card button:disabled {
+  opacity: 0.6;
+}
+.notice.error {
+  padding: 0.6rem 0.8rem;
+  color: var(--danger);
+  background: var(--danger-soft-bg);
+  border-radius: var(--radius-md);
+}

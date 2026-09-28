@@ -196,7 +196,9 @@ describe('backup restore', () => {
   it('backs up set dates and restores them into sets without putting dates on cards', async () => {
     const { database, db, art } = setup();
     await seedReferencedArt(art);
-    database.exec("INSERT INTO catalogue_sets VALUES('set-1','en','Set','1999-01-09',1)");
+    database.exec(
+      "INSERT INTO catalogue_sets (set_id, language, set_name, release_date, updated_at) VALUES('set-1','en','Set','1999-01-09',1)",
+    );
     await createBackup(db, art, 'owner', { backupId: 'backup_set_dates' });
     database.exec("DELETE FROM catalogue_sets WHERE set_id='set-1'");
     await restoreBackup(db, art, 'owner', 'backup_set_dates');
@@ -393,6 +395,13 @@ describe('backup restore', () => {
       expect(
         database.prepare('SELECT capacity FROM binder_versions WHERE id = ?1').get('v3-version'),
       ).toEqual({ capacity: 4 });
+      // The v3/v4 fixture predates peek_columns/show_frame; restore must fall
+      // back to the same defaults the column itself gives a fresh binder.
+      expect(
+        database
+          .prepare('SELECT peek_columns, show_frame FROM binders WHERE id = ?1')
+          .get('v3-binder'),
+      ).toEqual({ peek_columns: 1, show_frame: 1 });
       expect(
         database.prepare('SELECT kind, label FROM binder_pages WHERE id = ?1').get('v3-page'),
       ).toEqual({ kind: 'slots', label: null });
@@ -540,5 +549,40 @@ describe('backup restore', () => {
         .prepare('SELECT card_id FROM catalogue_search WHERE card_id LIKE ? ORDER BY card_id')
         .all('custom-%'),
     ).toEqual([{ card_id: 'custom-a' }, { card_id: 'custom-b' }]);
+  });
+
+  it('round-trips a frame-palette setting, an inventory event, and binder display columns', async () => {
+    const { database, db, art } = setup();
+    await seedReferencedArt(art);
+    database.exec(`
+      UPDATE binders SET peek_columns = 2, show_frame = 0 WHERE id = 'binder-1';
+      INSERT INTO user_settings (owner_id, key, value_json, updated_at)
+      VALUES ('owner', 'frame-palette', '{"grass":"#00ff00"}', 1);
+      INSERT INTO collection_events (id, owner_id, card_id, delta, source, slot_id, created_at)
+      VALUES ('event-1', 'owner', 'card-binder', 1, 'add', NULL, 1);
+    `);
+
+    const backup = await createBackup(db, art, 'owner');
+    database.exec(`
+      DELETE FROM binders WHERE id = 'binder-1';
+      DELETE FROM user_settings WHERE owner_id = 'owner';
+      DELETE FROM collection_events WHERE owner_id = 'owner';
+    `);
+
+    await restoreBackup(db, art, 'owner', backup.id);
+
+    expect(
+      database
+        .prepare('SELECT peek_columns, show_frame FROM binders WHERE id = ?1')
+        .get('binder-1'),
+    ).toEqual({ peek_columns: 2, show_frame: 0 });
+    expect(
+      database
+        .prepare('SELECT value_json FROM user_settings WHERE owner_id = ? AND key = ?')
+        .get('owner', 'frame-palette'),
+    ).toEqual({ value_json: '{"grass":"#00ff00"}' });
+    expect(
+      database.prepare('SELECT delta, source FROM collection_events WHERE id = ?1').get('event-1'),
+    ).toEqual({ delta: 1, source: 'add' });
   });
 });

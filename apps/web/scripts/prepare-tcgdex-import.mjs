@@ -43,9 +43,15 @@ export const transformCard = (card, language) => {
       : null;
   if (!sourceId || !name || !setId || !setName || !number)
     throw new Error('TCGdex card is missing a stable field');
+  // Mirrors lib/catalogue.ts's isPocketCard: the logo/symbol check alone
+  // misses sets whose CDN asset never resolves, so the id shape and serie id
+  // back it up (research.md: 444 Pocket cards leaked in past just this gap).
+  const serie = typeof set.serie === 'object' && set.serie !== null ? set.serie : null;
   if (
     (typeof set.logo === 'string' && set.logo.includes('/tcgp/')) ||
-    (typeof set.symbol === 'string' && set.symbol.includes('/tcgp/'))
+    (typeof set.symbol === 'string' && set.symbol.includes('/tcgp/')) ||
+    serie?.id === 'tcgp' ||
+    /^[AB]\d+[a-z]?$/u.test(setId)
   )
     return null;
   const category =
@@ -90,6 +96,10 @@ export const transformCard = (card, language) => {
     artist: typeof card.illustrator === 'string' ? card.illustrator : null,
     releaseDate,
     pokedexNumber: dexIds.length > 0 ? Math.min(...dexIds) : null,
+    types:
+      Array.isArray(card.types) && card.types.some((item) => typeof item === 'string')
+        ? card.types.filter((item) => typeof item === 'string')
+        : null,
   };
 };
 

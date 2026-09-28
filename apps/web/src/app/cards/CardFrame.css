@@ -1,0 +1,111 @@
+.card-frame {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 0.4rem;
+  text-align: inherit;
+  background: none;
+  border: 2px solid transparent;
+  border-radius: 0.85rem;
+  outline-offset: 2px;
+}
+.card-frame-raw {
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0.5rem;
+}
+.card-frame-selected {
+  outline: 3px solid var(--accent-deep);
+}
+.card-frame-peek-left {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.card-frame-peek-right {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.card-frame-art {
+  display: block;
+  width: 100%;
+  aspect-ratio: 245 / 337;
+  object-fit: contain;
+  border-radius: 0.5rem;
+}
+.card-frame-art-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.4rem;
+  overflow: hidden;
+  color: inherit;
+}
+.card-frame-art-placeholder span {
+  overflow: hidden;
+  font-size: 0.75rem;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-frame-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem;
+  min-width: 0;
+  padding: 0 0.15rem;
+}
+.card-frame-dex {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.card-frame-region {
+  overflow: hidden;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.card-frame-code {
+  display: flex;
+  overflow: hidden;
+  flex-shrink: 1;
+  align-items: center;
+  gap: 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.card-frame-code > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card-frame-dot {
+  margin: 0 0.1rem;
+  font-family: var(--font-display);
+  opacity: 0.75;
+}
+.card-frame-rarity {
+  flex-shrink: 0;
+  font-family: var(--font-display);
+  font-size: 0.75rem;
+  letter-spacing: -0.06em;
+}
+.card-frame-chip {
+  flex-shrink: 0;
+  padding: 0 0.45rem;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+}

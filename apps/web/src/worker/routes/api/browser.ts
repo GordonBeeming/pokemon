@@ -6,8 +6,13 @@ import {
   languageSchema,
   binderSearchQuerySchema,
   binderPasteRequestSchema,
+  binderDisplayPatchRequestSchema,
+  framePalettePutRequestSchema,
+  collectionRemoveRequestSchema,
+  cardPlaceRequestSchema,
   NATIONAL_POKEDEX,
 } from '@pokedex/shared';
+import { getFramePalette, resetFramePalette, setFramePalette } from '../../lib/settings';
 import {
   activeBinderShortages,
   searchBinderSpaces,
@@ -126,6 +131,8 @@ browserApiRoutes.use('/dashboard*', requireSession);
 browserApiRoutes.use('/catalogue*', requireSession);
 browserApiRoutes.use('/collection*', requireSession);
 browserApiRoutes.use('/binders*', requireSession);
+browserApiRoutes.use('/settings*', requireSession);
+browserApiRoutes.use('/cards*', requireSession);
 browserApiRoutes.use('/backups*', requireSession);
 browserApiRoutes.use('/desktop/pair', requireSession);
 browserApiRoutes.use('/desktop/tokens*', requireSession);
@@ -222,10 +229,43 @@ browserApiRoutes.get('/dashboard/shortages', async (c) => {
   }
 });
 
+browserApiRoutes.get('/settings', async (c) => {
+  try {
+    const framePalette = await getFramePalette(c.env.DB, sessionOwner(c));
+    return c.json({ ok: true, framePalette });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.put('/settings/frame-palette', async (c) => {
+  try {
+    const parsed = framePalettePutRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const framePalette = await setFramePalette(c.env.DB, sessionOwner(c), parsed.data.palette);
+    return c.json({ ok: true, framePalette });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.delete('/settings/frame-palette', async (c) => {
+  try {
+    await resetFramePalette(c.env.DB, sessionOwner(c));
+    return c.json({ ok: true, framePalette: {} });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
 browserApiRoutes.get('/catalogue/search', async (c) => {
   try {
     const result = await ownerOperations(c.env, sessionOwner(c)).searchCatalogue(
-      catalogueFilters(c.req.query(), true),
+      catalogueFilters(c.req.query(), true, {
+        type: c.req.queries('type'),
+        rarity: c.req.queries('rarity'),
+        set: c.req.queries('set'),
+      }),
     );
     return c.json({ ok: true, ...result });
   } catch (error) {
@@ -571,6 +611,57 @@ browserApiRoutes.patch('/collection/:cardId/notes', async (c) => {
       parsed.data,
     );
     return c.json({ ok: true, ...result });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.post('/collection/:cardId/remove', async (c) => {
+  try {
+    const parsed = collectionRemoveRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const state = await ownerOperations(c.env, sessionOwner(c)).removeCollectionCopy(
+      c.req.param('cardId'),
+      parsed.data,
+    );
+    return c.json({ ok: true, state });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.get('/cards/:id/binder-matches', async (c) => {
+  try {
+    const binders = await ownerOperations(c.env, sessionOwner(c)).cardBinderMatches(
+      c.req.param('id'),
+    );
+    return c.json({ ok: true, binders });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.post('/cards/:id/place', async (c) => {
+  try {
+    const parsed = cardPlaceRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const result = await ownerOperations(c.env, sessionOwner(c)).placeCard(
+      c.req.param('id'),
+      parsed.data.binderId,
+      parsed.data.slotId,
+      parsed.data.addCopy,
+      parsed.data.expectedRevision,
+    );
+    return c.json({ ok: true, ...result });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.get('/binders/inactive-targets', async (c) => {
+  try {
+    const targets = await ownerOperations(c.env, sessionOwner(c)).inactiveBinderTargets();
+    return c.json({ ok: true, targets });
   } catch (error) {
     return apiFailure(c, error);
   }
@@ -1192,6 +1283,20 @@ browserApiRoutes.delete('/binders/:id', async (c) => {
       parsed.data.confirmationName,
     );
     return c.json({ ok: true });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.patch('/binders/:id', async (c) => {
+  try {
+    const parsed = binderDisplayPatchRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const binder = await ownerOperations(c.env, sessionOwner(c)).patchBinderDisplay(
+      c.req.param('id'),
+      parsed.data,
+    );
+    return c.json({ ok: true, binder });
   } catch (error) {
     return apiFailure(c, error);
   }

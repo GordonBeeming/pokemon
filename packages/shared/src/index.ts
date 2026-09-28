@@ -1,8 +1,10 @@
 import { z } from 'zod';
 export * from './binder-search';
 import { NATIONAL_POKEDEX_SIZE } from './national-pokedex';
+import { FRAME_TYPES, RARITY_KEYS } from './frame';
 
 export * from './national-pokedex';
+export * from './frame';
 
 export const cardIdSchema = z.string().trim().min(1).max(128).brand<'CardId'>();
 export type CardId = z.infer<typeof cardIdSchema>;
@@ -42,6 +44,14 @@ export type DesktopScope = z.infer<typeof desktopScopeSchema>;
 
 export const cardCategorySchema = z.enum(['pokemon', 'trainer', 'energy', 'special']);
 export type CardCategory = z.infer<typeof cardCategorySchema>;
+
+export const frameTypeSchema = z.enum(FRAME_TYPES);
+export const rarityKeySchema = z.enum(RARITY_KEYS);
+const viewFrameFields = {
+  frameType: frameTypeSchema.nullable().optional(),
+  setCode: z.string().trim().min(1).max(32).nullable().optional(),
+  rarityKey: rarityKeySchema.nullable().optional(),
+};
 
 const cardFields = {
   id: cardIdSchema,
@@ -210,6 +220,8 @@ export const binderViewSchema = z
     activeVersionId: z.string().trim().min(1).max(128).nullable(),
     latestVersionId: z.string().trim().min(1).max(128).nullable(),
     updatedAt: z.string().datetime(),
+    peekColumns: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
+    showFrame: z.boolean().optional(),
   })
   .strict();
 export type BinderView = z.infer<typeof binderViewSchema>;
@@ -256,6 +268,7 @@ export const binderAssignmentCandidateSchema = z
     owned: z.number().int().nonnegative(),
     assigned: z.number().int().nonnegative(),
     available: z.number().int().nonnegative(),
+    ...viewFrameFields,
   })
   .strict();
 export const binderAssignmentCandidatesSchema = z
@@ -556,17 +569,12 @@ export const activeBinderAssignmentsErrorSchema = z
   .strict();
 export type ActiveBinderAssignmentsError = z.infer<typeof activeBinderAssignmentsErrorSchema>;
 
-export const apiErrorDetailsSchema = z.union([
-  binderCapacityErrorSchema,
-  activeBinderAssignmentsErrorSchema,
-]);
-export type ApiErrorDetails = z.infer<typeof apiErrorDetailsSchema>;
-
 export const catalogueCardViewSchema = catalogueBriefSchema.extend({
   pokedexNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE).nullable().optional(),
   imageHighUrl: artUrlSchema,
   collection: collectionStateSchema.nullable(),
   price: priceBaselineSchema,
+  ...viewFrameFields,
 });
 export type CatalogueCardView = z.infer<typeof catalogueCardViewSchema>;
 
@@ -574,5 +582,161 @@ export const catalogueDetailViewSchema = catalogueDetailSchema.extend({
   pokedexNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE).nullable().optional(),
   collection: collectionStateSchema.nullable(),
   price: priceBaselineSchema,
+  ...viewFrameFields,
 });
 export type CatalogueDetailView = z.infer<typeof catalogueDetailViewSchema>;
+
+// Region reuses the existing discovery-category vocabulary; it's just the
+// catalogue/search-facing name for it.
+export const regionSchema = pokemonDiscoveryCategorySchema;
+
+export const framePaletteSchema = z
+  .record(frameTypeSchema, z.string())
+  .refine((value) => Object.values(value).every((colour) => /^#[0-9a-f]{6}$/iu.test(colour)), {
+    message: 'invalid_frame_colour',
+  });
+export type FramePalette = z.infer<typeof framePaletteSchema>;
+
+export const settingsResponseSchema = z.object({ framePalette: framePaletteSchema }).strict();
+export type SettingsResponse = z.infer<typeof settingsResponseSchema>;
+
+export const framePalettePutRequestSchema = z.object({ palette: framePaletteSchema }).strict();
+export type FramePalettePutRequest = z.infer<typeof framePalettePutRequestSchema>;
+
+export const peekColumnsSchema = z.union([z.literal(0), z.literal(1), z.literal(2)]);
+export type PeekColumns = z.infer<typeof peekColumnsSchema>;
+
+export const binderDisplayPatchRequestSchema = z
+  .object({
+    peekColumns: peekColumnsSchema.optional(),
+    showFrame: z.boolean().optional(),
+  })
+  .strict()
+  .refine((value) => value.peekColumns !== undefined || value.showFrame !== undefined);
+export type BinderDisplayPatchRequest = z.infer<typeof binderDisplayPatchRequestSchema>;
+
+export const collectionRemoveRequestSchema = z.discriminatedUnion('source', [
+  z.object({ source: z.literal('pocket'), slotId: z.string().trim().min(1).max(128) }).strict(),
+  z.object({ source: z.literal('loose') }).strict(),
+  z
+    .object({ source: z.literal('miscount'), slotId: z.string().trim().min(1).max(128).optional() })
+    .strict(),
+]);
+export type CollectionRemoveRequest = z.infer<typeof collectionRemoveRequestSchema>;
+
+export const collectionRemoveCandidateSchema = z
+  .object({
+    slotId: z.string().trim().min(1).max(128),
+    binderId: z.string().trim().min(1).max(128),
+    binderName: z.string().trim().min(1).max(120),
+    page: z.number().int().nonnegative(),
+    row: z.number().int().nonnegative(),
+    column: z.number().int().nonnegative(),
+  })
+  .strict();
+export const collectionRemoveMiscountCandidatesErrorSchema = z
+  .object({ candidates: z.array(collectionRemoveCandidateSchema).min(1) })
+  .strict();
+export type CollectionRemoveMiscountCandidatesError = z.infer<
+  typeof collectionRemoveMiscountCandidatesErrorSchema
+>;
+
+export const slotRefSchema = z
+  .object({
+    slotId: z.string().trim().min(1).max(128),
+    page: z.number().int().nonnegative(),
+    row: z.number().int().nonnegative(),
+    col: z.number().int().nonnegative(),
+    pocketIndex: z.number().int().nonnegative(),
+  })
+  .strict();
+export type SlotRef = z.infer<typeof slotRefSchema>;
+
+export const binderCardMatchesSchema = z
+  .object({
+    binderId: z.string().trim().min(1).max(128),
+    name: z.string().trim().min(1).max(120),
+    exactTargets: z.array(slotRefSchema),
+    pokemonTargets: z.array(slotRefSchema),
+    placed: z.array(slotRefSchema),
+    endDestination: slotRefSchema.nullable(),
+  })
+  .strict();
+export type BinderCardMatches = z.infer<typeof binderCardMatchesSchema>;
+export const cardBinderMatchesResponseSchema = z
+  .object({ binders: z.array(binderCardMatchesSchema) })
+  .strict();
+
+export const cardPlaceRequestSchema = z
+  .object({
+    binderId: z.string().trim().min(1).max(128),
+    slotId: z.string().trim().min(1).max(128),
+    addCopy: z.boolean(),
+    expectedRevision: z.number().int().nonnegative(),
+  })
+  .strict();
+export type CardPlaceRequest = z.infer<typeof cardPlaceRequestSchema>;
+
+export const inactiveBinderTargetSchema = z
+  .object({
+    binderId: z.string().trim().min(1).max(128),
+    binderName: z.string().trim().min(1).max(120),
+    page: z.number().int().nonnegative(),
+    row: z.number().int().nonnegative(),
+    column: z.number().int().nonnegative(),
+    cardId: cardIdSchema,
+    cardName: z.string().trim().min(1).max(200),
+    setName: z.string().trim().min(1).max(200),
+    number: z.string().trim().min(1).max(32),
+  })
+  .strict();
+export type InactiveBinderTarget = z.infer<typeof inactiveBinderTargetSchema>;
+export const inactiveBinderTargetsResponseSchema = z
+  .object({ targets: z.array(inactiveBinderTargetSchema) })
+  .strict();
+
+export const setCodeSourceSchema = z.enum(['tcgdex', 'owner']);
+export type SetCodeSource = z.infer<typeof setCodeSourceSchema>;
+
+export const catalogueSetSchema = z
+  .object({
+    setId: z.string().trim().min(1).max(128),
+    setName: z.string().trim().min(1).max(200),
+    language: languageSchema,
+    total: z.number().int().nonnegative(),
+    owned: z.number().int().nonnegative(),
+    code: z.string().trim().min(1).max(32).nullable(),
+    codeSource: setCodeSourceSchema.nullable(),
+  })
+  .strict();
+export type CatalogueSet = z.infer<typeof catalogueSetSchema>;
+
+export const setCodeClashSchema = z
+  .object({ code: z.string().trim().min(1).max(32), setIds: z.array(z.string().min(1)).min(2) })
+  .strict();
+export type SetCodeClash = z.infer<typeof setCodeClashSchema>;
+
+export const catalogueSetsResponseSchema = z
+  .object({ sets: z.array(catalogueSetSchema), codeClashes: z.array(setCodeClashSchema) })
+  .strict();
+export type CatalogueSetsResponse = z.infer<typeof catalogueSetsResponseSchema>;
+
+export const setCodePatchRequestSchema = z
+  .object({
+    code: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(/^[A-Z0-9]{1,32}$/u),
+  })
+  .strict();
+export type SetCodePatchRequest = z.infer<typeof setCodePatchRequestSchema>;
+
+// Defined once every member schema exists; apiErrorSchema reaches this via
+// z.lazy(), so its position here (after those schemas) is safe.
+export const apiErrorDetailsSchema = z.union([
+  binderCapacityErrorSchema,
+  activeBinderAssignmentsErrorSchema,
+  collectionRemoveMiscountCandidatesErrorSchema,
+]);
+export type ApiErrorDetails = z.infer<typeof apiErrorDetailsSchema>;

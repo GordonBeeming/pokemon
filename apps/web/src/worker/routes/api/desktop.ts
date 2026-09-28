@@ -158,7 +158,11 @@ desktopApiRoutes.get('/desktop/catalogue/search', async (c) => {
     return c.json({
       ok: true,
       ...(await ownerOperations(c.env, ownerId).searchCatalogue(
-        catalogueFilters(c.req.query(), false),
+        catalogueFilters(c.req.query(), false, {
+          type: c.req.queries('type'),
+          rarity: c.req.queries('rarity'),
+          set: c.req.queries('set'),
+        }),
       )),
     });
   } catch (error) {

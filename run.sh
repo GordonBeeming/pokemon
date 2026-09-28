@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Local one-shot launcher. Runs the web app with real local Cloudflare bindings
-# and launches a bundled, separately identified Tauri development app. The web
-# app uses 7741 and the Worker inspector uses 9241 instead of default ports.
+# Local one-shot launcher. Runs the web app with real local Cloudflare bindings.
+# The web app uses 7741 and the Worker inspector uses 9241 instead of default ports.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -32,8 +31,6 @@ fi
 PORT=7741
 INSPECTOR_PORT=9241
 KILLABLE='^(node|workerd)$'
-DEV_BUNDLE_ID='com.gordonbeeming.pokedex.scanner.dev'
-DEV_APP="$PWD/apps/desktop/src-tauri/target/debug/bundle/macos/Pokédex Scanner Dev.app"
 RUN_PID_FILE="$PWD/apps/web/.wrangler/pokedex-run.pid"
 
 previous_run_pid=''
@@ -137,20 +134,11 @@ cleanup() {
   trap - INT TERM EXIT
   echo ""
   echo "// shutting down Pokédex"
-  if command -v osascript >/dev/null 2>&1; then
-    osascript -e "tell application id \"$DEV_BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
-  fi
-  if [ -n "${TAURI_PID:-}" ]; then
-    kill -TERM "-${TAURI_PID}" 2>/dev/null || true
-  fi
   if [ -n "${WEB_PID:-}" ]; then
     kill -TERM "-${WEB_PID}" 2>/dev/null || true
   fi
-  if [ -n "${TAURI_PID:-}" ] || [ -n "${WEB_PID:-}" ]; then
+  if [ -n "${WEB_PID:-}" ]; then
     sleep 1
-  fi
-  if [ -n "${TAURI_PID:-}" ]; then
-    kill -KILL "-${TAURI_PID}" 2>/dev/null || true
   fi
   if [ -n "${WEB_PID:-}" ]; then
     kill -KILL "-${WEB_PID}" 2>/dev/null || true
@@ -214,39 +202,4 @@ if [ "${POKEDEX_SKIP_ART_SEED:-0}" != "1" ]; then
   fi
 fi
 
-if [ "${POKEDEX_SKIP_DESKTOP:-0}" = "1" ]; then
-  wait "$WEB_PID"
-  exit $?
-fi
-
-if command -v osascript >/dev/null 2>&1; then
-  osascript -e "tell application id \"$DEV_BUNDLE_ID\" to quit" >/dev/null 2>&1 || true
-fi
-
-echo "// building the isolated Pokédex Scanner Dev app"
-POKEDEX_DEV_CLOUD_BASE_URL="http://localhost:$PORT" \
-  pnpm --dir apps/desktop tauri build --debug --bundles app \
-  --config src-tauri/tauri.dev.conf.json
-if [ ! -d "$DEV_APP" ]; then
-  echo "// Pokédex Scanner Dev bundle was not created at $DEV_APP" >&2
-  exit 1
-fi
-
-echo "// signing the development app so macOS can bind camera permission to its bundle ID"
-codesign --force --sign - --identifier "$DEV_BUNDLE_ID" "$DEV_APP"
-
-echo "// starting Pokédex Scanner Dev"
-open -n -W "$DEV_APP" &
-TAURI_PID=$!
-
-while kill -0 "$WEB_PID" 2>/dev/null && kill -0 "$TAURI_PID" 2>/dev/null; do
-  sleep 1
-done
-
-if ! kill -0 "$WEB_PID" 2>/dev/null; then
-  echo "// Pokédex web app stopped" >&2
-  wait "$WEB_PID"
-else
-  echo "// Pokédex Scanner stopped" >&2
-  wait "$TAURI_PID"
-fi
+wait "$WEB_PID"

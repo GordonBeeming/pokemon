@@ -35,4 +35,53 @@ describe('TCGdex import preparation', () => {
     );
     expect(prepared.cards).toEqual([]);
   });
+
+  it('filters a Pocket record whose set id matches even without a resolving logo', () => {
+    const prepared = prepareImport(
+      [
+        {
+          id: 'A3a-001',
+          name: 'Squirtle',
+          localId: '001',
+          category: 'Pokemon',
+          set: { id: 'A3a', name: 'Extradimensional Crisis' },
+        },
+      ],
+      'en',
+    );
+    expect(prepared.cards).toEqual([]);
+  });
+
+  it('filters a Pocket record identified only by its serie id', () => {
+    const prepared = prepareImport(
+      [
+        {
+          id: 'weird-001',
+          name: 'Squirtle',
+          localId: '001',
+          category: 'Pokemon',
+          set: { id: 'weird', name: 'Odd Set', serie: { id: 'tcgp' } },
+        },
+      ],
+      'en',
+    );
+    expect(prepared.cards).toEqual([]);
+  });
+
+  it('carries the types array through for frame colouring', () => {
+    const prepared = prepareImport(
+      [
+        {
+          id: 'base1-4',
+          name: 'Charizard',
+          localId: '4',
+          category: 'Pokemon',
+          types: ['Fire'],
+          set: { id: 'base1', name: 'Base Set' },
+        },
+      ],
+      'en',
+    );
+    expect(prepared.cards[0]).toMatchObject({ types: ['Fire'] });
+  });
 });

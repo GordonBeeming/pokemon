@@ -33,8 +33,12 @@ import {
   type BinderVersionSummary,
   type BinderView,
 } from '@pokedex/shared';
-import { newId, nowSeconds } from './db';
-import { CollectionDomainError, getCollectionState } from './collection';
+import { decodeSlotId, encodeSlotId, newId, nowSeconds } from './db';
+import {
+  CollectionDomainError,
+  getCollectionState,
+  incrementCollectionQuantity,
+} from './collection';
 
 const MAX_BINDER_PAGES = 300;
 const MAX_BINDER_CARDS = 2000;
@@ -107,6 +111,8 @@ interface BinderRow {
   active_version_id: string | null;
   updated_at: number;
   latest_version_id: string | null;
+  peek_columns: number;
+  show_frame: number;
 }
 
 interface VersionRow {
@@ -181,6 +187,7 @@ export type BinderErrorCode =
   | 'binder_paste_no_space'
   | 'binder_paste_confirmation_required'
   | 'binder_bookmark_reserved_page'
+  | 'binder_display_patch_empty'
   | 'card_not_found';
 
 export class BinderDomainError extends Error {
@@ -210,12 +217,18 @@ function pagesForCapacity(capacity: number, pageSize: number): number {
 }
 
 function toBinder(row: BinderRow): BinderView {
+  const peekColumns =
+    row.peek_columns === 0 || row.peek_columns === 1 || row.peek_columns === 2
+      ? row.peek_columns
+      : 1;
   return {
     id: row.id,
     name: row.name,
     activeVersionId: row.active_version_id,
     updatedAt: new Date(row.updated_at * 1000).toISOString(),
     latestVersionId: row.latest_version_id,
+    peekColumns,
+    showFrame: row.show_frame === 1,
   };
 }
 
@@ -473,7 +486,7 @@ export async function createBinder(
 export async function listBinders(db: D1Database, ownerId: string): Promise<BinderView[]> {
   const result = await db
     .prepare(
-      `SELECT b.id, b.name, b.active_version_id, b.updated_at,
+      `SELECT b.id, b.name, b.active_version_id, b.updated_at, b.peek_columns, b.show_frame,
         (SELECT v.id FROM binder_versions v WHERE v.binder_id = b.id
          ORDER BY v.version_number DESC LIMIT 1) AS latest_version_id
        FROM binders b WHERE b.owner_id = ?1 ORDER BY b.updated_at DESC`,
@@ -481,6 +494,54 @@ export async function listBinders(db: D1Database, ownerId: string): Promise<Bind
     .bind(ownerId)
     .all<BinderRow>();
   return result.results.map(toBinder);
+}
+
+export async function patchBinderDisplay(
+  db: D1Database,
+  ownerId: string,
+  binderId: string,
+  patch: { peekColumns?: 0 | 1 | 2; showFrame?: boolean },
+): Promise<BinderView> {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  if (patch.peekColumns !== undefined) {
+    sets.push(`peek_columns = ?${values.length + 1}`);
+    values.push(patch.peekColumns);
+  }
+  if (patch.showFrame !== undefined) {
+    sets.push(`show_frame = ?${values.length + 1}`);
+    values.push(patch.showFrame ? 1 : 0);
+  }
+  if (sets.length === 0) domainError('binder_display_patch_empty');
+  // binders_epoch_after_update's second statement (OLD.owner_id <> NEW.owner_id)
+  // matches zero rows on an ordinary same-owner update, and D1/SQLite's
+  // reported change count reflects the last statement a trigger runs — not
+  // the top-level UPDATE. So existence is checked separately rather than by
+  // trusting meta.changes on this statement.
+  const existing = await db
+    .prepare('SELECT id FROM binders WHERE id = ?1 AND owner_id = ?2')
+    .bind(binderId, ownerId)
+    .first<{ id: string }>();
+  if (!existing) domainError('binder_not_found');
+  const now = nowSeconds();
+  await db
+    .prepare(
+      `UPDATE binders SET ${sets.join(', ')}, updated_at = ?${values.length + 1}
+       WHERE id = ?${values.length + 2} AND owner_id = ?${values.length + 3}`,
+    )
+    .bind(...values, now, binderId, ownerId)
+    .run();
+  const row = await db
+    .prepare(
+      `SELECT b.id, b.name, b.active_version_id, b.updated_at, b.peek_columns, b.show_frame,
+        (SELECT v.id FROM binder_versions v WHERE v.binder_id = b.id
+         ORDER BY v.version_number DESC LIMIT 1) AS latest_version_id
+       FROM binders b WHERE b.id = ?1 AND b.owner_id = ?2`,
+    )
+    .bind(binderId, ownerId)
+    .first<BinderRow>();
+  if (!row) domainError('binder_not_found');
+  return toBinder(row);
 }
 
 export async function getBinderInsertDestinations(
@@ -2999,4 +3060,199 @@ export async function resizeBinderCapacity(
     throw error;
   }
   return mutationResult(db, ownerId, versionId, [targetPages - 1]);
+}
+
+export interface SlotRefRow {
+  slotId: string;
+  page: number;
+  row: number;
+  col: number;
+  pocketIndex: number;
+}
+
+export interface BinderCardMatches {
+  binderId: string;
+  name: string;
+  exactTargets: SlotRefRow[];
+  pokemonTargets: SlotRefRow[];
+  placed: SlotRefRow[];
+  endDestination: SlotRefRow | null;
+}
+
+interface BinderMatchSlotRow {
+  binder_id: string;
+  binder_name: string;
+  columns: number;
+  page_id: string;
+  page_position: number;
+  row_index: number;
+  column_index: number;
+  entry_kind: 'empty' | 'reserved' | 'exact-card' | 'pokemon';
+  card_id: string | null;
+  assigned_card_id: string | null;
+}
+
+// exact-card slots are a fixed layout reference to this printing — they always
+// show it, so they count as "placed" without needing an assignment. pokemon
+// slots target a species by number; only the one currently holding this exact
+// printing (assigned_card_id) counts as placed for it.
+export async function getCardBinderMatches(
+  db: D1Database,
+  ownerId: string,
+  cardId: string,
+): Promise<BinderCardMatches[]> {
+  const card = await db
+    .prepare('SELECT category, pokedex_number FROM catalogue_cards WHERE id = ?1')
+    .bind(cardId)
+    .first<{ category: string; pokedex_number: number | null }>();
+  if (!card) domainError('card_not_found');
+  const binders = await db
+    .prepare(
+      `SELECT binder.id AS binder_id, binder.name AS binder_name
+       FROM binders binder JOIN binder_versions version ON version.id = binder.active_version_id
+       WHERE binder.owner_id = ?1 ORDER BY binder.id`,
+    )
+    .bind(ownerId)
+    .all<{ binder_id: string; binder_name: string }>();
+  const byBinder = new Map<string, BinderCardMatches>(
+    binders.results.map((row) => [
+      row.binder_id,
+      {
+        binderId: row.binder_id,
+        name: row.binder_name,
+        exactTargets: [],
+        pokemonTargets: [],
+        placed: [],
+        endDestination: null,
+      },
+    ]),
+  );
+  const slots = await db
+    .prepare(
+      `SELECT binder.id AS binder_id, binder.name AS binder_name, version.columns AS columns,
+        page.id AS page_id, page.position AS page_position,
+        slot.row_index, slot.column_index, slot.entry_kind, slot.card_id, slot.assigned_card_id
+       FROM binder_slots slot
+       JOIN binder_pages page ON page.id = slot.binder_page_id
+       JOIN binder_versions version ON version.id = page.binder_version_id
+       JOIN binders binder ON binder.id = version.binder_id
+       WHERE binder.owner_id = ?1 AND binder.active_version_id = version.id
+         AND ((slot.entry_kind = 'exact-card' AND slot.card_id = ?2)
+           OR (slot.entry_kind = 'pokemon' AND slot.pokemon_number = ?3))
+       ORDER BY binder.id, page.position, slot.row_index, slot.column_index`,
+    )
+    .bind(ownerId, cardId, card.pokedex_number)
+    .all<BinderMatchSlotRow>();
+  for (const row of slots.results) {
+    const entry = byBinder.get(row.binder_id);
+    if (!entry) continue;
+    const ref: SlotRefRow = {
+      slotId: encodeSlotId(row.page_id, row.row_index, row.column_index),
+      page: row.page_position,
+      row: row.row_index,
+      col: row.column_index,
+      pocketIndex: row.row_index * row.columns + row.column_index,
+    };
+    if (row.entry_kind === 'exact-card') {
+      entry.exactTargets.push(ref);
+      entry.placed.push(ref);
+    } else {
+      entry.pokemonTargets.push(ref);
+      if (row.assigned_card_id === cardId) entry.placed.push(ref);
+      else if (!entry.endDestination) entry.endDestination = ref;
+    }
+  }
+  return [...byBinder.values()];
+}
+
+export async function placeCard(
+  db: D1Database,
+  ownerId: string,
+  cardId: string,
+  binderId: string,
+  slotId: string,
+  addCopy: boolean,
+  expectedRevision: number,
+): Promise<BinderMutationResult> {
+  const decoded = decodeSlotId(slotId);
+  if (!decoded) domainError('binder_slot_not_found');
+  const binder = await db
+    .prepare('SELECT active_version_id FROM binders WHERE id = ?1 AND owner_id = ?2')
+    .bind(binderId, ownerId)
+    .first<{ active_version_id: string | null }>();
+  if (!binder?.active_version_id) domainError('binder_not_found');
+  const versionId = binder.active_version_id;
+  const page = await db
+    .prepare('SELECT position FROM binder_pages WHERE id = ?1 AND binder_version_id = ?2')
+    .bind(decoded.pageId, versionId)
+    .first<{ position: number }>();
+  if (!page) domainError('binder_slot_not_found');
+  if (addCopy)
+    await incrementCollectionQuantity(db, ownerId, {
+      cardId,
+      mutationId: crypto.randomUUID(),
+      delta: 1,
+    });
+  return setBinderEntryAssignment(
+    db,
+    ownerId,
+    versionId,
+    { page: page.position, row: decoded.row, column: decoded.column },
+    cardId,
+    expectedRevision,
+  );
+}
+
+export interface InactiveBinderTargetRow {
+  binderId: string;
+  binderName: string;
+  page: number;
+  row: number;
+  column: number;
+  cardId: string;
+  cardName: string;
+  setName: string;
+  number: string;
+}
+
+export async function listInactiveBinderTargets(
+  db: D1Database,
+  ownerId: string,
+): Promise<InactiveBinderTargetRow[]> {
+  const result = await db
+    .prepare(
+      `SELECT binder.id AS binder_id, binder.name AS binder_name, page.position,
+        slot.row_index, slot.column_index, card.id AS card_id, card.name AS card_name,
+        card.set_name, card.number
+       FROM binder_slots slot
+       JOIN binder_pages page ON page.id = slot.binder_page_id
+       JOIN binder_versions version ON version.id = page.binder_version_id
+       JOIN binders binder ON binder.id = version.binder_id
+       JOIN catalogue_cards card ON card.id = COALESCE(slot.assigned_card_id, slot.card_id)
+       WHERE binder.owner_id = ?1 AND card.is_active = 0
+       ORDER BY binder.id, page.position, slot.row_index, slot.column_index`,
+    )
+    .bind(ownerId)
+    .all<{
+      binder_id: string;
+      binder_name: string;
+      position: number;
+      row_index: number;
+      column_index: number;
+      card_id: string;
+      card_name: string;
+      set_name: string;
+      number: string;
+    }>();
+  return result.results.map((row) => ({
+    binderId: row.binder_id,
+    binderName: row.binder_name,
+    page: row.position,
+    row: row.row_index,
+    column: row.column_index,
+    cardId: row.card_id,
+    cardName: row.card_name,
+    setName: row.set_name,
+    number: row.number,
+  }));
 }

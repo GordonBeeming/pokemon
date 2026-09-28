@@ -98,6 +98,12 @@ export function applyAllMigrations(database: DatabaseSync): void {
     '016_reserved_page_manual_placement.sql',
     '017_collection_addition_order.sql',
     '018_catalogue_sets.sql',
+    '019_card_types.sql',
+    '020_set_codes.sql',
+    '021_pocket_inactive.sql',
+    '022_settings_and_binder_display.sql',
+    '023_collection_events.sql',
+    '024_backup_settings_events.sql',
   ])
     database.exec(readFileSync(new URL(name, directory), 'utf8'));
 }

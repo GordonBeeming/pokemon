@@ -193,6 +193,40 @@ try {
     body: JSON.stringify({ expectedRevision: 1 }),
   });
   await sessionStillValid('binder');
+  await json('/api/settings/frame-palette', {
+    method: 'PUT',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ palette: { grass: '#123456' } }),
+  });
+  await json('/api/binders/binder_fixture', {
+    method: 'PATCH',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ peekColumns: 2, showFrame: false }),
+  });
+  const removed = await json('/api/collection/custom_fixture/remove', {
+    method: 'POST',
+    headers: { cookie, 'content-type': 'application/json' },
+    body: JSON.stringify({ source: 'loose' }),
+  });
+  if (removed.body.state.quantity !== 2)
+    throw new Error(
+      `collection remove did not decrement quantity: ${JSON.stringify(removed.body)}`,
+    );
+  const matches = await json('/api/cards/custom_fixture/binder-matches', { headers: { cookie } });
+  if (
+    matches.body.binders.length !== 1 ||
+    matches.body.binders[0].exactTargets.length !== 1 ||
+    matches.body.binders[0].placed.length !== 1
+  )
+    throw new Error(
+      `binder-matches did not report the fixture pocket: ${JSON.stringify(matches.body)}`,
+    );
+  const inactiveTargets = await json('/api/binders/inactive-targets', { headers: { cookie } });
+  if (inactiveTargets.body.targets.length !== 0)
+    throw new Error(
+      `inactive-targets reported a false positive: ${JSON.stringify(inactiveTargets.body)}`,
+    );
+  await sessionStillValid('settings, binder display and collection remove');
   const pair = await json('/api/desktop/pair', {
     method: 'POST',
     headers: { cookie, 'content-type': 'application/json' },
@@ -292,6 +326,8 @@ try {
     `DELETE FROM collection_mutations WHERE owner_id='owner';
      DELETE FROM collection_cards WHERE owner_id='owner';
      DELETE FROM binders WHERE owner_id='owner';
+     DELETE FROM user_settings WHERE owner_id='owner';
+     DELETE FROM collection_events WHERE owner_id='owner';
      DELETE FROM art_upload_tokens WHERE card_id='custom_fixture';
      DELETE FROM art_manifest WHERE card_id='custom_fixture';
      DELETE FROM catalogue_cards WHERE is_custom=1;`,
@@ -320,10 +356,14 @@ try {
        (SELECT COUNT(*) FROM binder_slots WHERE binder_page_id='page_fixture' AND card_id='custom_fixture') AS slots,
        (SELECT COUNT(*) FROM collection_mutations WHERE owner_id='owner') AS mutations,
        (SELECT mutation_epoch FROM users WHERE id='owner') AS epoch,
+       (SELECT peek_columns FROM binders WHERE id='binder_fixture') AS peek_columns,
+       (SELECT show_frame FROM binders WHERE id='binder_fixture') AS show_frame,
+       (SELECT value_json FROM user_settings WHERE owner_id='owner' AND key='frame-palette') AS palette,
+       (SELECT COUNT(*) FROM collection_events WHERE owner_id='owner' AND card_id='custom_fixture') AS events,
        (SELECT COUNT(*) FROM backup_runs WHERE id='${backupId}' AND owner_id='owner' AND restored_at IS NOT NULL) AS restored;`,
   );
   const match = verified.stdout.match(
-    /"catalogue":\s*1,\s*"bulk_catalogue":\s*300,\s*"quantity":\s*3,\s*"binders":\s*1,\s*"slots":\s*1,\s*"mutations":\s*0,\s*"epoch":\s*(\d+),\s*"restored":\s*1/s,
+    /"catalogue":\s*1,\s*"bulk_catalogue":\s*300,\s*"quantity":\s*2,\s*"binders":\s*1,\s*"slots":\s*1,\s*"mutations":\s*0,\s*"epoch":\s*(\d+),\s*"peek_columns":\s*2,\s*"show_frame":\s*0,\s*"palette":\s*"\{\\"grass\\":\\"#123456\\"\}",\s*"events":\s*2,\s*"restored":\s*1/s,
   );
   if (!match) throw new Error(`backup round-trip mismatch: ${verified.stdout}`);
   if (Number(match[1]) < 1) throw new Error(`restore did not advance mutation epoch: ${match[1]}`);

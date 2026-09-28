@@ -526,3 +526,238 @@ describe('migration 009 species discovery cache', () => {
     ).toThrow(/CHECK constraint/u);
   });
 });
+
+function databaseAtMigrationEighteen(): DatabaseSync {
+  const database = new DatabaseSync(':memory:');
+  openDatabases.push(database);
+  database.exec('PRAGMA foreign_keys = ON');
+  for (const name of [
+    '001_auth.sql',
+    '002_catalogue_collection_binders.sql',
+    '003_art_upload_tokens.sql',
+    '004_staged_ingestion.sql',
+    '005_catalogue_arrangement_metadata.sql',
+    '006_hardening_and_sync.sql',
+    '007_national_pokedex.sql',
+    '008_physical_printing_identity.sql',
+    '009_species_discovery_cache.sql',
+    '010_price_source_availability.sql',
+    '011_binder_capacity_and_placement.sql',
+    '012_exact_binder_capacity.sql',
+    '013_collector_number_search.sql',
+    '014_binder_bookmarks.sql',
+    '015_binder_gap_provenance.sql',
+    '016_reserved_page_manual_placement.sql',
+    '017_collection_addition_order.sql',
+    '018_catalogue_sets.sql',
+  ]) {
+    database.exec(migration(name));
+  }
+  database.exec(`
+    INSERT INTO users (id, label, created_at) VALUES ('owner-a', 'Owner A', 1);
+  `);
+  return database;
+}
+
+describe('migration 019 card types', () => {
+  it('adds a nullable types column to cards and the staging table', () => {
+    const database = databaseAtMigrationEighteen();
+    database.exec(migration('019_card_types.sql'));
+
+    database.exec(`
+      INSERT INTO catalogue_cards
+        (id, name, language, category, set_id, set_name, number, types, created_at, updated_at)
+      VALUES ('card-1', 'Bulbasaur', 'en', 'pokemon', 'base1', 'Base', '1', '["Grass"]', 1, 1);
+      INSERT INTO catalogue_cards
+        (id, name, language, category, set_id, set_name, number, created_at, updated_at)
+      VALUES ('card-2', 'Trainer Card', 'en', 'trainer', 'base1', 'Base', '2', 1, 1);
+    `);
+
+    expect(
+      database.prepare('SELECT types FROM catalogue_cards WHERE id = ?').get('card-1'),
+    ).toEqual({ types: '["Grass"]' });
+    expect(
+      database.prepare('SELECT types FROM catalogue_cards WHERE id = ?').get('card-2'),
+    ).toEqual({ types: null });
+  });
+});
+
+describe('migration 020 set codes', () => {
+  it('adds abbreviation columns and backfills known TCGdex codes only where unset', () => {
+    const database = databaseAtMigrationEighteen();
+    database.exec(migration('019_card_types.sql'));
+    database.exec(`
+      INSERT INTO catalogue_sets (set_id, language, set_name, updated_at)
+      VALUES ('not-in-snapshot', 'en', 'Unfetched Set', 1);
+    `);
+    database.exec(migration('020_set_codes.sql'));
+
+    // A set id absent from the fetched snapshot is left NULL, not guessed at.
+    expect(
+      database
+        .prepare('SELECT abbreviation, abbreviation_source FROM catalogue_sets WHERE set_id = ?')
+        .get('not-in-snapshot'),
+    ).toEqual({ abbreviation: null, abbreviation_source: null });
+
+    database.exec(`
+      INSERT INTO catalogue_sets (set_id, language, set_name, updated_at)
+      VALUES ('sv08', 'en', 'Surging Sparks', 1);
+      UPDATE catalogue_sets SET abbreviation = 'SSP', abbreviation_source = 'tcgdex'
+      WHERE set_id = 'sv08' AND abbreviation IS NULL;
+      INSERT INTO catalogue_sets (set_id, language, set_name, updated_at)
+      VALUES ('owner-edited', 'en', 'Owner Set', 1);
+      UPDATE catalogue_sets SET abbreviation = 'OWN', abbreviation_source = 'owner'
+      WHERE set_id = 'owner-edited';
+      UPDATE catalogue_sets SET abbreviation = 'NOPE', abbreviation_source = 'tcgdex'
+      WHERE set_id = 'owner-edited' AND abbreviation IS NULL;
+    `);
+    expect(
+      database
+        .prepare('SELECT abbreviation, abbreviation_source FROM catalogue_sets WHERE set_id = ?')
+        .get('sv08'),
+    ).toEqual({ abbreviation: 'SSP', abbreviation_source: 'tcgdex' });
+    expect(
+      database
+        .prepare('SELECT abbreviation, abbreviation_source FROM catalogue_sets WHERE set_id = ?')
+        .get('owner-edited'),
+    ).toEqual({ abbreviation: 'OWN', abbreviation_source: 'owner' });
+  });
+});
+
+describe('migration 021 pocket cards go inactive', () => {
+  it('deactivates known Pocket set ids without deleting rows binders still reference', () => {
+    const database = databaseAtMigrationEighteen();
+    database.exec(migration('019_card_types.sql'));
+    database.exec(`
+      INSERT INTO catalogue_cards
+        (id, name, language, category, set_id, set_name, number, created_at, updated_at)
+      VALUES
+        ('pocket-1', 'Squirtle', 'en', 'pokemon', 'B1a', 'Crimson Blaze', '17', 1, 1),
+        ('pocket-2', 'Eevee', 'en', 'pokemon', 'A3b', 'Eevee Grove', '1', 1, 1),
+        ('regular-1', 'Bulbasaur', 'en', 'pokemon', 'base1', 'Base', '1', 1, 1),
+        ('regular-2', 'Arceus', 'en', 'pokemon', 'sv08', 'Surging Sparks', '1', 1, 1);
+      INSERT INTO binders (id, owner_id, name, created_at, updated_at)
+      VALUES ('binder-1', 'owner-a', 'Binder', 1, 1);
+      INSERT INTO binder_versions
+        (id, binder_id, version_number, status, layout_kind, rows, columns, created_at)
+      VALUES ('version-1', 'binder-1', 1, 'active', '3x3', 3, 3, 1);
+      INSERT INTO binder_pages (id, binder_version_id, position)
+      VALUES ('page-1', 'version-1', 0);
+      INSERT INTO binder_slots (binder_page_id, row_index, column_index, card_id, entry_kind)
+      VALUES ('page-1', 0, 0, 'pocket-1', 'exact-card');
+    `);
+
+    database.exec(migration('021_pocket_inactive.sql'));
+
+    expect(database.prepare('SELECT id, is_active FROM catalogue_cards ORDER BY id').all()).toEqual(
+      [
+        { id: 'pocket-1', is_active: 0 },
+        { id: 'pocket-2', is_active: 0 },
+        { id: 'regular-1', is_active: 1 },
+        { id: 'regular-2', is_active: 1 },
+      ],
+    );
+    expect(database.prepare('SELECT card_id FROM binder_slots').get()).toEqual({
+      card_id: 'pocket-1',
+    });
+  });
+});
+
+describe('migration 022 settings and binder display', () => {
+  it('creates user_settings and adds binder display columns with safe defaults', () => {
+    const database = databaseAtMigrationEighteen();
+    database.exec(migration('019_card_types.sql'));
+    database.exec(migration('020_set_codes.sql'));
+    database.exec(migration('021_pocket_inactive.sql'));
+    database.exec(migration('022_settings_and_binder_display.sql'));
+
+    database.exec(`
+      INSERT INTO binders (id, owner_id, name, created_at, updated_at)
+      VALUES ('binder-1', 'owner-a', 'Binder', 1, 1);
+      INSERT INTO user_settings (owner_id, key, value_json, updated_at)
+      VALUES ('owner-a', 'frame-palette', '{"grass":"#123456"}', 1);
+    `);
+
+    expect(
+      database.prepare('SELECT peek_columns, show_frame FROM binders WHERE id = ?').get('binder-1'),
+    ).toEqual({ peek_columns: 1, show_frame: 1 });
+    expect(
+      database
+        .prepare('SELECT value_json FROM user_settings WHERE owner_id = ? AND key = ?')
+        .get('owner-a', 'frame-palette'),
+    ).toEqual({ value_json: '{"grass":"#123456"}' });
+    expect(() =>
+      database.exec("UPDATE binders SET peek_columns = 3 WHERE id = 'binder-1'"),
+    ).toThrow(/CHECK constraint/u);
+  });
+});
+
+describe('migration 023 collection events', () => {
+  it('records an append-only ledger row per quantity change', () => {
+    const database = databaseAtMigrationEighteen();
+    for (const name of [
+      '019_card_types.sql',
+      '020_set_codes.sql',
+      '021_pocket_inactive.sql',
+      '022_settings_and_binder_display.sql',
+      '023_collection_events.sql',
+    ])
+      database.exec(migration(name));
+
+    database.exec(`
+      INSERT INTO catalogue_cards
+        (id, name, language, category, set_id, set_name, number, created_at, updated_at)
+      VALUES ('card-1', 'Bulbasaur', 'en', 'pokemon', 'base1', 'Base', '1', 1, 1);
+      INSERT INTO collection_events (id, owner_id, card_id, delta, source, slot_id, created_at)
+      VALUES ('event-1', 'owner-a', 'card-1', 1, 'add', NULL, 1);
+    `);
+
+    expect(
+      database.prepare('SELECT delta, source FROM collection_events WHERE id = ?').get('event-1'),
+    ).toEqual({ delta: 1, source: 'add' });
+    expect(() =>
+      database.exec(
+        "INSERT INTO collection_events (id, owner_id, card_id, delta, source, created_at) VALUES ('bad', 'owner-a', 'card-1', 1, 'nonsense', 1)",
+      ),
+    ).toThrow(/CHECK constraint/u);
+  });
+});
+
+describe('migration 024 backup coverage for settings and events', () => {
+  it('widens backup_restore_chunks to accept the two new kinds and keeps existing rows', () => {
+    const database = databaseAtMigrationEighteen();
+    for (const name of [
+      '019_card_types.sql',
+      '020_set_codes.sql',
+      '021_pocket_inactive.sql',
+      '022_settings_and_binder_display.sql',
+      '023_collection_events.sql',
+    ])
+      database.exec(migration(name));
+
+    database.exec(`
+      INSERT INTO backup_restore_chunks (run_id, owner_id, kind, chunk_index, payload_json, created_at)
+      VALUES ('run-1', 'owner-a', 'catalogue', 0, '[]', 1);
+    `);
+
+    database.exec(migration('024_backup_settings_events.sql'));
+
+    expect(
+      database.prepare('SELECT kind FROM backup_restore_chunks WHERE run_id = ?').get('run-1'),
+    ).toEqual({ kind: 'catalogue' });
+    database.exec(
+      "INSERT INTO backup_restore_chunks (run_id, owner_id, kind, chunk_index, payload_json, created_at) VALUES ('run-1', 'owner-a', 'user_settings', 0, '[]', 1)",
+    );
+    database.exec(
+      "INSERT INTO backup_restore_chunks (run_id, owner_id, kind, chunk_index, payload_json, created_at) VALUES ('run-1', 'owner-a', 'collection_events', 0, '[]', 1)",
+    );
+    expect(database.prepare('SELECT COUNT(*) AS count FROM backup_restore_chunks').get()).toEqual({
+      count: 3,
+    });
+    expect(() =>
+      database.exec(
+        "INSERT INTO backup_restore_chunks (run_id, owner_id, kind, chunk_index, payload_json, created_at) VALUES ('run-1', 'owner-a', 'nonsense', 1, '[]', 1)",
+      ),
+    ).toThrow(/CHECK constraint/u);
+  });
+});

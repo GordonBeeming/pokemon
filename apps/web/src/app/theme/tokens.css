@@ -1,0 +1,46 @@
+/* Xylem tokens for the /next SPA. Light is the only theme for now — dark is a later
+   pass — but every colour is a variable so that pass never touches component CSS. */
+:root {
+  --ink: #0f172a;
+  --muted: #475569;
+  --faint: #64748b;
+  --paper: #f8fafc;
+  --surface: #ffffff;
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
+
+  --rail-bg: #0f172a;
+  --rail-active-bg: #1e293b;
+  --rail-text: #cbd5e1;
+  --rail-text-active: #ffffff;
+
+  --accent: #0e7490;
+  --accent-deep: #164e63;
+  --accent-soft-bg: #ecfeff;
+  --accent-soft-border: #a5dbe6;
+  --accent-soft-text: #155e75;
+
+  --danger: #b91c1c;
+  --danger-soft-bg: #fef2f2;
+  --warning-bg: #fef3c7;
+  --warning-text: #92400e;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --font-display:
+    'Space Grotesk Variable', 'Space Grotesk', ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
+    sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  --shell-rail-width: 15.5rem;
+  --shell-tabbar-height: 4.5rem;
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+
+  color: var(--ink);
+  background: var(--paper);
+  font-family: var(--font-display);
+  font-synthesis: none;
+}

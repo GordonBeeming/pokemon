@@ -305,18 +305,68 @@ describe('browser and desktop route parity', () => {
       );
       expect(desktopResponse.status).toBe(403);
 
+      // /binders/:id now also answers PATCH (binder display prefs), so DELETE's
+      // "wrong method" probe uses PUT instead — still unregistered on that path.
+      const unusedMethod = route.method === 'DELETE' ? 'PUT' : 'DELETE';
       const wrongBrowserMethod = await apiRoutes.request(
         route.browser,
-        requestInit(route, 'browser', route.method === 'DELETE' ? 'PATCH' : 'DELETE'),
+        requestInit(route, 'browser', unusedMethod),
         env,
       );
       const wrongDesktopMethod = await apiRoutes.request(
         route.desktop,
-        requestInit(route, 'desktop', route.method === 'DELETE' ? 'PATCH' : 'DELETE'),
+        requestInit(route, 'desktop', unusedMethod),
         env,
       );
       expect([404, 405]).toContain(wrongBrowserMethod.status);
       expect([404, 405]).toContain(wrongDesktopMethod.status);
+    },
+  );
+});
+
+// Browser-only routes (no desktop equivalent): checked separately from
+// sharedRoutes, which requires a matching desktop path for every entry.
+const browserOnlyRoutes = [
+  { method: 'GET', path: '/settings' },
+  {
+    method: 'PUT',
+    path: '/settings/frame-palette',
+    body: { palette: { grass: '#123456' } },
+  },
+  { method: 'DELETE', path: '/settings/frame-palette' },
+  { method: 'PATCH', path: '/binders/binder-1', body: { showFrame: true } },
+  { method: 'POST', path: '/collection/card-1/remove', body: { source: 'loose' } },
+  { method: 'GET', path: '/cards/card-1/binder-matches' },
+  {
+    method: 'POST',
+    path: '/cards/card-1/place',
+    body: { binderId: 'binder-1', slotId: 'page-1:0:0', addCopy: false, expectedRevision: 1 },
+  },
+  { method: 'GET', path: '/binders/inactive-targets' },
+] as const;
+
+describe('browser-only route authorization', () => {
+  it.each(browserOnlyRoutes)('requires a session for $method $path', async (route) => {
+    const response = await apiRoutes.request(route.path, { method: route.method }, env);
+    expect(response.status).toBe(401);
+  });
+
+  it.each(browserOnlyRoutes)(
+    'reaches business logic for $method $path once authenticated',
+    async (route) => {
+      const headers = new Headers({ cookie: sessionCookie });
+      if ('body' in route) headers.set('content-type', 'application/json');
+      const response = await apiRoutes.request(
+        route.path,
+        {
+          method: route.method,
+          headers,
+          body: 'body' in route ? JSON.stringify(route.body) : undefined,
+        },
+        env,
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({ error: 'route_business_operation_reached' });
     },
   );
 });

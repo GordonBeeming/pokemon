@@ -1,11 +1,19 @@
 import {
   cardIdSchema,
+  FRAME_TYPE_RAW_NAMES,
+  frameTypeFor,
   languageSchema,
+  NATIONAL_POKEDEX,
   NATIONAL_POKEDEX_SIZE,
+  RARITY_KEY_RAW_VALUES,
+  rarityKeyFor,
   type CatalogueBrief,
   type CatalogueCardView,
   type CatalogueDetailView,
+  type FrameType,
   type LanguageCode,
+  type RarityKey,
+  type Region,
 } from '@pokedex/shared';
 import { z } from 'zod';
 import { base64UrlDecode, base64UrlEncode } from './crypto';
@@ -28,6 +36,8 @@ interface CardRow {
   species: string | null;
   rarity: string | null;
   artist: string | null;
+  types: string | null;
+  set_abbreviation: string | null;
   is_active: number;
   is_custom: number;
   updated_at: number;
@@ -67,6 +77,10 @@ export interface CatalogueFilters {
   pokedexNumber?: number;
   cursor?: string | null;
   includePokemonNumber?: boolean;
+  frameTypes?: FrameType[];
+  region?: Region;
+  rarityKeys?: RarityKey[];
+  setIds?: string[];
 }
 
 const catalogueCursorSchema = z
@@ -141,6 +155,7 @@ export interface ImportedCard {
   artist?: string | null;
   releaseDate?: string | null;
   pokedexNumber?: number | null;
+  types?: string[] | null;
 }
 
 const tcgdexCardSchema = z
@@ -164,10 +179,18 @@ const tcgdexCardSchema = z
         logo: z.string().url().nullable().optional(),
         symbol: z.string().url().nullable().optional(),
         releaseDate: z.string().date().nullable().optional(),
+        serie: z
+          .object({ id: z.string().trim().min(1).max(128) })
+          .passthrough()
+          .optional(),
       })
       .passthrough(),
   })
   .passthrough();
+
+// TCG Pocket is out of scope (PRODUCT.md); its sets slip past the logo/symbol
+// check when the CDN doesn't resolve, so the id shape and serie id back it up.
+const POCKET_SET_ID_PATTERN = /^[AB]\d+[a-z]?$/u;
 
 function hex(bytes: Uint8Array): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -187,7 +210,11 @@ function numericCardNumber(value: string): number | null {
 }
 
 function isPocketCard(card: z.infer<typeof tcgdexCardSchema>): boolean {
-  return [card.set.logo, card.set.symbol].some((value) => value?.includes('/tcgp/') === true);
+  return (
+    [card.set.logo, card.set.symbol].some((value) => value?.includes('/tcgp/') === true) ||
+    card.set.serie?.id === 'tcgp' ||
+    POCKET_SET_ID_PATTERN.test(card.set.id)
+  );
 }
 
 export async function transformTcgdexCard(
@@ -231,6 +258,7 @@ export async function transformTcgdexCard(
     artist: card.illustrator ?? null,
     releaseDate: effectiveReleaseDate,
     pokedexNumber,
+    types: card.types?.length ? card.types : null,
   };
 }
 
@@ -501,7 +529,7 @@ export async function stageCatalogueCards(
           `INSERT INTO catalogue_stage_cards
           (run_id, source_id, card_id, checksum, source_updated_at, name, language, category,
            set_id, set_name, number, number_sort, supertype, subtype, species, rarity, artist,
-           release_date, pokedex_number)
+           release_date, pokedex_number, types)
          SELECT ?1,
            json_extract(value, '$.sourceId'),
            COALESCE(
@@ -517,7 +545,8 @@ export async function stageCatalogueCards(
            json_extract(value, '$.numberSort'), json_extract(value, '$.supertype'),
            json_extract(value, '$.subtype'), json_extract(value, '$.species'),
            json_extract(value, '$.rarity'), json_extract(value, '$.artist'),
-           json_extract(value, '$.releaseDate'), json_extract(value, '$.pokedexNumber')
+           json_extract(value, '$.releaseDate'), json_extract(value, '$.pokedexNumber'),
+           json_extract(value, '$.types')
          FROM json_each(?2) WHERE true
          ON CONFLICT(run_id, source_id) DO UPDATE SET
            card_id = excluded.card_id, checksum = excluded.checksum,
@@ -527,7 +556,7 @@ export async function stageCatalogueCards(
            number_sort = excluded.number_sort, supertype = excluded.supertype,
            subtype = excluded.subtype, species = excluded.species, rarity = excluded.rarity,
            artist = excluded.artist, release_date = excluded.release_date,
-           pokedex_number = excluded.pokedex_number`,
+           pokedex_number = excluded.pokedex_number, types = excluded.types`,
         )
         .bind(runId, JSON.stringify(chunk))
         .run();
@@ -646,9 +675,9 @@ export async function applyStagedCatalogueRun(
         .prepare(
           `INSERT INTO catalogue_cards
             (id, name, language, category, set_id, set_name, number, number_sort, supertype,
-             subtype, species, rarity, artist, pokedex_number, created_at, updated_at)
+             subtype, species, rarity, artist, pokedex_number, types, created_at, updated_at)
            SELECT card_id, name, language, category, set_id, set_name, number, number_sort,
-             supertype, subtype, species, rarity, artist, pokedex_number, ?1, ?1
+             supertype, subtype, species, rarity, artist, pokedex_number, types, ?1, ?1
            FROM catalogue_stage_cards
            WHERE run_id = ?2
              AND EXISTS (SELECT 1 FROM sync_run_claims WHERE run_id = ?2 AND claim_token = ?3)
@@ -658,6 +687,7 @@ export async function applyStagedCatalogueRun(
              supertype = excluded.supertype, subtype = excluded.subtype, species = excluded.species,
              rarity = excluded.rarity, artist = excluded.artist,
              pokedex_number = excluded.pokedex_number,
+             types = COALESCE(excluded.types, catalogue_cards.types),
              is_active = 1, updated_at = excluded.updated_at
            WHERE catalogue_cards.is_custom = 0`,
         )
@@ -965,6 +995,37 @@ export async function setNationalRepresentativesFromSources(
   return resolved.results.map((row) => ({ number: row.pokedex_number, cardId: row.card_id }));
 }
 
+function rowTypes(row: CardRow): string[] | null {
+  if (!row.types) return null;
+  try {
+    const parsed: unknown = JSON.parse(row.types);
+    return Array.isArray(parsed) && parsed.every((value) => typeof value === 'string')
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+interface FrameFields {
+  frameType: FrameType | null;
+  setCode: string | null;
+  rarityKey: RarityKey | null;
+}
+
+function frameFields(row: CardRow): FrameFields {
+  return {
+    frameType: frameTypeFor({
+      category: row.category,
+      types: rowTypes(row),
+      subtype: row.subtype,
+      name: row.name,
+    }),
+    setCode: row.set_abbreviation,
+    rarityKey: rarityKeyFor(row.rarity),
+  };
+}
+
 function brief(row: CardRow): CatalogueBrief {
   return {
     id: cardIdSchema.parse(row.id),
@@ -1054,6 +1115,7 @@ function detail(row: CardRow, includePokemonNumber = false): CatalogueDetailView
     notes: row.notes,
     collection: collection(row),
     price: cardPrice(row),
+    ...frameFields(row),
   };
 }
 
@@ -1064,12 +1126,14 @@ function view(row: CardRow, includePokemonNumber = false): CatalogueCardView {
     imageHighUrl: artUrl(row.id, 'high', row.high_key, row.source_provider),
     collection: collection(row),
     price: cardPrice(row),
+    ...frameFields(row),
   };
 }
 
 const cardSelect = `
   SELECT c.pokedex_number, c.id, c.name, c.language, c.category, c.set_id, c.set_name, c.number, c.number_sort,
-    c.supertype, c.subtype, c.species, c.rarity, c.artist, c.is_active, c.is_custom, c.updated_at,set_meta.release_date,
+    c.supertype, c.subtype, c.species, c.rarity, c.artist, c.types, c.is_active, c.is_custom, c.updated_at,
+    set_meta.release_date, set_meta.abbreviation AS set_abbreviation,
     s.provider AS source_provider, s.source_id, s.source_updated_at,
     cc.notes, cc.quantity, cc.updated_at AS collection_updated_at,
     cc.revision AS collection_revision, cc.last_added_order AS collection_added_order,
@@ -1112,6 +1176,79 @@ export async function resolveCatalogueCards(
   return result.results.map((row) => view(row, includePokemonNumber));
 }
 
+const ALL_FRAME_TYPE_RAW_NAMES = Object.values(FRAME_TYPE_RAW_NAMES).flat();
+
+// Mirrors frameTypeFor (packages/shared/src/frame.ts) so the search filter agrees
+// with the frameType every card view already reports. Elemental types read the
+// stored `types` column first, then fall back to parsing "X Energy" card names
+// the way basic energy cards (which rarely carry a `types` array) are framed.
+function frameTypeWhere(types: FrameType[], values: unknown[]): string {
+  const clauses: string[] = [];
+  if (types.includes('trainer')) clauses.push("c.category = 'trainer'");
+  const elemental = types.filter(
+    (type): type is keyof typeof FRAME_TYPE_RAW_NAMES =>
+      type !== 'trainer' && type !== 'energy' && type !== 'special-energy',
+  );
+  if (elemental.length > 0) {
+    const rawNames = [...new Set(elemental.flatMap((type) => FRAME_TYPE_RAW_NAMES[type]))];
+    const typedPlaceholders = rawNames.map((_, index) => `?${values.length + index + 1}`);
+    values.push(...rawNames.map((name) => name.toLowerCase()));
+    clauses.push(
+      `(c.category = 'pokemon' AND lower(json_extract(c.types, '$[0]')) IN (${typedPlaceholders.join(',')}))`,
+    );
+    const energyTypedPlaceholders = rawNames.map((_, index) => `?${values.length + index + 1}`);
+    values.push(...rawNames.map((name) => name.toLowerCase()));
+    clauses.push(
+      `(c.category = 'energy' AND lower(COALESCE(c.subtype, '')) <> 'special'
+        AND lower(json_extract(c.types, '$[0]')) IN (${energyTypedPlaceholders.join(',')}))`,
+    );
+    const energyNamePlaceholders = rawNames.map((_, index) => `?${values.length + index + 1}`);
+    values.push(...rawNames.map((name) => name.toLowerCase()));
+    clauses.push(
+      `(c.category = 'energy' AND lower(COALESCE(c.subtype, '')) <> 'special'
+        AND c.types IS NULL AND c.name LIKE '% Energy'
+        AND lower(substr(c.name, 1, length(c.name) - 7)) IN (${energyNamePlaceholders.join(',')}))`,
+    );
+  }
+  if (types.includes('special-energy'))
+    clauses.push("(c.category = 'energy' AND lower(COALESCE(c.subtype, '')) = 'special')");
+  if (types.includes('energy')) {
+    const fallbackPlaceholders = ALL_FRAME_TYPE_RAW_NAMES.map(
+      (_, index) => `?${values.length + index + 1}`,
+    );
+    values.push(...ALL_FRAME_TYPE_RAW_NAMES.map((name) => name.toLowerCase()));
+    clauses.push(
+      `(c.category = 'energy' AND lower(COALESCE(c.subtype, '')) <> 'special'
+        AND (c.types IS NULL OR lower(json_extract(c.types, '$[0]')) NOT IN (${fallbackPlaceholders.join(',')}))
+        AND NOT (c.name LIKE '% Energy' AND lower(substr(c.name, 1, length(c.name) - 7)) IN (${fallbackPlaceholders.join(',')})))`,
+    );
+  }
+  return clauses.length > 0 ? `(${clauses.join(' OR ')})` : '0';
+}
+
+function rarityWhere(keys: RarityKey[], values: unknown[]): string {
+  const rawValues = [...new Set(keys.flatMap((key) => RARITY_KEY_RAW_VALUES[key]))];
+  if (rawValues.length === 0) return '0';
+  const placeholders = rawValues.map((_, index) => `?${values.length + index + 1}`);
+  values.push(...rawValues);
+  return `lower(c.rarity) IN (${placeholders.join(',')})`;
+}
+
+// Regions are contiguous runs of the National Pokedex, so a min/max bound is
+// enough; an unrecognised region (shouldn't happen once the schema validates
+// the query param) returns null so the caller can exclude everything instead
+// of silently ignoring the filter.
+function regionDexRange(region: Region): { min: number; max: number } | null {
+  let min: number | null = null;
+  let max: number | null = null;
+  for (const entry of NATIONAL_POKEDEX) {
+    if (entry.discoveryCategory !== region) continue;
+    if (min === null || entry.number < min) min = entry.number;
+    if (max === null || entry.number > max) max = entry.number;
+  }
+  return min !== null && max !== null ? { min, max } : null;
+}
+
 export async function searchCards(
   db: D1Database,
   ownerId: string,
@@ -1144,6 +1281,11 @@ export async function searchCards(
     where.push(`c.set_id = ?${values.length + 1}`);
     values.push(filters.setId);
   }
+  if (filters.setIds?.length) {
+    const placeholders = filters.setIds.map((_, index) => `?${values.length + index + 1}`);
+    where.push(`c.set_id IN (${placeholders.join(',')})`);
+    values.push(...filters.setIds);
+  }
   if (filters.species) {
     where.push(`c.species = ?${values.length + 1}`);
     values.push(filters.species);
@@ -1152,6 +1294,19 @@ export async function searchCards(
     where.push(`c.pokedex_number = ?${values.length + 1}`);
     values.push(filters.pokedexNumber);
   }
+  if (filters.region) {
+    const range = regionDexRange(filters.region);
+    // An unknown region has no dex numbers, so the filter must exclude everything
+    // rather than silently ignoring itself.
+    where.push(
+      range
+        ? `(c.category = 'pokemon' AND c.pokedex_number BETWEEN ?${values.length + 1} AND ?${values.length + 2})`
+        : '0',
+    );
+    if (range) values.push(range.min, range.max);
+  }
+  if (filters.frameTypes?.length) where.push(frameTypeWhere(filters.frameTypes, values));
+  if (filters.rarityKeys?.length) where.push(rarityWhere(filters.rarityKeys, values));
   if (filters.owned !== undefined) {
     where.push(filters.owned ? 'COALESCE(cc.quantity, 0) > 0' : 'COALESCE(cc.quantity, 0) = 0');
   }
@@ -1177,8 +1332,12 @@ export async function searchCards(
     language: filters.language ?? null,
     category: filters.category ?? null,
     setId: filters.setId ?? null,
+    setIds: filters.setIds?.slice().sort() ?? null,
     species: filters.species ?? null,
     pokedexNumber: filters.pokedexNumber ?? null,
+    region: filters.region ?? null,
+    frameTypes: filters.frameTypes?.slice().sort() ?? null,
+    rarityKeys: filters.rarityKeys?.slice().sort() ?? null,
     owned: filters.owned ?? null,
     ownedFirst,
     order: 'owned-addition-set-release-v4',

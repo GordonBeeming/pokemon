@@ -7,7 +7,7 @@ import {
   type CollectionSetRequest,
   type CollectionState,
 } from '@pokedex/shared';
-import { isoFromSeconds, nowSeconds } from './db';
+import { decodeSlotId, encodeSlotId, isoFromSeconds, newId, nowSeconds } from './db';
 
 interface CollectionRow {
   card_id: string;
@@ -46,7 +46,12 @@ export type CollectionErrorCode =
   | 'collection_mutation_conflict'
   | 'collection_quantity_out_of_bounds'
   | 'collection_quantity_below_active_assignments'
+  | 'collection_remove_no_loose_copies'
+  | 'collection_remove_slot_not_found'
+  | 'collection_remove_slot_required'
   | 'invalid_stored_mutation';
+
+export type CollectionEventSource = 'add' | 'pocket' | 'loose' | 'miscount' | 'set' | 'import';
 
 export interface ActiveBinderAssignmentLocation {
   binderId: string;
@@ -56,14 +61,29 @@ export interface ActiveBinderAssignmentLocation {
   column: number;
 }
 
+export interface RemoveCandidate {
+  slotId: string;
+  binderId: string;
+  binderName: string;
+  page: number;
+  row: number;
+  column: number;
+}
+
 export class CollectionDomainError extends Error {
   constructor(
     public readonly code: CollectionErrorCode,
-    public readonly details?: { activeAssignments: ActiveBinderAssignmentLocation[] },
+    public readonly details?:
+      { activeAssignments: ActiveBinderAssignmentLocation[] } | { candidates: RemoveCandidate[] },
   ) {
     super(code);
     this.name = 'CollectionDomainError';
   }
+}
+
+export interface CollectionRemoveInput {
+  source: 'pocket' | 'loose' | 'miscount';
+  slotId?: string;
 }
 
 function toState(row: CollectionRow): CollectionState {
@@ -146,6 +166,22 @@ function mutationInsert(
     .bind(ownerId, mutationId, hash, now, cardId);
 }
 
+function eventInsert(
+  db: D1Database,
+  ownerId: string,
+  cardId: string,
+  delta: number,
+  source: CollectionEventSource,
+  now: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO collection_events (id, owner_id, card_id, delta, source, slot_id, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)`,
+    )
+    .bind(newId('event'), ownerId, cardId, delta, source, now);
+}
+
 async function commitMutation(
   db: D1Database,
   ownerId: string,
@@ -154,22 +190,28 @@ async function commitMutation(
   hash: string,
   update: D1PreparedStatement,
   conflict: CollectionErrorCode,
+  ledger?: { delta: number; source: CollectionEventSource },
 ): Promise<CollectionMutationResult> {
   const previous = await readMutation(db, ownerId, mutationId);
   if (previous) return replay(previous, hash);
   const now = nowSeconds();
   try {
-    const results = await db.batch<MutationRow>([
-      update,
+    const statements = [update];
+    // Only a real quantity change earns a ledger row — a no-op set (or an
+    // idempotent replay, handled above) shouldn't pad the history.
+    if (ledger && ledger.delta !== 0)
+      statements.push(eventInsert(db, ownerId, cardId, ledger.delta, ledger.source, now));
+    statements.push(
       mutationInsert(db, ownerId, cardId, mutationId, hash, now),
       db
         .prepare(
           'SELECT request_hash, response_json FROM collection_mutations WHERE owner_id = ?1 AND mutation_id = ?2',
         )
         .bind(ownerId, mutationId),
-    ]);
-    const inserted = results[1]?.meta.changes ?? 0;
-    const stored = results[2]?.results.at(0);
+    );
+    const results = await db.batch<MutationRow>(statements);
+    const inserted = results.at(-2)?.meta.changes ?? 0;
+    const stored = results.at(-1)?.results.at(0);
     if (inserted !== 1 || !stored) throw new CollectionDomainError(conflict);
     return { state: readStoredState(stored.response_json), replayed: false };
   } catch (error) {
@@ -251,6 +293,7 @@ export async function setCollectionState(
           expectedRevision,
         ),
       'collection_revision_conflict',
+      { delta: input.quantity - (current?.quantity ?? 0), source: 'set' },
     );
   } catch (error) {
     const assigned = await db
@@ -314,6 +357,7 @@ export async function incrementCollectionQuantity(
       )
       .bind(ownerId, input.cardId, input.delta, now, input.mutationId),
     'collection_quantity_out_of_bounds',
+    { delta: input.delta, source: 'add' },
   );
 }
 
@@ -381,4 +425,150 @@ export async function collectionSummary(
     totalQuantity: row?.total_quantity ?? 0,
     noted: row?.noted ?? 0,
   };
+}
+
+async function assignedSlotsForCard(
+  db: D1Database,
+  ownerId: string,
+  cardId: string,
+): Promise<RemoveCandidate[]> {
+  const result = await db
+    .prepare(
+      `SELECT binder.id AS binder_id, binder.name AS binder_name, page.id AS page_id,
+        page.position, slot.row_index, slot.column_index
+       FROM binder_slots slot
+       JOIN binder_pages page ON page.id = slot.binder_page_id
+       JOIN binder_versions version ON version.id = page.binder_version_id
+       JOIN binders binder ON binder.id = version.binder_id
+       WHERE binder.owner_id = ?1 AND version.status = 'active' AND slot.assigned_card_id = ?2
+       ORDER BY binder.id, page.position, slot.row_index, slot.column_index`,
+    )
+    .bind(ownerId, cardId)
+    .all<{
+      binder_id: string;
+      binder_name: string;
+      page_id: string;
+      position: number;
+      row_index: number;
+      column_index: number;
+    }>();
+  return result.results.map((row) => ({
+    slotId: encodeSlotId(row.page_id, row.row_index, row.column_index),
+    binderId: row.binder_id,
+    binderName: row.binder_name,
+    page: row.position,
+    row: row.row_index,
+    column: row.column_index,
+  }));
+}
+
+/**
+ * Removes exactly one copy from the owner's inventory, per the three sources
+ * the UI offers when a stated quantity goes down (research.md: "lowering
+ * copies always asks where the copy comes from"):
+ *  - pocket: unassign a named binder pocket and decrement, atomically.
+ *  - loose: decrement an unassigned copy; refused when none are loose.
+ *  - miscount: same as loose when one is loose; otherwise behaves like
+ *    pocket, but requires the caller to say which pocket since any of them
+ *    could be the miscounted one.
+ */
+export async function removeCollectionCopy(
+  db: D1Database,
+  ownerId: string,
+  cardId: string,
+  input: CollectionRemoveInput,
+): Promise<CollectionState> {
+  await requireCollectionCard(db, cardId);
+  const state = await getCollectionState(db, ownerId, cardId);
+  if (!state || state.quantity <= 0)
+    throw new CollectionDomainError('collection_quantity_out_of_bounds');
+  const current = state;
+  const now = nowSeconds();
+
+  // collection_cards' AFTER UPDATE trigger bumps backup_epoch with a second
+  // statement guarded by "OLD.owner_id <> NEW.owner_id", which never matches
+  // here (the owner never changes) — and D1/SQLite report the *last*
+  // statement a trigger runs as the change count, not the top-level UPDATE's.
+  // So success is confirmed by re-reading the row, never by trusting
+  // meta.changes on a statement that touches a triggered table.
+  async function decrementLoose(source: CollectionEventSource): Promise<CollectionState> {
+    await db.batch([
+      db
+        .prepare(
+          `UPDATE collection_cards SET quantity = quantity - 1, revision = revision + 1, updated_at = ?1
+           WHERE owner_id = ?2 AND card_id = ?3 AND quantity > 0`,
+        )
+        .bind(now, ownerId, cardId),
+      eventInsert(db, ownerId, cardId, -1, source, now),
+    ]);
+    const updated = await getCollectionState(db, ownerId, cardId);
+    if (!updated || updated.quantity !== current.quantity - 1)
+      throw new CollectionDomainError('collection_quantity_out_of_bounds');
+    return updated;
+  }
+
+  async function unassignAndDecrement(
+    slotId: string,
+    source: CollectionEventSource,
+  ): Promise<CollectionState> {
+    const decoded = decodeSlotId(slotId);
+    if (!decoded) throw new CollectionDomainError('collection_remove_slot_not_found');
+    // Confirmed before writing: a D1 batch runs every statement regardless of
+    // an earlier one's outcome, so an invalid slotId must be caught here
+    // rather than by an unassign statement that would just quietly match zero rows.
+    const targetedSlot = await db
+      .prepare(
+        `SELECT 1 FROM binder_slots
+         WHERE binder_page_id = ?1 AND row_index = ?2 AND column_index = ?3 AND assigned_card_id = ?4`,
+      )
+      .bind(decoded.pageId, decoded.row, decoded.column, cardId)
+      .first();
+    if (!targetedSlot) throw new CollectionDomainError('collection_remove_slot_not_found');
+    await db.batch([
+      db
+        .prepare(
+          `UPDATE binder_slots SET assigned_card_id = NULL
+           WHERE binder_page_id = ?1 AND row_index = ?2 AND column_index = ?3 AND assigned_card_id = ?4`,
+        )
+        .bind(decoded.pageId, decoded.row, decoded.column, cardId),
+      db
+        .prepare(
+          `UPDATE collection_cards SET quantity = quantity - 1, revision = revision + 1, updated_at = ?1
+           WHERE owner_id = ?2 AND card_id = ?3 AND quantity > 0`,
+        )
+        .bind(now, ownerId, cardId),
+      db
+        .prepare(
+          `INSERT INTO collection_events (id, owner_id, card_id, delta, source, slot_id, created_at)
+           VALUES (?1, ?2, ?3, -1, ?4, ?5, ?6)`,
+        )
+        .bind(newId('event'), ownerId, cardId, source, slotId, now),
+    ]);
+    const updated = await getCollectionState(db, ownerId, cardId);
+    if (!updated || updated.quantity !== current.quantity - 1)
+      throw new CollectionDomainError('collection_quantity_out_of_bounds');
+    return updated;
+  }
+
+  if (input.source === 'pocket') {
+    if (!input.slotId) throw new CollectionDomainError('collection_remove_slot_required');
+    return unassignAndDecrement(input.slotId, 'pocket');
+  }
+
+  const assigned = await assignedSlotsForCard(db, ownerId, cardId);
+  const loose = current.quantity - assigned.length;
+
+  if (input.source === 'loose') {
+    if (loose <= 0) throw new CollectionDomainError('collection_remove_no_loose_copies');
+    return decrementLoose('loose');
+  }
+
+  // miscount: prefer taking it from the unassigned pile; only ask which
+  // pocket when every copy is currently placed somewhere.
+  if (loose > 0) return decrementLoose('miscount');
+  if (!input.slotId)
+    throw new CollectionDomainError('collection_remove_slot_required', { candidates: assigned });
+  if (!assigned.some((candidate) => candidate.slotId === input.slotId))
+    throw new CollectionDomainError('collection_remove_slot_not_found');
+  return unassignAndDecrement(input.slotId, 'miscount');
 }
