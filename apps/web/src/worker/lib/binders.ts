@@ -3574,3 +3574,76 @@ export async function assignOwnedExactTargets(
   ]);
   return { locations };
 }
+
+const MAX_BLANK_PAGES_PER_INSERT = 20;
+
+/**
+ * Adds `count` blank pages so the first one sits at `beforePosition`, like sliding
+ * empty pages into a physical binder: every page from that point on (with its cards,
+ * reserved label and bookmarks, which all belong to the page) moves back by `count`
+ * whole pages, and nothing reflows between pockets. One page is one page; a person
+ * who wants both sides of a sleeve blank inserts two.
+ */
+export async function insertBlankBinderPages(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  beforePosition: number,
+  count: number,
+  requestedRevision: number,
+): Promise<BinderMutationResult> {
+  if (!Number.isInteger(count) || count < 1 || count > MAX_BLANK_PAGES_PER_INSERT)
+    domainError('binder_page_order_invalid');
+  const version = await readVersion(db, ownerId, versionId);
+  requireEditable(version);
+  expectedRevision(version, requestedRevision);
+  const pages = await listPageRows(db, versionId);
+  if (!Number.isInteger(beforePosition) || beforePosition < 0 || beforePosition > pages.length)
+    domainError('binder_page_not_found');
+  const pageSize = version.rows * version.columns;
+  const newPages = Array.from({ length: count }, (_value, index) => ({
+    id: newId('page'),
+    position: beforePosition + index,
+  }));
+  // Positions are unique per version, so later pages move out of the way in two
+  // steps (far away, then back to their final place) inside the same batch.
+  const parking = pages.length + count + 1;
+  await runVersionBatch(db, ownerId, versionId, version.revision, false, [
+    db
+      .prepare(
+        `UPDATE binder_pages SET position = position + ?1
+         WHERE binder_version_id = ?2 AND position >= ?3`,
+      )
+      .bind(parking, versionId, beforePosition),
+    db
+      .prepare(
+        `UPDATE binder_pages SET position = position - ?1 + ?2
+         WHERE binder_version_id = ?3 AND position >= ?1`,
+      )
+      .bind(parking, count, versionId),
+    db
+      .prepare(
+        `INSERT INTO binder_pages (id, binder_version_id, position)
+         SELECT json_extract(value, '$.id'), ?1, CAST(json_extract(value, '$.position') AS INTEGER)
+         FROM json_each(?2)`,
+      )
+      .bind(versionId, JSON.stringify(newPages)),
+    db
+      .prepare(
+        `WITH RECURSIVE rows(value) AS (
+           SELECT 0 UNION ALL SELECT value + 1 FROM rows WHERE value + 1 < ?2
+         ), columns(value) AS (
+           SELECT 0 UNION ALL SELECT value + 1 FROM columns WHERE value + 1 < ?3
+         )
+         INSERT INTO binder_slots (binder_page_id, row_index, column_index, card_id)
+         SELECT json_extract(page.value, '$.id'), rows.value, columns.value, NULL
+         FROM json_each(?1) page CROSS JOIN rows CROSS JOIN columns`,
+      )
+      .bind(JSON.stringify(newPages), version.rows, version.columns),
+    db
+      .prepare('UPDATE binder_versions SET capacity = capacity + ?1 WHERE id = ?2')
+      .bind(count * pageSize, versionId),
+    ...revisionStatements(db, version, nowSeconds()),
+  ]);
+  return mutationResult(db, ownerId, versionId, [beforePosition]);
+}

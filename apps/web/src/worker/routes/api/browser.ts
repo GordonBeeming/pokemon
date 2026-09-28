@@ -984,6 +984,34 @@ browserApiRoutes.post('/binders/versions/:id/arrange', async (c) => {
     return apiFailure(c, error);
   }
 });
+// Adds blank pages in the middle of a binder; later pages move back as whole pages.
+browserApiRoutes.post('/binders/versions/:id/pages/insert', async (c) => {
+  try {
+    const parsed = z
+      .object({
+        beforePosition: z.number().int().nonnegative(),
+        count: z.number().int().min(1).max(20),
+        expectedRevision: z.number().int().nonnegative(),
+      })
+      .strict()
+      .safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json(
+      {
+        ok: true,
+        binder: await ownerOperations(c.env, sessionOwner(c)).insertBlankBinderPages(
+          c.req.param('id'),
+          parsed.data.beforePosition,
+          parsed.data.count,
+          parsed.data.expectedRevision,
+        ),
+      },
+      201,
+    );
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
 // Marks exact-card pockets as holding copies the owner already has (see
 // assignOwnedExactTargets); `apply: false` previews the pockets it would mark.
 browserApiRoutes.post('/binders/versions/:id/assign-owned', async (c) => {

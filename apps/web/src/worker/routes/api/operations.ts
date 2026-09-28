@@ -29,6 +29,7 @@ import {
   addBinderPage,
   arrangeBinderVersion,
   assignOwnedExactTargets,
+  insertBlankBinderPages,
   deleteBinderPage,
   getBinderBookmarks,
   getBinderVersion,
@@ -205,6 +206,13 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       arrangeBinderVersion(env.DB, ownerId, versionId, mode, expectedRevision),
     assignOwnedExactTargets: (versionId: string, expectedRevision: number, apply: boolean) =>
       assignOwnedExactTargets(env.DB, ownerId, versionId, expectedRevision, apply),
+    insertBlankBinderPages: (
+      versionId: string,
+      beforePosition: number,
+      count: number,
+      expectedRevision: number,
+    ) =>
+      insertBlankBinderPages(env.DB, ownerId, versionId, beforePosition, count, expectedRevision),
     addBinderPage: (versionId: string, expectedRevision: number) =>
       addBinderPage(env.DB, ownerId, versionId, expectedRevision),
     deleteBinderPage: (versionId: string, pageId: string, expectedRevision: number) =>
