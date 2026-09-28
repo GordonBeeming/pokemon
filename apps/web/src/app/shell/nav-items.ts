@@ -6,8 +6,6 @@ export interface NavItem {
   icon: IconName;
 }
 
-// Paths are relative to the router's basepath (APP_BASEPATH), so cutover to '/'
-// never touches this list.
 export const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Home', icon: 'home' },
   { to: '/catalogue', label: 'Catalogue', icon: 'catalogue' },

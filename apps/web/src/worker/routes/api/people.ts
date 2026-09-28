@@ -18,7 +18,7 @@ export const peopleRoutes = new Hono<{ Bindings: CloudflareEnv; Variables: AuthV
 
 // The lead flips this at cutover, once the new SPA has a real route to land
 // an invitee on; it isn't wired to anything else in the meantime.
-const INVITE_LANDING_PATH = '/next/invite';
+const INVITE_LANDING_PATH = '/invite';
 
 function requestOrigin(c: { req: { raw: Request }; env: CloudflareEnv }): string {
   return c.env.PUBLIC_ORIGIN || new URL(c.req.raw.url).origin;

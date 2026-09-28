@@ -1,4 +1,4 @@
-/* Xylem tokens for the /next SPA. Light is the only theme for now — dark is a later
+/* Xylem tokens for the app. Light is the only theme for now — dark is a later
    pass — but every colour is a variable so that pass never touches component CSS. */
 :root {
   --ink: #0f172a;
