@@ -5,6 +5,7 @@ import { binderDetailRoute, bindersRoute } from './routes/binders';
 import { cardRoute } from './routes/card';
 import { catalogueRoute } from './routes/catalogue';
 import { indexRoute } from './routes/index';
+import { inviteRoute } from './routes/invite';
 import { pokedexRoute } from './routes/pokedex';
 import { rootRoute } from './routes/root';
 import { settingsRoute } from './routes/settings';
@@ -25,7 +26,7 @@ const authedTree = authedRoute.addChildren([
 // session gate (see authed-layout.tsx) — it's a sibling of that layout, not a child.
 const devRoutes = import.meta.env.DEV ? [(await import('./routes/frames')).framesRoute] : [];
 
-export const routeTree = rootRoute.addChildren([authedTree, ...devRoutes]);
+export const routeTree = rootRoute.addChildren([authedTree, inviteRoute, ...devRoutes]);
 
 export const router = createRouter({
   routeTree,

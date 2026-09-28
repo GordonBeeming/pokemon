@@ -57,3 +57,25 @@ export function tcgdexArtImageBase(
     return null;
   return url.href.replace(/\/+$/u, '');
 }
+
+const tcgplayerVariantSchema = z
+  .object({
+    thirdParty: z.object({ tcgplayer: z.number().int().positive() }).partial().optional(),
+  })
+  .passthrough();
+const tcgplayerCardSchema = z
+  .object({ variants_detailed: z.array(tcgplayerVariantSchema).optional() })
+  .passthrough();
+
+// The final art fallback: TCGdex's own card payload links each printing to
+// its TCGplayer product, which we can fetch a product image for even when
+// TCGdex has no image of its own (a gap real cards do hit - see art.ts).
+export function tcgplayerProductId(payload: unknown): number | null {
+  const parsed = tcgplayerCardSchema.safeParse(payload);
+  if (!parsed.success) return null;
+  for (const variant of parsed.data.variants_detailed ?? []) {
+    const id = variant.thirdParty?.tcgplayer;
+    if (id !== undefined) return id;
+  }
+  return null;
+}

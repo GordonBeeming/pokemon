@@ -8,6 +8,7 @@ import type { ChallengeKind, RateLimitResult } from './lib/guards';
 import { ApplicationError, describeError, logError, logInfo } from './lib/log';
 import { applySecurityHeaders } from './lib/security-headers';
 import { latestFullEnglishCatalogueSync } from './lib/catalogue';
+import { runScheduledBackups, signedBackupWorkflowId } from './lib/backup';
 import type { AuthVars } from './lib/types';
 export { BackupWorkflow } from './workflows/backup';
 export { CatalogueFetcher, CatalogueSyncWorkflow } from './workflows/catalogue';
@@ -245,4 +246,19 @@ app.onError((error, c) => {
   return c.json({ ok: false, error: 'internal_error', requestId }, 500);
 });
 
-export default { fetch: app.fetch } satisfies ExportedHandler<CloudflareEnv>;
+function scheduled(
+  _controller: ScheduledController,
+  env: CloudflareEnv,
+  ctx: ExecutionContext,
+): void {
+  ctx.waitUntil(
+    runScheduledBackups(env.DB, async (ownerId) =>
+      env.BACKUP.create({
+        id: await signedBackupWorkflowId('backup', ownerId, env.SESSION_SECRET),
+        params: { ownerId, operation: 'create' },
+      }),
+    ).catch((error) => logError({ evt: 'backup.scheduled_run_failed', err: describeError(error) })),
+  );
+}
+
+export default { fetch: app.fetch, scheduled } satisfies ExportedHandler<CloudflareEnv>;

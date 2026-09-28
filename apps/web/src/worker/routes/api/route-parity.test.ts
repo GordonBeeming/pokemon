@@ -307,7 +307,14 @@ describe('browser and desktop route parity', () => {
 
       // /binders/:id now also answers PATCH (binder display prefs), so DELETE's
       // "wrong method" probe uses PUT instead — still unregistered on that path.
-      const unusedMethod = route.method === 'DELETE' ? 'PUT' : 'DELETE';
+      // /binders/versions/:id now also answers DELETE (discard a draft), so
+      // GET's probe here uses PATCH instead — still unregistered on that path.
+      const unusedMethod =
+        route.method === 'DELETE'
+          ? 'PUT'
+          : route.browser === '/binders/versions/version-1'
+            ? 'PATCH'
+            : 'DELETE';
       const wrongBrowserMethod = await apiRoutes.request(
         route.browser,
         requestInit(route, 'browser', unusedMethod),
@@ -343,6 +350,11 @@ const browserOnlyRoutes = [
     body: { binderId: 'binder-1', slotId: 'page-1:0:0', addCopy: false, expectedRevision: 1 },
   },
   { method: 'GET', path: '/binders/inactive-targets' },
+  {
+    method: 'DELETE',
+    path: '/binders/versions/version-1',
+    body: { expectedRevision: 1 },
+  },
 ] as const;
 
 describe('browser-only route authorization', () => {

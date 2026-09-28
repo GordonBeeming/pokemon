@@ -36,8 +36,10 @@ import {
 import { decodeSlotId, encodeSlotId, newId, nowSeconds } from './db';
 import {
   CollectionDomainError,
+  eventInsert,
   getCollectionState,
-  incrementCollectionQuantity,
+  incrementQuantityStatement,
+  quantityCapAssertion,
 } from './collection';
 
 const MAX_BINDER_PAGES = 300;
@@ -554,8 +556,10 @@ export async function getBinderInsertDestinations(
   requireEditable(version);
   const card = cardId
     ? await db
-        .prepare('SELECT id, category, pokedex_number FROM catalogue_cards WHERE id = ?1')
-        .bind(cardId)
+        .prepare(
+          'SELECT id, category, pokedex_number FROM catalogue_cards WHERE id = ?1 AND (owner_id IS NULL OR owner_id = ?2)',
+        )
+        .bind(cardId, ownerId)
         .first<{ id: string; category: string; pokedex_number: number | null }>()
     : null;
   if (cardId && !card) domainError('card_not_found');
@@ -1275,19 +1279,27 @@ export async function reorderBinderPages(
   return mutationResult(db, ownerId, versionId, [0]);
 }
 
-async function orderingRows(db: D1Database, cardIds: string[]): Promise<Map<string, OrderingRow>> {
+// Doubles as the ownership gate for every "reference these cards in my
+// binder" path (arrange, setBinderSlots, addCardsToBinderVersion) - without
+// the owner filter, an exact-card target could be set to another owner's
+// custom card, which would then leak through every subsequent binder read.
+async function orderingRows(
+  db: D1Database,
+  ownerId: string,
+  cardIds: string[],
+): Promise<Map<string, OrderingRow>> {
   const rows = new Map<string, OrderingRow>();
   for (let offset = 0; offset < cardIds.length; offset += CARD_QUERY_CHUNK) {
     const chunk = cardIds.slice(offset, offset + CARD_QUERY_CHUNK);
-    const placeholders = chunk.map((_id, index) => `?${index + 1}`).join(',');
+    const placeholders = chunk.map((_id, index) => `?${index + 2}`).join(',');
     const result = await db
       .prepare(
         `SELECT c.id,c.set_name,c.number,c.name,c.language,set_meta.release_date,c.pokedex_number
          FROM catalogue_cards c LEFT JOIN catalogue_sets set_meta
            ON set_meta.set_id=c.set_id AND set_meta.language=c.language
-         WHERE c.id IN (${placeholders})`,
+         WHERE c.id IN (${placeholders}) AND (c.owner_id IS NULL OR c.owner_id = ?1)`,
       )
-      .bind(...chunk)
+      .bind(ownerId, ...chunk)
       .all<OrderingRow>();
     for (const row of result.results) rows.set(row.id, row);
   }
@@ -1349,7 +1361,7 @@ export async function arrangeBinderVersion(
       targets.flatMap((item) => (item.entry.kind === 'exact-card' ? [item.entry.cardId] : [])),
     ),
   ];
-  const cards = await orderingRows(db, uniqueIds);
+  const cards = await orderingRows(db, ownerId, uniqueIds);
   if (cards.size !== uniqueIds.length) domainError('binder_arrangement_card_missing');
   const ordering = (item: ReflowEntry): OrderingRow => {
     if (item.entry.kind === 'exact-card') {
@@ -1429,11 +1441,15 @@ async function pageAt(db: D1Database, versionId: string, position: number): Prom
   return page;
 }
 
-async function requireCard(db: D1Database, cardId: string | null): Promise<void> {
+// Also the gate that stops a caller from referencing another owner's custom
+// card in their own binder in the first place - without this, that
+// reference would then leak the other owner's private card through every
+// binder read that follows it (dashboard, candidates, search, paste, ...).
+async function requireCard(db: D1Database, ownerId: string, cardId: string | null): Promise<void> {
   if (cardId === null) return;
   const card = await db
-    .prepare('SELECT id FROM catalogue_cards WHERE id = ?1')
-    .bind(cardId)
+    .prepare('SELECT id FROM catalogue_cards WHERE id = ?1 AND (owner_id IS NULL OR owner_id = ?2)')
+    .bind(cardId, ownerId)
     .first();
   if (!card) domainError('card_not_found');
 }
@@ -1491,7 +1507,7 @@ export async function setBinderSlot(
   expectedRevision(version, requestedRevision);
   validateLocation(version, { page: pagePosition, row, column });
   const page = await pageAt(db, versionId, pagePosition);
-  await requireCard(db, cardId);
+  await requireCard(db, ownerId, cardId);
   const now = nowSeconds();
   const collectionStatements: D1PreparedStatement[] = [];
   if (cardId && copyChoice?.action === 'add') {
@@ -1598,7 +1614,9 @@ export async function setBinderSlots(
     if (keys.has(key)) domainError('binder_slot_out_of_bounds');
     keys.add(key);
   }
-  const cards = await orderingRows(db, [...new Set(assignments.map((item) => item.cardId))]);
+  const cards = await orderingRows(db, ownerId, [
+    ...new Set(assignments.map((item) => item.cardId)),
+  ]);
   if (cards.size !== new Set(assignments.map((item) => item.cardId)).size)
     domainError('binder_arrangement_card_missing');
   const encoded = JSON.stringify(
@@ -1751,7 +1769,7 @@ export async function addCardsToBinderVersion(
   requireEditable(version);
   expectedRevision(version, requestedRevision);
   const uniqueIds = [...new Set(cardIds)];
-  const cards = await orderingRows(db, uniqueIds);
+  const cards = await orderingRows(db, ownerId, uniqueIds);
   if (cards.size !== uniqueIds.length) domainError('binder_arrangement_card_missing');
 
   const available = (await materializedSlots(db, versionId)).filter(
@@ -1971,6 +1989,38 @@ export async function activateBinderVersion(
     throw error;
   }
   return mutationResult(db, ownerId, versionId, [0]);
+}
+
+// The other half of clone -> edit -> activate/discard: a draft nobody wants
+// is just deleted, never archived (only activation retires a version to
+// 'archived', so a draft's rows would otherwise never leave the table). The
+// cascade (binder_versions -> binder_pages -> binder_slots ->
+// binder_bookmarks, all ON DELETE CASCADE) is the same one deleteBinder
+// already relies on.
+export async function discardBinderDraftVersion(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  requestedRevision: number,
+): Promise<void> {
+  const version = await readVersion(db, ownerId, versionId);
+  if (version.status !== 'draft') domainError('binder_version_not_draft');
+  expectedRevision(version, requestedRevision);
+  const now = nowSeconds();
+  await runVersionBatch(db, ownerId, versionId, version.revision, true, [
+    // Belt-and-suspenders on top of versionAssertion's revision check (which
+    // already invalidates on any status-changing mutation, since those bump
+    // revision too): the delete itself never fires for a version this owner
+    // doesn't hold or that isn't a draft, even if that revision guard is
+    // ever loosened.
+    db
+      .prepare(
+        `DELETE FROM binder_versions WHERE id = ?1 AND status = 'draft'
+         AND binder_id IN (SELECT id FROM binders WHERE owner_id = ?2)`,
+      )
+      .bind(versionId, ownerId),
+    db.prepare('UPDATE binders SET updated_at = ?1 WHERE id = ?2').bind(now, version.binder_id),
+  ]);
 }
 
 interface MaterializedSlot extends SlotRow {
@@ -2430,7 +2480,7 @@ async function mutateLogicalEntries(
   return { ...(await mutationResult(db, ownerId, versionId, [anchor.page])), anchor };
 }
 
-export function insertBinderEntries(
+export async function insertBinderEntries(
   db: D1Database,
   ownerId: string,
   versionId: string,
@@ -2438,6 +2488,17 @@ export function insertBinderEntries(
   entries: BinderEntry[],
   expectedRevision: number,
 ): Promise<BinderMutationResult> {
+  // An exact-card entry names its target directly, unlike a pokemon-kind
+  // entry (a public dex number) - without this, inserting one could set
+  // another owner's custom card as a binder target no assignment step would
+  // ever need to touch.
+  const exactCardIds = [
+    ...new Set(entries.flatMap((entry) => (entry.kind === 'exact-card' ? [entry.cardId] : []))),
+  ];
+  if (exactCardIds.length > 0) {
+    const cards = await orderingRows(db, ownerId, exactCardIds);
+    if (cards.size !== exactCardIds.length) domainError('binder_arrangement_card_missing');
+  }
   return mutateLogicalEntries(db, ownerId, versionId, expectedRevision, at, (current, index) => [
     ...current.slice(0, index),
     ...entries.map((entry) => ({ entry, assignedCardId: null })),
@@ -2457,8 +2518,11 @@ async function planBinderPaste(
   expectedRevision(version, request.expectedRevision);
   const ids = [...new Set(request.cardIds)];
   const found = await db
-    .prepare('SELECT id FROM catalogue_cards WHERE id IN (SELECT value FROM json_each(?1))')
-    .bind(JSON.stringify(ids))
+    .prepare(
+      `SELECT id FROM catalogue_cards
+       WHERE id IN (SELECT value FROM json_each(?1)) AND (owner_id IS NULL OR owner_id = ?2)`,
+    )
+    .bind(JSON.stringify(ids), ownerId)
     .all<{ id: string }>();
   if (found.results.length !== ids.length) domainError('card_not_found');
   const slots = await materializedSlots(db, versionId);
@@ -2689,6 +2753,36 @@ export function insertFullPokedex(
   return insertBinderEntries(db, ownerId, versionId, at, entries, expectedRevision);
 }
 
+function assignableSlotAssertion(
+  db: D1Database,
+  pageId: string,
+  at: BinderSlotLocation,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `SELECT CASE WHEN EXISTS (
+          SELECT 1 FROM binder_slots WHERE binder_page_id = ?1 AND row_index = ?2
+            AND column_index = ?3 AND entry_kind IN ('exact-card', 'pokemon')
+         ) THEN 1 ELSE json_extract('binder_slot_not_found', '$') END AS valid`,
+    )
+    .bind(pageId, at.row, at.column);
+}
+
+function assignmentUpdateStatement(
+  db: D1Database,
+  cardId: string | null,
+  pageId: string,
+  at: BinderSlotLocation,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `UPDATE binder_slots SET assigned_card_id = ?1
+         WHERE binder_page_id = ?2 AND row_index = ?3 AND column_index = ?4
+           AND entry_kind IN ('exact-card', 'pokemon')`,
+    )
+    .bind(cardId, pageId, at.row, at.column);
+}
+
 export async function setBinderEntryAssignment(
   db: D1Database,
   ownerId: string,
@@ -2702,27 +2796,14 @@ export async function setBinderEntryAssignment(
   expectedRevision(version, requestedRevision);
   const page = await pageAt(db, versionId, at.page);
   validateLocation(version, at);
-  if (cardId !== null) await requireCard(db, cardId);
+  if (cardId !== null) await requireCard(db, ownerId, cardId);
   const now = nowSeconds();
   const quantityAssertion = assignmentQuantityAssertion(db, ownerId, version, page.id, at, cardId);
   try {
     await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-      db
-        .prepare(
-          `SELECT CASE WHEN EXISTS (
-          SELECT 1 FROM binder_slots WHERE binder_page_id = ?1 AND row_index = ?2
-            AND column_index = ?3 AND entry_kind IN ('exact-card', 'pokemon')
-         ) THEN 1 ELSE json_extract('binder_slot_not_found', '$') END AS valid`,
-        )
-        .bind(page.id, at.row, at.column),
+      assignableSlotAssertion(db, page.id, at),
       quantityAssertion,
-      db
-        .prepare(
-          `UPDATE binder_slots SET assigned_card_id = ?1
-         WHERE binder_page_id = ?2 AND row_index = ?3 AND column_index = ?4
-           AND entry_kind IN ('exact-card', 'pokemon')`,
-        )
-        .bind(cardId, page.id, at.row, at.column),
+      assignmentUpdateStatement(db, cardId, page.id, at),
       ...revisionStatements(db, version, now),
     ]);
   } catch (error) {
@@ -3076,62 +3157,64 @@ export interface BinderCardMatches {
   exactTargets: SlotRefRow[];
   pokemonTargets: SlotRefRow[];
   placed: SlotRefRow[];
+  nextTarget: SlotRefRow | null;
   endDestination: SlotRefRow | null;
 }
 
 interface BinderMatchSlotRow {
   binder_id: string;
-  binder_name: string;
-  columns: number;
   page_id: string;
   page_position: number;
   row_index: number;
   column_index: number;
-  entry_kind: 'empty' | 'reserved' | 'exact-card' | 'pokemon';
-  card_id: string | null;
+  entry_kind: 'exact-card' | 'pokemon';
   assigned_card_id: string | null;
 }
 
-// exact-card slots are a fixed layout reference to this printing — they always
-// show it, so they count as "placed" without needing an assignment. pokemon
-// slots target a species by number; only the one currently holding this exact
-// printing (assigned_card_id) counts as placed for it.
+// A slot's card_id/pokemon_number is only its fixed target, never proof it's
+// filled — exact-card and pokemon slots both track fulfillment separately via
+// assigned_card_id, which can be null (open), this card (placed), or another
+// printing/species entirely (occupied by something else, so neither an open
+// target nor a placement for this card).
 export async function getCardBinderMatches(
   db: D1Database,
   ownerId: string,
   cardId: string,
 ): Promise<BinderCardMatches[]> {
   const card = await db
-    .prepare('SELECT category, pokedex_number FROM catalogue_cards WHERE id = ?1')
-    .bind(cardId)
+    .prepare(
+      'SELECT category, pokedex_number FROM catalogue_cards WHERE id = ?1 AND (owner_id IS NULL OR owner_id = ?2)',
+    )
+    .bind(cardId, ownerId)
     .first<{ category: string; pokedex_number: number | null }>();
   if (!card) domainError('card_not_found');
   const binders = await db
     .prepare(
-      `SELECT binder.id AS binder_id, binder.name AS binder_name
+      `SELECT binder.id AS binder_id, binder.name AS binder_name,
+        binder.active_version_id AS version_id, version.columns AS columns
        FROM binders binder JOIN binder_versions version ON version.id = binder.active_version_id
        WHERE binder.owner_id = ?1 ORDER BY binder.id`,
     )
     .bind(ownerId)
-    .all<{ binder_id: string; binder_name: string }>();
-  const byBinder = new Map<string, BinderCardMatches>(
-    binders.results.map((row) => [
-      row.binder_id,
-      {
-        binderId: row.binder_id,
-        name: row.binder_name,
-        exactTargets: [],
-        pokemonTargets: [],
-        placed: [],
-        endDestination: null,
-      },
-    ]),
-  );
+    .all<{ binder_id: string; binder_name: string; version_id: string; columns: number }>();
+  const byBinder = new Map<string, BinderCardMatches>();
+  const binderMeta = new Map<string, { versionId: string; columns: number }>();
+  for (const row of binders.results) {
+    byBinder.set(row.binder_id, {
+      binderId: row.binder_id,
+      name: row.binder_name,
+      exactTargets: [],
+      pokemonTargets: [],
+      placed: [],
+      nextTarget: null,
+      endDestination: null,
+    });
+    binderMeta.set(row.binder_id, { versionId: row.version_id, columns: row.columns });
+  }
   const slots = await db
     .prepare(
-      `SELECT binder.id AS binder_id, binder.name AS binder_name, version.columns AS columns,
-        page.id AS page_id, page.position AS page_position,
-        slot.row_index, slot.column_index, slot.entry_kind, slot.card_id, slot.assigned_card_id
+      `SELECT binder.id AS binder_id, page.id AS page_id, page.position AS page_position,
+        slot.row_index, slot.column_index, slot.entry_kind, slot.assigned_card_id
        FROM binder_slots slot
        JOIN binder_pages page ON page.id = slot.binder_page_id
        JOIN binder_versions version ON version.id = page.binder_version_id
@@ -3145,22 +3228,46 @@ export async function getCardBinderMatches(
     .all<BinderMatchSlotRow>();
   for (const row of slots.results) {
     const entry = byBinder.get(row.binder_id);
-    if (!entry) continue;
+    const meta = binderMeta.get(row.binder_id);
+    if (!entry || !meta) continue;
     const ref: SlotRefRow = {
       slotId: encodeSlotId(row.page_id, row.row_index, row.column_index),
       page: row.page_position,
       row: row.row_index,
       col: row.column_index,
-      pocketIndex: row.row_index * row.columns + row.column_index,
+      pocketIndex: row.row_index * meta.columns + row.column_index,
     };
-    if (row.entry_kind === 'exact-card') {
-      entry.exactTargets.push(ref);
+    if (row.assigned_card_id === cardId) {
       entry.placed.push(ref);
-    } else {
-      entry.pokemonTargets.push(ref);
-      if (row.assigned_card_id === cardId) entry.placed.push(ref);
-      else if (!entry.endDestination) entry.endDestination = ref;
+      continue;
     }
+    if (row.assigned_card_id !== null) continue;
+    if (row.entry_kind === 'exact-card') entry.exactTargets.push(ref);
+    else entry.pokemonTargets.push(ref);
+  }
+  for (const entry of byBinder.values()) {
+    entry.nextTarget = entry.exactTargets[0] ?? entry.pokemonTargets[0] ?? null;
+    const meta = binderMeta.get(entry.binderId);
+    if (!meta) continue;
+    // Reuses getBinderInsertDestinations' own append computation (the first
+    // empty pocket after the last occupied one, skipping reserved pages) so
+    // "where would this card go next" never drifts from "where would any new
+    // card go next". Omitting cardId skips its match-list computation, which
+    // this call has no use for.
+    const destinations = await getBinderInsertDestinations(db, ownerId, meta.versionId);
+    if (!destinations.appendAt) continue;
+    const page = await db
+      .prepare('SELECT id FROM binder_pages WHERE binder_version_id = ?1 AND position = ?2')
+      .bind(meta.versionId, destinations.appendAt.page)
+      .first<{ id: string }>();
+    if (!page) continue;
+    entry.endDestination = {
+      slotId: encodeSlotId(page.id, destinations.appendAt.row, destinations.appendAt.column),
+      page: destinations.appendAt.page,
+      row: destinations.appendAt.row,
+      col: destinations.appendAt.column,
+      pocketIndex: destinations.appendAt.row * meta.columns + destinations.appendAt.column,
+    };
   }
   return [...byBinder.values()];
 }
@@ -3172,7 +3279,7 @@ export async function placeCard(
   binderId: string,
   slotId: string,
   addCopy: boolean,
-  expectedRevision: number,
+  requestedRevision: number,
 ): Promise<BinderMutationResult> {
   const decoded = decodeSlotId(slotId);
   if (!decoded) domainError('binder_slot_not_found');
@@ -3187,20 +3294,128 @@ export async function placeCard(
     .bind(decoded.pageId, versionId)
     .first<{ position: number }>();
   if (!page) domainError('binder_slot_not_found');
-  if (addCopy)
-    await incrementCollectionQuantity(db, ownerId, {
-      cardId,
-      mutationId: crypto.randomUUID(),
-      delta: 1,
-    });
-  return setBinderEntryAssignment(
-    db,
-    ownerId,
-    versionId,
-    { page: page.position, row: decoded.row, column: decoded.column },
-    cardId,
-    expectedRevision,
-  );
+  const at: BinderSlotLocation = { page: page.position, row: decoded.row, column: decoded.column };
+  // endDestination (getCardBinderMatches) points at an empty pocket, which
+  // setBinderEntryAssignment refuses (it only ever fills an existing
+  // exact-card/pokemon target). Placing there makes it one: an exact-card
+  // entry for this printing, target and fulfillment set together.
+  const targetSlot = await db
+    .prepare(
+      'SELECT entry_kind FROM binder_slots WHERE binder_page_id = ?1 AND row_index = ?2 AND column_index = ?3',
+    )
+    .bind(decoded.pageId, decoded.row, decoded.column)
+    .first<{ entry_kind: string }>();
+  if (targetSlot?.entry_kind === 'empty')
+    return placeCardIntoEmptySlot(db, ownerId, versionId, at, cardId, addCopy, requestedRevision);
+  if (!addCopy)
+    return setBinderEntryAssignment(db, ownerId, versionId, at, cardId, requestedRevision);
+  return placeCardWithNewCopy(db, ownerId, versionId, at, cardId, requestedRevision);
+}
+
+// Converts an empty pocket into an exact-card target for this printing and
+// fills it in the same batch, so it's never possible to observe a slot that
+// names this card as its target without also holding it (or vice versa).
+async function placeCardIntoEmptySlot(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  at: BinderSlotLocation,
+  cardId: string,
+  addCopy: boolean,
+  requestedRevision: number,
+): Promise<BinderMutationResult> {
+  const version = await readVersion(db, ownerId, versionId);
+  requireEditable(version);
+  expectedRevision(version, requestedRevision);
+  const page = await pageAt(db, versionId, at.page);
+  validateLocation(version, at);
+  await requireCard(db, ownerId, cardId);
+  const now = nowSeconds();
+  const emptySlotAssertion = db
+    .prepare(
+      `SELECT CASE WHEN EXISTS (
+          SELECT 1 FROM binder_slots WHERE binder_page_id = ?1 AND row_index = ?2
+            AND column_index = ?3 AND entry_kind = 'empty'
+         ) THEN 1 ELSE json_extract('binder_slot_not_found', '$') END AS valid`,
+    )
+    .bind(page.id, at.row, at.column);
+  const convertToExactCard = db
+    .prepare(
+      `UPDATE binder_slots SET entry_kind = 'exact-card', card_id = ?1, assigned_card_id = ?1
+         WHERE binder_page_id = ?2 AND row_index = ?3 AND column_index = ?4 AND entry_kind = 'empty'`,
+    )
+    .bind(cardId, page.id, at.row, at.column);
+  // additionalCopies is deliberately omitted even on the addCopy path: the
+  // increment statement runs earlier in this same batch, so by the time this
+  // assertion's live SELECT reads collection_cards.quantity it already
+  // reflects the pending add - counting it a second time here would let one
+  // more copy get assigned than the owner actually has.
+  const statements = addCopy
+    ? [
+        quantityCapAssertion(db, ownerId, cardId, 1),
+        incrementQuantityStatement(db, ownerId, cardId, 1, crypto.randomUUID(), now),
+        eventInsert(db, ownerId, cardId, 1, 'add', now),
+        emptySlotAssertion,
+        assignmentQuantityAssertion(db, ownerId, version, page.id, at, cardId),
+      ]
+    : [emptySlotAssertion, assignmentQuantityAssertion(db, ownerId, version, page.id, at, cardId)];
+  try {
+    await runVersionBatch(db, ownerId, versionId, version.revision, false, [
+      ...statements,
+      convertToExactCard,
+      ...revisionStatements(db, version, now),
+    ]);
+  } catch (error) {
+    if (error instanceof BinderDomainError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('collection_quantity_out_of_bounds'))
+      throw new CollectionDomainError('collection_quantity_out_of_bounds');
+    throw error;
+  }
+  return { ...(await mutationResult(db, ownerId, versionId, [at.page])), anchor: at };
+}
+
+// addCopy path: the quantity increment, its ledger row, and the slot
+// assignment must land in the same D1 batch() as the binder revision check,
+// or a mid-way failure would leave the quantity incremented with nothing
+// placed. assignmentQuantityAssertion's additionalCopies option lets the
+// additionalCopies is deliberately not used here: the increment above runs
+// earlier in this same batch, so this assertion's live read of
+// collection_cards.quantity already reflects the pending add.
+async function placeCardWithNewCopy(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  at: BinderSlotLocation,
+  cardId: string,
+  requestedRevision: number,
+): Promise<BinderMutationResult> {
+  const version = await readVersion(db, ownerId, versionId);
+  requireEditable(version);
+  expectedRevision(version, requestedRevision);
+  const page = await pageAt(db, versionId, at.page);
+  validateLocation(version, at);
+  await requireCard(db, ownerId, cardId);
+  const now = nowSeconds();
+  const mutationId = crypto.randomUUID();
+  try {
+    await runVersionBatch(db, ownerId, versionId, version.revision, false, [
+      quantityCapAssertion(db, ownerId, cardId, 1),
+      incrementQuantityStatement(db, ownerId, cardId, 1, mutationId, now),
+      eventInsert(db, ownerId, cardId, 1, 'add', now),
+      assignableSlotAssertion(db, page.id, at),
+      assignmentQuantityAssertion(db, ownerId, version, page.id, at, cardId),
+      assignmentUpdateStatement(db, cardId, page.id, at),
+      ...revisionStatements(db, version, now),
+    ]);
+  } catch (error) {
+    if (error instanceof BinderDomainError) throw error;
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('collection_quantity_out_of_bounds'))
+      throw new CollectionDomainError('collection_quantity_out_of_bounds');
+    throw error;
+  }
+  return { ...(await mutationResult(db, ownerId, versionId, [at.page])), anchor: at };
 }
 
 export interface InactiveBinderTargetRow {

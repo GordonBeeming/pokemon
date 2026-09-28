@@ -52,8 +52,16 @@
 
 /* Desktop: left rail, tab bar hidden. */
 @media (min-width: 768px) {
+  /* The rail's column is painted by the shell itself, so the dark strip runs the full
+     height of a long page even where the sticky rail isn't (full-page captures, print
+     preview, overscroll). */
   .app-shell {
     flex-direction: row;
+    background: linear-gradient(
+      to right,
+      var(--rail-bg) var(--shell-rail-width),
+      var(--paper) var(--shell-rail-width)
+    );
   }
   .app-rail {
     display: flex;
@@ -64,7 +72,9 @@
     gap: 0.25rem;
     width: var(--shell-rail-width);
     height: 100vh;
+    height: 100dvh;
     padding: 1.5rem 0.75rem;
+    overflow-y: auto;
     background: var(--rail-bg);
   }
   .app-tabbar {
@@ -152,4 +162,51 @@
   color: var(--danger);
   background: var(--danger-soft-bg);
   border-radius: var(--radius-md);
+}
+
+.sign-in-alert:empty {
+  display: none;
+}
+.sign-in-card .sign-in-secondary,
+.sign-in-enrol button {
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+}
+.sign-in-enrol {
+  text-align: left;
+}
+.sign-in-enrol summary {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sign-in-enrol form,
+.invite-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  text-align: left;
+}
+.sign-in-enrol label,
+.invite-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.sign-in-enrol input,
+.invite-form input {
+  min-width: 0;
+  height: 2.75rem;
+  padding: 0 0.75rem;
+  font-size: 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+}
+.sign-in-enrol input[aria-invalid='true'],
+.invite-form input[aria-invalid='true'] {
+  border-color: var(--danger);
 }

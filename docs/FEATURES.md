@@ -129,9 +129,10 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       that empty-state text instead of an empty grid.
 - [ ] keep · Pagination at 50 cards per page, using the same component as National Pokédex · done
       when: paging past 50 results loads the next page without resetting the search bar.
-- [ ] changed · Card art in catalogue results and the card inspector never dims for ownership; the
-      card frame carries the ownership signal instead · done when: an unowned card's art in the
-      gallery and inspector renders at full opacity.
+- [ ] changed · Catalogue results follow the one fading rule: an unowned card gets the pale, dashed
+      frame with its art faded, an owned one is solid; the card inspector never fades and states
+      ownership in words · done when: an unowned card in the gallery shows the pale dashed frame
+      with faded art, and the same card open in the inspector shows full-opacity art.
 - [ ] keep · Preloads the art of the immediate neighbours of an open card, with a bounded cache · done
       when: pressing Next in the inspector on a preloaded neighbour shows its high-res art with no
       visible load flash.
@@ -633,16 +634,16 @@ readability. Citations use each inventory document's own section/subsection head
 
 ### `inventory-core.md` §4 — Card art / ownership display rules
 
-| Inventory item                                                          | FEATURES.md line                                                 |
-| ----------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `CardArtDisplay` discriminated union (binder/collection/preview)        | Catalogue: catalogue art never dims                              |
-| `isCardArtDimmed()` rule                                                | Catalogue: catalogue art never dims                              |
-| Call site: catalogue gallery/lightbox → `preview`, never dimmed         | Catalogue: catalogue art never dims                              |
-| Call site: National Pokédex tile → `collection`                         | National Pokédex: real printing art, no repeated captions        |
-| Call site: dashboard shelf → `collection`                               | Home: recently added shelf                                       |
-| Call site: binder pocket → `binder`                                     | Binder page: pocket art rules                                    |
-| Call site: binder slot-picker / insert dialog / copy-prompt → `preview` | Binder page: all three pickers full opacity                      |
-| Inconsistency: opacity vs. badge, dimming carries no ARIA label         | Catalogue: accessible ownership mark; dimmed art carries a label |
+| Inventory item                                                          | FEATURES.md line                                                  |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `CardArtDisplay` discriminated union (binder/collection/preview)        | Catalogue: one fading rule (unowned faded, inspector never fades) |
+| `isCardArtDimmed()` rule                                                | Catalogue: one fading rule (unowned faded, inspector never fades) |
+| Call site: catalogue gallery/lightbox → `preview`, never dimmed         | Catalogue: one fading rule (unowned faded, inspector never fades) |
+| Call site: National Pokédex tile → `collection`                         | National Pokédex: real printing art, no repeated captions         |
+| Call site: dashboard shelf → `collection`                               | Home: recently added shelf                                        |
+| Call site: binder pocket → `binder`                                     | Binder page: pocket art rules                                     |
+| Call site: binder slot-picker / insert dialog / copy-prompt → `preview` | Binder page: all three pickers full opacity                       |
+| Inconsistency: opacity vs. badge, dimming carries no ARIA label         | Catalogue: accessible ownership mark; dimmed art carries a label  |
 
 ### `inventory-binders.md` §2 — Every user capability
 

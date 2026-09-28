@@ -7,11 +7,14 @@ export function Dialog({
   onClose,
   title,
   children,
+  wide = false,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
+  /** Room for a result grid (binder insert/paste pickers) instead of a short form. */
+  wide?: boolean;
 }): ReactElement | null {
   const headingId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
@@ -22,7 +25,7 @@ export function Dialog({
     <div className="dialog-backdrop" onMouseDown={onClose}>
       <div
         ref={containerRef}
-        className="dialog"
+        className={wide ? 'dialog dialog-wide' : 'dialog'}
         role="dialog"
         aria-modal="true"
         aria-labelledby={headingId}

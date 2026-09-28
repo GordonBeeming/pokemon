@@ -1,8 +1,11 @@
 #!/usr/bin/env node
-// Zero-data-loss check for migrations 019-024: loads a real (data-only) prod
-// dump into a scratch D1 copy on migration 018, measures every user-data
-// table, applies 019-024, and confirms nothing outside the columns those
-// migrations explicitly add has changed.
+// Zero-data-loss check for the migrations layered on top of the exported
+// prod dump: loads a real (data-only) prod dump into a scratch D1 copy on
+// the migration the dump was taken at, measures every user-data table,
+// applies the new migrations, and confirms nothing outside the columns
+// those migrations explicitly add has changed. BASELINE_MIGRATIONS grows
+// forward each time this check absorbs a previously-new migration set, so
+// NEW_MIGRATIONS only ever lists what's being verified right now.
 //
 // Uses node:sqlite directly (the same real SQLite engine the rest of this
 // repo's migration tests already run against) rather than `wrangler d1`,
@@ -59,8 +62,6 @@ const BASELINE_MIGRATIONS = [
   '016_reserved_page_manual_placement.sql',
   '017_collection_addition_order.sql',
   '018_catalogue_sets.sql',
-];
-const NEW_MIGRATIONS = [
   '019_card_types.sql',
   '020_set_codes.sql',
   '021_pocket_inactive.sql',
@@ -68,6 +69,7 @@ const NEW_MIGRATIONS = [
   '023_collection_events.sql',
   '024_backup_settings_events.sql',
 ];
+const NEW_MIGRATIONS = ['025_multiuser.sql'];
 
 // catalogue_cards is intentionally count-only: migration 021 flips is_active
 // for Pocket cards, so its row content is *expected* to change.
@@ -86,16 +88,22 @@ const COMPARE_TABLES = [
   'catalogue_sets',
   'catalogue_cards',
 ];
-// Columns 019-024 add to existing tables — excluded from the content hash so
-// a legitimate backfill (e.g. catalogue_sets.abbreviation) isn't flagged as
-// unwanted drift.
+// Columns the migrations in NEW_MIGRATIONS add to existing tables —
+// excluded from the content hash so a legitimate backfill (e.g.
+// catalogue_sets.abbreviation, users.role) isn't flagged as unwanted drift.
 const COLUMNS_ADDED_BY_NEW_MIGRATIONS = new Set([
   'types',
   'abbreviation',
   'abbreviation_source',
   'peek_columns',
   'show_frame',
+  'role',
+  'disabled_at',
 ]);
+// catalogue_cards is COUNT_ONLY (see above), so its new owner_id column never
+// needs excluding here — unlike role/disabled_at, "owner_id" is also a
+// pre-existing column on several hash-compared tables (collection_cards,
+// binders, ...) and must stay visible to drift detection there.
 // catalogue_sets' pre-existing AFTER UPDATE trigger bumps every user's
 // backup_epoch unconditionally, so the ~190-row set-code backfill in 020
 // legitimately advances it a lot; that's an internal change counter, not
@@ -217,7 +225,7 @@ try {
     const failed = rows.filter((row) => !row.ok);
     if (failed.length > 0) {
       process.stderr.write(
-        `migrations 019-024 changed data outside their declared scope: ${failed.map((r) => r.table).join(', ')}\n`,
+        `the new migrations changed data outside their declared scope: ${failed.map((r) => r.table).join(', ')}\n`,
       );
       exitCode = 1;
     } else {

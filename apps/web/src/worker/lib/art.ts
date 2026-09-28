@@ -1,6 +1,6 @@
 import { createHash, type Hash } from 'node:crypto';
 import { nowSeconds } from './db';
-import { tcgdexArtImageBase } from './tcgdex-art-image';
+import { tcgdexArtImageBase, tcgplayerProductId } from './tcgdex-art-image';
 import { ApplicationError, describeError, logWarn } from './log';
 
 const MAX_ART_BYTES = 15 * 1024 * 1024;
@@ -66,6 +66,21 @@ export function isWebp(value: Uint8Array): boolean {
 export function artObjectKey(cardId: string, variant: ArtVariant, checksum: string): string {
   if (!/^[a-f0-9]{64}$/u.test(checksum)) throw new ApplicationError('invalid_art_checksum', 400);
   return `cards/${encodeURIComponent(cardId)}/${variant}/${checksum}.webp`;
+}
+
+// The TCGplayer fallback's images are JPEGs, not WebP, so they get their own
+// key shape rather than being force-fit into artObjectKey's `.webp` suffix.
+export function tcgplayerArtObjectKey(
+  cardId: string,
+  variant: ArtVariant,
+  checksum: string,
+): string {
+  if (!/^[a-f0-9]{64}$/u.test(checksum)) throw new ApplicationError('invalid_art_checksum', 400);
+  return `cards/${encodeURIComponent(cardId)}/${variant}/${checksum}.jpg`;
+}
+
+export function isJpeg(value: Uint8Array): boolean {
+  return value.byteLength > 3 && value[0] === 0xff && value[1] === 0xd8 && value[2] === 0xff;
 }
 
 async function hashToken(token: string): Promise<string> {
@@ -558,6 +573,43 @@ export async function getArtResponse(
   return new Response(object.body, { headers, status: object.range ? 206 : 200 });
 }
 
+async function fetchImageBytes(
+  url: string,
+  headers: Record<string, string>,
+): Promise<Uint8Array<ArrayBuffer> | null> {
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(30_000) });
+  const declared = Number(response.headers.get('content-length') ?? 0);
+  if (!response.ok || declared > MAX_ART_BYTES) return null;
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  return bytes.byteLength > 0 && bytes.byteLength <= MAX_ART_BYTES ? bytes : null;
+}
+
+async function storeCachedArt(
+  db: D1Database,
+  art: R2Bucket,
+  cardId: string,
+  variant: ArtVariant,
+  bytes: Uint8Array<ArrayBuffer>,
+  contentType: string,
+  buildObjectKey: (cardId: string, variant: ArtVariant, checksum: string) => string,
+): Promise<string> {
+  const checksum = await sha256(bytes);
+  const objectKey = buildObjectKey(cardId, variant, checksum);
+  await art.put(objectKey, bytes, { httpMetadata: { contentType } });
+  await db
+    .prepare(
+      `INSERT INTO art_manifest (card_id, variant, object_key, sha256, bytes, version, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
+       ON CONFLICT(card_id, variant) DO UPDATE SET
+         object_key = excluded.object_key, sha256 = excluded.sha256, bytes = excluded.bytes,
+         version = art_manifest.version + 1, updated_at = excluded.updated_at
+       WHERE art_manifest.sha256 <> excluded.sha256`,
+    )
+    .bind(cardId, variant, objectKey, checksum, bytes.byteLength, nowSeconds())
+    .run();
+  return objectKey;
+}
+
 async function cacheTcgdexArt(
   db: D1Database,
   art: R2Bucket,
@@ -581,30 +633,26 @@ async function cacheTcgdexArt(
     if (!detail.ok) return null;
     const payload: unknown = await detail.json();
     const imageBase = tcgdexArtImageBase(payload, source.source_id, source.language);
-    if (!imageBase) return null;
-    const response = await fetch(`${imageBase}/${variant}.webp`, {
-      headers: { accept: 'image/webp' },
-      signal: AbortSignal.timeout(30_000),
-    });
-    const declared = Number(response.headers.get('content-length') ?? 0);
-    if (!response.ok || declared > MAX_ART_BYTES) return null;
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > MAX_ART_BYTES || !isWebp(bytes)) return null;
-    const checksum = await sha256(bytes);
-    const objectKey = artObjectKey(cardId, variant, checksum);
-    await art.put(objectKey, bytes, { httpMetadata: { contentType: 'image/webp' } });
-    await db
-      .prepare(
-        `INSERT INTO art_manifest (card_id, variant, object_key, sha256, bytes, version, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
-         ON CONFLICT(card_id, variant) DO UPDATE SET
-           object_key = excluded.object_key, sha256 = excluded.sha256, bytes = excluded.bytes,
-           version = art_manifest.version + 1, updated_at = excluded.updated_at
-         WHERE art_manifest.sha256 <> excluded.sha256`,
-      )
-      .bind(cardId, variant, objectKey, checksum, bytes.byteLength, nowSeconds())
-      .run();
-    return objectKey;
+    if (imageBase) {
+      const bytes = await fetchImageBytes(`${imageBase}/${variant}.webp`, {
+        accept: 'image/webp',
+      });
+      if (bytes && isWebp(bytes))
+        return storeCachedArt(db, art, cardId, variant, bytes, 'image/webp', artObjectKey);
+    }
+    // TCGdex has no image of its own for this printing (a real gap, not just
+    // a network failure) - fall back to the TCGplayer product image TCGdex's
+    // own payload links the card to.
+    const productId = tcgplayerProductId(payload);
+    if (productId) {
+      const bytes = await fetchImageBytes(
+        `https://tcgplayer-cdn.tcgplayer.com/product/${productId}_in_1000x1000.jpg`,
+        { accept: 'image/jpeg' },
+      );
+      if (bytes && isJpeg(bytes))
+        return storeCachedArt(db, art, cardId, variant, bytes, 'image/jpeg', tcgplayerArtObjectKey);
+    }
+    return null;
   } catch (error) {
     logWarn({
       evt: 'art.tcgdex_cache_failed',

@@ -1,0 +1,57 @@
+.pokedex-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.pokedex-progress {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+.pokedex-progress strong {
+  font-family: var(--font-mono);
+  font-size: 1.25rem;
+}
+.pokedex-progress span {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.pokedex-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem;
+}
+.pokedex-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.pokedex-toolbar input,
+.pokedex-toolbar select {
+  height: 2.75rem;
+  padding: 0 0.85rem;
+  font-size: 0.9375rem;
+  color: var(--ink);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+}
+.pokedex-toolbar label:first-child {
+  flex-grow: 1;
+  min-width: 14rem;
+}
+
+.pokedex-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 1rem;
+}
+.pokedex-tile-pending {
+  opacity: 0.6;
+  pointer-events: none;
+}

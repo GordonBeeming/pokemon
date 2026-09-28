@@ -10,9 +10,11 @@ import {
   framePalettePutRequestSchema,
   collectionRemoveRequestSchema,
   cardPlaceRequestSchema,
+  setCodePatchRequestSchema,
   NATIONAL_POKEDEX,
 } from '@pokedex/shared';
 import { getFramePalette, resetFramePalette, setFramePalette } from '../../lib/settings';
+import { signedBackupWorkflowId, verifyBackupWorkflowOwner } from '../../lib/backup';
 import {
   activeBinderShortages,
   searchBinderSpaces,
@@ -36,7 +38,7 @@ import {
 import { cachedTcgdexSpeciesPreviews, discoverTcgdexSpecies } from '../../lib/tcgdex-discovery';
 import { collectionSummary } from '../../lib/collection';
 import { asPositiveInt } from '../../lib/db';
-import { requireSession } from '../../lib/guards';
+import { requireAdmin, requireSession } from '../../lib/guards';
 import { logAudit } from '../../lib/auth';
 import { ApplicationError } from '../../lib/log';
 import { priceCoverage } from '../../lib/pricing';
@@ -137,6 +139,9 @@ browserApiRoutes.use('/backups*', requireSession);
 browserApiRoutes.use('/desktop/pair', requireSession);
 browserApiRoutes.use('/desktop/tokens*', requireSession);
 browserApiRoutes.use('/art*', requireSession);
+// Every member can browse set codes; only editing one is admin-only, so that
+// guard is inline on the PATCH route below rather than on this wildcard.
+browserApiRoutes.use('/sets*', requireSession);
 
 browserApiRoutes.get('/dashboard', async (c) => {
   try {
@@ -456,6 +461,30 @@ browserApiRoutes.get('/catalogue/:id', async (c) => {
   }
 });
 
+browserApiRoutes.get('/sets', async (c) => {
+  try {
+    const { sets, codeClashes } = await ownerOperations(c.env, sessionOwner(c)).listSets();
+    return c.json({ ok: true, sets, codeClashes });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.patch('/sets/:setId', requireAdmin, async (c) => {
+  try {
+    const parsed = setCodePatchRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    await ownerOperations(c.env, sessionOwner(c)).setSetCode(
+      c.req.param('setId'),
+      parsed.data.code,
+    );
+    const { sets, codeClashes } = await ownerOperations(c.env, sessionOwner(c)).listSets();
+    return c.json({ ok: true, sets, codeClashes });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
 browserApiRoutes.get('/catalogue/facets/sets', async (c) => {
   const parsed = c.req.query('language')
     ? languageSchema.safeParse(c.req.query('language'))
@@ -557,7 +586,7 @@ browserApiRoutes.post('/catalogue/custom', async (c) => {
   try {
     const parsed = customCardBody.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
-    const id = await createCustomCard(c.env.DB, parsed.data);
+    const id = await createCustomCard(c.env.DB, sessionOwner(c), parsed.data);
     await logAudit(c.env.DB, {
       actor: sessionOwner(c),
       action: 'catalogue.custom.create',
@@ -795,6 +824,19 @@ browserApiRoutes.get('/binders/versions/:id/assignment-candidates', async (c) =>
         parsed.data,
       )),
     });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.delete('/binders/versions/:id', async (c) => {
+  try {
+    const parsed = binderRevisionRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    await ownerOperations(c.env, sessionOwner(c)).discardBinderDraftVersion(
+      c.req.param('id'),
+      parsed.data.expectedRevision,
+    );
+    return c.json({ ok: true });
   } catch (error) {
     return apiFailure(c, error);
   }
@@ -1161,7 +1203,7 @@ browserApiRoutes.post('/backups', async (c) => {
       return c.json({ ok: false, error: 'rate_limited', requestId: c.get('requestId') }, 429);
     }
     const workflow = await c.env.BACKUP.create({
-      id: `backup-${crypto.randomUUID()}`,
+      id: await signedBackupWorkflowId('backup', ownerId, c.env.SESSION_SECRET),
       params: { ownerId, operation: 'create' },
     });
     return c.json({ ok: true, workflowId: workflow.id }, 202);
@@ -1171,7 +1213,23 @@ browserApiRoutes.post('/backups', async (c) => {
 });
 browserApiRoutes.get('/backups/workflows/:id', async (c) => {
   try {
-    const workflow = await c.env.BACKUP.get(c.req.param('id'));
+    const workflowId = c.req.param('id');
+    // A workflow instance never exposes the params it was created with, so
+    // ownership is verified via the keyed-hash proof signedBackupWorkflowId
+    // bound into the id itself, not a lookup - see that function's comment.
+    if (
+      !(await verifyBackupWorkflowOwner(
+        workflowId,
+        sessionOwner(c),
+        c.env.SESSION_SECRET,
+        c.env.SESSION_SECRET_PREV,
+      ))
+    )
+      return c.json(
+        { ok: false, error: 'backup_workflow_not_found', requestId: c.get('requestId') },
+        404,
+      );
+    const workflow = await c.env.BACKUP.get(workflowId);
     const status = await workflow.status();
     if (status.status === 'complete') {
       const output = z
@@ -1197,7 +1255,7 @@ browserApiRoutes.post('/backups/:id/restore', async (c) => {
     const ownerId = sessionOwner(c);
     const backupId = c.req.param('id');
     const workflow = await c.env.BACKUP.create({
-      id: `restore-${crypto.randomUUID()}`,
+      id: await signedBackupWorkflowId('restore', ownerId, c.env.SESSION_SECRET),
       params: { ownerId, operation: 'restore', backupId },
     });
     return c.json({ ok: true, workflowId: workflow.id }, 202);

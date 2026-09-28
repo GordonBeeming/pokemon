@@ -1,7 +1,9 @@
 import type { Context, Next } from 'hono';
 import { z } from 'zod';
-import { enrolSecretMatches, getSession } from './auth';
+import { inviteTokenSchema } from '@pokedex/shared';
+import { enrolSecretMatches, getSession, getUserById } from './auth';
 import { logWarn } from './log';
+import { lookupInvite } from './people';
 import { boundedJson, MAX_AUTH_JSON_BYTES } from './request';
 import type { AuthVars } from './types';
 
@@ -66,6 +68,21 @@ export async function requireSession<Path extends string, Input extends object>(
   await next();
 }
 
+// Layers on top of requireSession: looks the role up fresh from the users
+// table on every request (never trusts the JWT for it) so a demotion takes
+// effect on the demoted user's very next request, with no re-login needed.
+export async function requireAdmin<Path extends string, Input extends object>(
+  c: Context<{ Bindings: CloudflareEnv; Variables: AuthVars }, Path, Input>,
+  next: Next,
+): Promise<Response | void> {
+  const session = c.get('session');
+  if (!session) return c.json({ ok: false, error: 'unauthorized' }, 401);
+  const user = await getUserById(c.env.DB, session.sub);
+  if (!user || user.disabled_at !== null) return c.json({ ok: false, error: 'unauthorized' }, 401);
+  if (user.role !== 'admin') return c.json({ ok: false, error: 'forbidden' }, 403);
+  await next();
+}
+
 export function clientIp(request: Request): string {
   return (
     request.headers.get('CF-Connecting-IP') ??
@@ -74,7 +91,9 @@ export function clientIp(request: Request): string {
   );
 }
 
-const enrolBody = z.object({ enrolSecret: z.string().min(1).max(256) }).partial();
+const enrolBody = z
+  .object({ enrolSecret: z.string().min(1).max(256), inviteToken: inviteTokenSchema })
+  .partial();
 
 export async function requireEnrolAuth<Path extends string, Input extends object>(
   c: Context<{ Bindings: CloudflareEnv; Variables: AuthVars }, Path, Input>,
@@ -82,25 +101,69 @@ export async function requireEnrolAuth<Path extends string, Input extends object
 ): Promise<Response | void> {
   const session = await getSession(c);
   if (session) {
+    const user = await getUserById(c.env.DB, session.sub);
+    if (!user || user.disabled_at !== null)
+      return c.json({ ok: false, error: 'unauthorized' }, 401);
     c.set('session', session);
     c.set('enrolMethod', 'session');
     await next();
     return;
   }
 
-  let candidate = c.req.header('x-enrol-secret') ?? null;
-  if (!candidate && c.req.method === 'POST') {
+  let enrolSecret: string | null = c.req.header('x-enrol-secret') ?? null;
+  let inviteToken: string | null = null;
+  if (c.req.method === 'POST') {
     const body = await boundedJson(c.req.raw, MAX_AUTH_JSON_BYTES);
     c.set('requestBody', body);
     const parsed = enrolBody.safeParse(body);
-    candidate = parsed.success ? (parsed.data.enrolSecret ?? null) : null;
+    if (parsed.success) {
+      enrolSecret = enrolSecret ?? parsed.data.enrolSecret ?? null;
+      inviteToken = parsed.data.inviteToken ?? null;
+    }
   }
 
-  const rate = candidate
+  if (inviteToken) {
+    const rate = await enforceRateLimit(c.env, `invite:${clientIp(c.req.raw)}`, 20, 15 * 60);
+    if (!rate.allowed) {
+      c.header('retry-after', String(rate.retryAfter));
+      return c.json({ ok: false, error: 'rate_limited' }, 429);
+    }
+    const invite = await lookupInvite(c.env.DB, inviteToken);
+    if (!invite || !invite.valid) {
+      logWarn({
+        evt: 'auth.enrol.denied',
+        requestId: c.get('requestId'),
+        reason: invite?.used ? 'invite_used' : invite?.expired ? 'invite_expired' : 'invalid',
+      });
+      return c.json(
+        {
+          ok: false,
+          error: invite?.used
+            ? 'invite_used'
+            : invite?.expired
+              ? 'invite_expired'
+              : 'invite_invalid',
+        },
+        invite ? 409 : 400,
+      );
+    }
+    c.set('enrolMethod', 'invite');
+    c.set('inviteToken', inviteToken);
+    c.set('inviteLabel', invite.label);
+    await next();
+    return;
+  }
+
+  const rate = enrolSecret
     ? await enforceRateLimit(c.env, `enrol:${clientIp(c.req.raw)}`, 10, 15 * 60)
     : null;
   const existingPasskey = await c.env.DB.prepare('SELECT 1 FROM passkeys LIMIT 1').first();
-  if (!candidate || !rate?.allowed || !enrolSecretMatches(candidate, c.env) || existingPasskey) {
+  if (
+    !enrolSecret ||
+    !rate?.allowed ||
+    !enrolSecretMatches(enrolSecret, c.env) ||
+    existingPasskey
+  ) {
     logWarn({
       evt: 'auth.enrol.denied',
       requestId: c.get('requestId'),

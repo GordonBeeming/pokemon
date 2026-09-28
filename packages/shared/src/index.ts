@@ -5,6 +5,7 @@ import { FRAME_TYPES, RARITY_KEYS } from './frame';
 
 export * from './national-pokedex';
 export * from './frame';
+export * from './people';
 
 export const cardIdSchema = z.string().trim().min(1).max(128).brand<'CardId'>();
 export type CardId = z.infer<typeof cardIdSchema>;
@@ -659,6 +660,7 @@ export const binderCardMatchesSchema = z
     exactTargets: z.array(slotRefSchema),
     pokemonTargets: z.array(slotRefSchema),
     placed: z.array(slotRefSchema),
+    nextTarget: slotRefSchema.nullable(),
     endDestination: slotRefSchema.nullable(),
   })
   .strict();
@@ -703,16 +705,16 @@ export const catalogueSetSchema = z
     setId: z.string().trim().min(1).max(128),
     setName: z.string().trim().min(1).max(200),
     language: languageSchema,
-    total: z.number().int().nonnegative(),
-    owned: z.number().int().nonnegative(),
-    code: z.string().trim().min(1).max(32).nullable(),
+    releaseDate: z.string().date().nullable(),
+    cardCount: z.number().int().nonnegative(),
+    code: z.string().trim().min(1).max(16).nullable(),
     codeSource: setCodeSourceSchema.nullable(),
   })
   .strict();
 export type CatalogueSet = z.infer<typeof catalogueSetSchema>;
 
 export const setCodeClashSchema = z
-  .object({ code: z.string().trim().min(1).max(32), setIds: z.array(z.string().min(1)).min(2) })
+  .object({ code: z.string().trim().min(1).max(16), setIds: z.array(z.string().min(1)).min(2) })
   .strict();
 export type SetCodeClash = z.infer<typeof setCodeClashSchema>;
 
@@ -727,7 +729,8 @@ export const setCodePatchRequestSchema = z
       .string()
       .trim()
       .toUpperCase()
-      .regex(/^[A-Z0-9]{1,32}$/u),
+      .regex(/^[A-Z0-9-]{1,8}$/u)
+      .nullable(),
   })
   .strict();
 export type SetCodePatchRequest = z.infer<typeof setCodePatchRequestSchema>;

@@ -166,7 +166,7 @@ function mutationInsert(
     .bind(ownerId, mutationId, hash, now, cardId);
 }
 
-function eventInsert(
+export function eventInsert(
   db: D1Database,
   ownerId: string,
   cardId: string,
@@ -327,6 +327,49 @@ export async function setCollectionState(
       });
     throw error;
   }
+}
+
+// Statement builders for callers (binders.ts's placeCard) that need the
+// quantity change to land in the same D1 batch() as other writes, so a
+// failure anywhere in that batch leaves the quantity untouched rather than
+// incrementing it ahead of a slot assignment that then fails separately.
+export function quantityCapAssertion(
+  db: D1Database,
+  ownerId: string,
+  cardId: string,
+  delta: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `SELECT CASE WHEN COALESCE(
+          (SELECT quantity FROM collection_cards WHERE owner_id = ?1 AND card_id = ?2), 0
+        ) + ?3 <= 9999
+        THEN 1 ELSE json_extract('collection_quantity_out_of_bounds', '$') END AS valid`,
+    )
+    .bind(ownerId, cardId, delta);
+}
+
+export function incrementQuantityStatement(
+  db: D1Database,
+  ownerId: string,
+  cardId: string,
+  delta: number,
+  mutationId: string,
+  now: number,
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO collection_cards
+        (owner_id, card_id, quantity, notes, revision, updated_at, last_mutation_id)
+       VALUES (?1, ?2, ?3, NULL, 1, ?4, ?5)
+       ON CONFLICT(owner_id, card_id) DO UPDATE SET
+        quantity = collection_cards.quantity + excluded.quantity,
+        revision = collection_cards.revision + 1,
+        updated_at = excluded.updated_at,
+        last_mutation_id = excluded.last_mutation_id
+       WHERE collection_cards.quantity + excluded.quantity <= 9999`,
+    )
+    .bind(ownerId, cardId, delta, now, mutationId);
 }
 
 export async function incrementCollectionQuantity(
@@ -516,21 +559,35 @@ export async function removeCollectionCopy(
     // Confirmed before writing: a D1 batch runs every statement regardless of
     // an earlier one's outcome, so an invalid slotId must be caught here
     // rather than by an unassign statement that would just quietly match zero rows.
+    // Scoped by owner: a slotId is just an opaque page/row/column encoding, so
+    // without the binder-ownership join a guessed or observed slotId from
+    // another owner's binder would blank *their* slot as long as the caller
+    // separately owns a loose copy of the same card.
     const targetedSlot = await db
       .prepare(
-        `SELECT 1 FROM binder_slots
-         WHERE binder_page_id = ?1 AND row_index = ?2 AND column_index = ?3 AND assigned_card_id = ?4`,
+        `SELECT 1 FROM binder_slots slot
+         JOIN binder_pages page ON page.id = slot.binder_page_id
+         JOIN binder_versions version ON version.id = page.binder_version_id
+         JOIN binders binder ON binder.id = version.binder_id
+         WHERE slot.binder_page_id = ?1 AND slot.row_index = ?2 AND slot.column_index = ?3
+           AND slot.assigned_card_id = ?4 AND binder.owner_id = ?5`,
       )
-      .bind(decoded.pageId, decoded.row, decoded.column, cardId)
+      .bind(decoded.pageId, decoded.row, decoded.column, cardId, ownerId)
       .first();
     if (!targetedSlot) throw new CollectionDomainError('collection_remove_slot_not_found');
     await db.batch([
       db
         .prepare(
           `UPDATE binder_slots SET assigned_card_id = NULL
-           WHERE binder_page_id = ?1 AND row_index = ?2 AND column_index = ?3 AND assigned_card_id = ?4`,
+           WHERE binder_page_id = ?1 AND row_index = ?2 AND column_index = ?3 AND assigned_card_id = ?4
+             AND EXISTS (
+               SELECT 1 FROM binder_pages page
+               JOIN binder_versions version ON version.id = page.binder_version_id
+               JOIN binders binder ON binder.id = version.binder_id
+               WHERE page.id = binder_slots.binder_page_id AND binder.owner_id = ?5
+             )`,
         )
-        .bind(decoded.pageId, decoded.row, decoded.column, cardId),
+        .bind(decoded.pageId, decoded.row, decoded.column, cardId, ownerId),
       db
         .prepare(
           `UPDATE collection_cards SET quantity = quantity - 1, revision = revision + 1, updated_at = ?1

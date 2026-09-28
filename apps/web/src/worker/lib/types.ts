@@ -1,3 +1,4 @@
+import type { UserRole } from '@pokedex/shared';
 import type { AuthCoordinator } from '../index';
 
 declare global {
@@ -23,6 +24,8 @@ export interface SessionPayload {
 export interface UserRow {
   id: string;
   label: string;
+  role: UserRole;
+  disabled_at: number | null;
   mutation_epoch: number;
   created_at: number;
 }
@@ -59,7 +62,11 @@ export interface AuditInsert {
 
 export interface AuthVars {
   session?: SessionPayload;
-  enrolMethod?: 'session' | 'bootstrap';
+  enrolMethod?: 'session' | 'bootstrap' | 'invite';
+  // Set alongside enrolMethod 'invite': the raw (unhashed) token, needed both
+  // as the stored challenge's subject and to redeem the invite at verify time.
+  inviteToken?: string;
+  inviteLabel?: string | null;
   requestId?: string;
   desktopBearer?: string;
   requestBody?: unknown;

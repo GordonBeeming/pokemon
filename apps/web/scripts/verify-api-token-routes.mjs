@@ -33,6 +33,8 @@ const ownerBToken = token('b');
 const wrongScopeToken = token('c');
 const revokedToken = token('d');
 const run = (args) => exec(wrangler, args, { cwd: app });
+const d1 = (command) =>
+  run(['d1', 'execute', 'DB', '--local', '--persist-to', persist, '--command', command]);
 const request = async (path, authorization) => {
   const response = await fetch(`${base}${path}`, {
     headers: authorization ? { authorization } : {},
@@ -45,12 +47,15 @@ let workerOutput = '';
 try {
   await run(['d1', 'migrations', 'apply', 'DB', '--local', '--persist-to', persist]);
   const sql = [
-    "INSERT INTO users (id,label,created_at) VALUES ('owner-a','A',1),('owner-b','B',1);",
+    "INSERT INTO users (id,label,role,created_at) VALUES ('owner-a','A','admin',1),('owner-b','B','member',1);",
     "INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,is_custom,is_active,created_at,updated_at) VALUES ('card-a','Fixture','en','pokemon','set','Set','1',0,1,1,1);",
     `INSERT INTO card_sources (provider,source_id,card_id,language,source_updated_at,checksum,active,imported_at) VALUES ('tcgdex','source-a','card-a','en',123,'${'a'.repeat(64)}',1,1);`,
     "INSERT INTO collection_cards (owner_id,card_id,quantity,notes,revision,updated_at) VALUES ('owner-a','card-a',2,'private',1,1);",
     "INSERT INTO binders (id,owner_id,name,created_at,updated_at) VALUES ('binder-a','owner-a','A binder',1,1);",
     `INSERT INTO desktop_tokens (token_hash,owner_id,label,scopes,created_at,revoked_at) VALUES ('${hash(ownerAToken)}','owner-a','A','["catalogue:read","collection:write","binders:write","art:write"]',1,NULL),('${hash(ownerBToken)}','owner-b','B','["catalogue:read","binders:write"]',1,NULL),('${hash(wrongScopeToken)}','owner-a','wrong','["art:read"]',1,NULL),('${hash(revokedToken)}','owner-a','revoked','["catalogue:read"]',1,1);`,
+    // Two passkeys so the delete-one-of-two path below exercises a real
+    // delete (not the last-passkey guard) against real D1.
+    "INSERT INTO passkeys (id,user_id,public_key,counter,created_at) VALUES ('pk-a-1','owner-a',x'00',0,1),('pk-a-2','owner-a',x'00',0,1);",
   ].join(' ');
   await run(['d1', 'execute', 'DB', '--local', '--persist-to', persist, '--command', sql]);
   worker = spawn(
@@ -177,6 +182,31 @@ try {
     );
   if (ownerA.body.binders.length !== 1 || ownerB.body.binders.length !== 0)
     throw new Error('owner isolation failed');
+
+  // Real-D1 regression check: passkeys' AFTER DELETE trigger cascades a
+  // mutation_epoch bump and a session revocation, and D1 (unlike
+  // node:sqlite, which unit tests run against) reports meta.changes as the
+  // sum including those cascaded rows. deletePasskey must confirm success
+  // by re-reading the row rather than trusting meta.changes === 1, or a
+  // real delete of a non-last passkey wrongly reports "not found".
+  const devLogin = await fetch(`${base}/api/auth/dev-login`, { method: 'POST' });
+  const sessionCookie = devLogin.headers.get('set-cookie')?.split(';', 1)[0];
+  if (devLogin.status !== 200 || !sessionCookie)
+    throw new Error(`dev-login did not return a session: ${devLogin.status}`);
+  const deletePasskeyResponse = await fetch(`${base}/api/auth/passkey/pk-a-1`, {
+    method: 'DELETE',
+    headers: { cookie: sessionCookie },
+  });
+  const deletePasskeyBody = await deletePasskeyResponse.json();
+  if (deletePasskeyResponse.status !== 200 || deletePasskeyBody.ok !== true)
+    throw new Error(
+      `deleting a non-last passkey against real D1 failed: ${deletePasskeyResponse.status} ${JSON.stringify(deletePasskeyBody)}`,
+    );
+  const remaining = await d1("SELECT COUNT(*) AS count FROM passkeys WHERE user_id='owner-a';");
+  const remainingCount = remaining.stdout.match(/"count":\s*(\d+)/u)?.[1];
+  if (remainingCount !== '1')
+    throw new Error(`passkey delete did not persist against real D1: ${remaining.stdout}`);
+
   process.stdout.write('desktop bearer route verification passed\n');
 } finally {
   worker?.kill('SIGTERM');

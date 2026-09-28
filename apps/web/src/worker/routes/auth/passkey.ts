@@ -6,16 +6,18 @@ import {
 } from '@simplewebauthn/server';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { inviteTokenSchema } from '@pokedex/shared';
 import { base64UrlDecode } from '../../lib/crypto';
 import {
   clearSessionCookie,
   createSession,
+  createUser,
   deletePasskey,
-  getOrCreateOwner,
   getPasskey,
   getPasskeys,
+  getUserById,
   insertPasskey,
-  insertFirstPasskey,
+  insertBootstrapPasskey,
   logAudit,
   renamePasskey,
   setSessionCookie,
@@ -31,6 +33,7 @@ import {
 } from '../../lib/guards';
 import type { RateLimitResult } from '../../lib/guards';
 import { describeError, logWarn } from '../../lib/log';
+import { claimInviteForNewUser } from '../../lib/people';
 import { boundedJson, MAX_AUTH_JSON_BYTES } from '../../lib/request';
 import type {
   AuthVars,
@@ -42,6 +45,7 @@ const nameSchema = z.string().trim().min(1).max(60);
 const registrationBody = z.object({
   response: z.unknown(),
   enrolSecret: z.string().max(256).optional(),
+  inviteToken: inviteTokenSchema.optional(),
   name: nameSchema.optional(),
 });
 const authenticationBody = z.object({ response: z.unknown() });
@@ -112,7 +116,7 @@ export function passkeyIdentity(ownerLabel: string): {
     .replace(/^\.+|\.+$/gu, '');
   return {
     rpName: `${userDisplayName || 'Owner'}'s Pokédex`,
-    userName: userName || 'owner',
+    userName: userName || 'member',
     userDisplayName: userDisplayName || 'Owner',
   };
 }
@@ -137,6 +141,14 @@ async function limitOptions(c: {
   return rate.allowed ? null : rate;
 }
 
+// Login is a discoverable-credential (resident key) flow: the authenticator
+// tells us who's signing in, not the other way around, so there's no real
+// subject to key the challenge on until after verification resolves one.
+const LOGIN_CHALLENGE_SUBJECT = 'login';
+// Mirrors LOGIN_CHALLENGE_SUBJECT for the one enrolment path with no user
+// row yet at options time either.
+const BOOTSTRAP_CHALLENGE_SUBJECT = 'bootstrap';
+
 export const passkeyRoutes = new Hono<{ Bindings: CloudflareEnv; Variables: AuthVars }>();
 passkeyRoutes.get('/', requireSession, async (c) => {
   const session = c.get('session');
@@ -156,13 +168,37 @@ passkeyRoutes.post('/register/options', requireEnrolAuth, async (c) => {
     c.header('retry-after', String(limited.retryAfter));
     return c.json({ ok: false, error: 'rate_limited' }, 429);
   }
-  const owner = await getOrCreateOwner(c.env.DB, c.env.OWNER_LABEL);
-  const existing = await getPasskeys(c.env.DB, owner.id);
-  const identity = passkeyIdentity(owner.label);
+  const method = c.get('enrolMethod');
+  const session = c.get('session');
+  // For bootstrap/invite there's no user row yet — the WebAuthn userID here
+  // is a throwaway ceremony handle, not looked at again once verify creates
+  // the real account, so a random one is fine.
+  const { label, userIdBytes, existing, challengeSubject } =
+    method === 'session' && session
+      ? {
+          label: session.label,
+          userIdBytes: new TextEncoder().encode(session.sub),
+          existing: await getPasskeys(c.env.DB, session.sub),
+          challengeSubject: session.sub,
+        }
+      : method === 'invite'
+        ? {
+            label: c.get('inviteLabel') ?? 'New member',
+            userIdBytes: crypto.getRandomValues(new Uint8Array(32)),
+            existing: [],
+            challengeSubject: c.get('inviteToken') ?? '',
+          }
+        : {
+            label: c.env.OWNER_LABEL,
+            userIdBytes: crypto.getRandomValues(new Uint8Array(32)),
+            existing: [],
+            challengeSubject: BOOTSTRAP_CHALLENGE_SUBJECT,
+          };
+  const identity = passkeyIdentity(label);
   const options = await generateRegistrationOptions({
     rpName: identity.rpName,
     rpID: new URL(origin(c)).hostname,
-    userID: new TextEncoder().encode(owner.id),
+    userID: userIdBytes,
     userName: identity.userName,
     userDisplayName: identity.userDisplayName,
     attestationType: 'none',
@@ -172,7 +208,7 @@ passkeyRoutes.post('/register/options', requireEnrolAuth, async (c) => {
       transports: transports(passkey.transports),
     })),
   });
-  await storeChallenge(c.env, 'registration', owner.id, options.challenge);
+  await storeChallenge(c.env, 'registration', challengeSubject, options.challenge);
   return c.json(options);
 });
 passkeyRoutes.post('/register/verify', requireEnrolAuth, async (c) => {
@@ -181,9 +217,16 @@ passkeyRoutes.post('/register/verify', requireEnrolAuth, async (c) => {
   );
   if (!parsed.success || !registrationResponse(parsed.data.response))
     return c.json({ ok: false, error: 'invalid_body' }, 400);
-  const owner = await getOrCreateOwner(c.env.DB, c.env.OWNER_LABEL);
+  const method = c.get('enrolMethod');
+  const session = c.get('session');
+  const challengeSubject =
+    method === 'session' && session
+      ? session.sub
+      : method === 'invite'
+        ? (c.get('inviteToken') ?? '')
+        : BOOTSTRAP_CHALLENGE_SUBJECT;
   const challenge = responseChallenge(parsed.data.response.response.clientDataJSON);
-  if (!challenge || !(await claimChallenge(c.env, 'registration', owner.id, challenge)))
+  if (!challenge || !(await claimChallenge(c.env, 'registration', challengeSubject, challenge)))
     return c.json({ ok: false, error: 'challenge_expired' }, 400);
   let verification;
   try {
@@ -205,9 +248,26 @@ passkeyRoutes.post('/register/verify', requireEnrolAuth, async (c) => {
   if (!verification.verified || !verification.registrationInfo)
     return c.json({ ok: false, error: 'not_verified' }, 400);
   const credential = verification.registrationInfo.credential;
+
+  // Only session (adding a passkey to yourself) has a user already; bootstrap
+  // and invite each create the account here, now that the ceremony proved a
+  // real authenticator is behind it.
+  let user: { id: string; label: string };
+  if (method === 'session' && session) {
+    user = { id: session.sub, label: session.label };
+  } else if (method === 'invite') {
+    user = await claimInviteForNewUser(
+      c.env.DB,
+      c.get('inviteToken') ?? '',
+      c.get('inviteLabel') ?? 'New member',
+    );
+  } else {
+    user = await createUser(c.env.DB, c.env.OWNER_LABEL, 'admin');
+  }
+
   const passkey = {
     id: credential.id,
-    userId: owner.id,
+    userId: user.id,
     publicKey: credential.publicKey,
     counter: credential.counter,
     transports: credential.transports?.join(',') ?? null,
@@ -215,14 +275,18 @@ passkeyRoutes.post('/register/verify', requireEnrolAuth, async (c) => {
     name: parsed.data.name ?? null,
     createdAt: Math.floor(Date.now() / 1000),
   };
-  if (c.get('enrolMethod') === 'bootstrap') {
-    if (!(await insertFirstPasskey(c.env.DB, passkey)))
+  if (method === 'bootstrap') {
+    if (!(await insertBootstrapPasskey(c.env.DB, passkey))) {
+      // Lost the race to a concurrent bootstrap attempt — don't leave an
+      // orphan admin account with no passkey behind.
+      await c.env.DB.prepare('DELETE FROM users WHERE id = ?1').bind(user.id).run();
       return c.json({ ok: false, error: 'bootstrap_closed' }, 409);
+    }
   } else {
     await insertPasskey(c.env.DB, passkey);
   }
-  await logAudit(c.env.DB, { actor: owner.id, action: 'passkey.register', target: credential.id });
-  setSessionCookie(c, await createSession(c.env.DB, { sub: owner.id, label: owner.label }, c.env));
+  await logAudit(c.env.DB, { actor: user.id, action: 'passkey.register', target: credential.id });
+  setSessionCookie(c, await createSession(c.env.DB, { sub: user.id, label: user.label }, c.env));
   return c.json({ ok: true });
 });
 passkeyRoutes.post('/auth/options', async (c) => {
@@ -231,12 +295,11 @@ passkeyRoutes.post('/auth/options', async (c) => {
     c.header('retry-after', String(limited.retryAfter));
     return c.json({ ok: false, error: 'rate_limited' }, 429);
   }
-  const owner = await getOrCreateOwner(c.env.DB, c.env.OWNER_LABEL);
   const options = await generateAuthenticationOptions({
     rpID: new URL(origin(c)).hostname,
     userVerification: 'required',
   });
-  await storeChallenge(c.env, 'authentication', owner.id, options.challenge);
+  await storeChallenge(c.env, 'authentication', LOGIN_CHALLENGE_SUBJECT, options.challenge);
   return c.json(options);
 });
 passkeyRoutes.post('/auth/verify', async (c) => {
@@ -244,10 +307,9 @@ passkeyRoutes.post('/auth/verify', async (c) => {
   if (!parsed.success || !authenticationResponse(parsed.data.response))
     return c.json({ ok: false, error: 'invalid_body' }, 400);
   const response = parsed.data.response;
-  const owner = await getOrCreateOwner(c.env.DB, c.env.OWNER_LABEL);
   const challenge = responseChallenge(response.response.clientDataJSON);
   if (!challenge) return c.json({ ok: false, error: 'missing_challenge' }, 400);
-  if (!(await claimChallenge(c.env, 'authentication', owner.id, challenge)))
+  if (!(await claimChallenge(c.env, 'authentication', LOGIN_CHALLENGE_SUBJECT, challenge)))
     return c.json({ ok: false, error: 'challenge_expired' }, 400);
   const passkey = await getPasskey(c.env.DB, response.id);
   if (!passkey) return c.json({ ok: false, error: 'unknown_credential' }, 400);
@@ -276,14 +338,20 @@ passkeyRoutes.post('/auth/verify', async (c) => {
   }
   if (!verification.verified || !verification.authenticationInfo)
     return c.json({ ok: false, error: 'not_verified' }, 400);
+  // The credential, not any session or bootstrap state, is what says who's
+  // logging in — this resolves the actual account behind it rather than
+  // assuming a single fixed owner.
+  const user = await getUserById(c.env.DB, passkey.user_id);
+  if (!user) return c.json({ ok: false, error: 'unknown_credential' }, 400);
+  if (user.disabled_at !== null) return c.json({ ok: false, error: 'user_disabled' }, 403);
   await updatePasskeyUsage(
     c.env.DB,
     passkey.id,
     verification.authenticationInfo.newCounter,
     Math.floor(Date.now() / 1000),
   );
-  setSessionCookie(c, await createSession(c.env.DB, { sub: owner.id, label: owner.label }, c.env));
-  await logAudit(c.env.DB, { actor: owner.id, action: 'login.passkey', target: passkey.id });
+  setSessionCookie(c, await createSession(c.env.DB, { sub: user.id, label: user.label }, c.env));
+  await logAudit(c.env.DB, { actor: user.id, action: 'login.passkey', target: passkey.id });
   return c.json({ ok: true });
 });
 passkeyRoutes.patch('/:id', requireSession, async (c) => {

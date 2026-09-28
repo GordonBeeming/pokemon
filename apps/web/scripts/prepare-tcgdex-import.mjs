@@ -88,9 +88,18 @@ export const transformCard = (card, language) => {
     number,
     numberSort: numericCardNumber(number),
     supertype: typeof card.category === 'string' ? card.category : null,
-    subtype: Array.isArray(card.types)
-      ? card.types.filter((item) => typeof item === 'string').join(', ') || null
-      : null,
+    // Mirrors lib/catalogue.ts's transformTcgdexCard: only Pokemon subtype
+    // comes from `types` (elemental typing). Trainer and Energy cards carry
+    // their own kind in trainerType/energyType - energyType is what makes a
+    // special energy ("Special") detectable, distinct from a basic energy.
+    subtype:
+      category === 'pokemon'
+        ? Array.isArray(card.types)
+          ? card.types.filter((item) => typeof item === 'string').join(', ') || null
+          : null
+        : category === 'trainer'
+          ? (card.trainerType ?? null)
+          : (card.energyType ?? null),
     species: category === 'pokemon' ? name : null,
     rarity: typeof card.rarity === 'string' ? card.rarity : null,
     artist: typeof card.illustrator === 'string' ? card.illustrator : null,

@@ -10,10 +10,13 @@ import {
   type CatalogueBrief,
   type CatalogueCardView,
   type CatalogueDetailView,
+  type CatalogueSet,
   type FrameType,
   type LanguageCode,
   type RarityKey,
   type Region,
+  type SetCodeClash,
+  type SetCodeSource,
 } from '@pokedex/shared';
 import { z } from 'zod';
 import { base64UrlDecode, base64UrlEncode } from './crypto';
@@ -831,6 +834,7 @@ export async function listNationalPokedexCoverage(
          LEFT JOIN collection_cards cc ON cc.card_id = c.id AND cc.owner_id = ?1
          WHERE c.is_active = 1 AND c.category = 'pokemon'
            AND c.pokedex_number BETWEEN 1 AND 1025
+           AND (c.owner_id IS NULL OR c.owner_id = ?1)
          GROUP BY c.pokedex_number
        ), ranked AS (
          SELECT c.pokedex_number, c.id, c.name, c.set_name, c.number,
@@ -851,6 +855,7 @@ export async function listNationalPokedexCoverage(
          LEFT JOIN art_manifest high ON high.card_id = c.id AND high.variant = 'high'
          WHERE c.is_active = 1 AND c.category = 'pokemon'
            AND c.pokedex_number BETWEEN 1 AND 1025
+           AND (c.owner_id IS NULL OR c.owner_id = ?1)
        ), preferred AS (
          SELECT choice.pokedex_number, card.id, card.name, card.set_name, card.number,
            low.object_key AS low_key, high.object_key AS high_key,
@@ -861,6 +866,7 @@ export async function listNationalPokedexCoverage(
          FROM species_representatives choice
          JOIN catalogue_cards card ON card.id = choice.card_id
            AND card.is_active = 1 AND card.category = 'pokemon'
+           AND (card.owner_id IS NULL OR card.owner_id = ?1)
          LEFT JOIN art_manifest low ON low.card_id = card.id AND low.variant = 'low'
          LEFT JOIN art_manifest high ON high.card_id = card.id AND high.variant = 'high'
          WHERE choice.owner_id = ?1
@@ -934,9 +940,10 @@ export async function setNationalPokedexRepresentative(
   const matching = await db
     .prepare(
       `SELECT id FROM catalogue_cards
-       WHERE id = ?1 AND pokedex_number = ?2 AND category = 'pokemon' AND is_active = 1`,
+       WHERE id = ?1 AND pokedex_number = ?2 AND category = 'pokemon' AND is_active = 1
+         AND (owner_id IS NULL OR owner_id = ?3)`,
     )
-    .bind(cardId, pokedexNumber)
+    .bind(cardId, pokedexNumber, ownerId)
     .first<{ id: string }>();
   if (!matching) throw new ApplicationError('national_representative_mismatch', 400);
   await db
@@ -1168,6 +1175,7 @@ export async function resolveCatalogueCards(
     .prepare(
       `${cardSelect}
        WHERE c.id IN (SELECT value FROM json_each(?2))
+         AND (c.owner_id IS NULL OR c.owner_id = ?1)
        ORDER BY c.set_name, CASE WHEN c.number_sort IS NULL THEN 1 ELSE 0 END,
          c.number_sort, c.number, c.name, c.id`,
     )
@@ -1254,7 +1262,10 @@ export async function searchCards(
   ownerId: string,
   filters: CatalogueFilters,
 ): Promise<{ total: number; cards: CatalogueCardView[]; cursor: string | null }> {
-  const where = ['c.is_active = 1'];
+  // A custom card belongs to whoever made it (migration 025); NULL owner_id
+  // is every shared, non-custom card. ownerId is already bound as ?1 for the
+  // collection_cards join below, so this filter is free.
+  const where = ['c.is_active = 1', '(c.owner_id IS NULL OR c.owner_id = ?1)'];
   const values: unknown[] = [ownerId];
   const numberQuery = filters.query?.trim().match(/^#?(\d+)$/u)?.[1];
   const cardNumber = numberQuery === undefined ? null : numberQuery.replace(/^0+/u, '');
@@ -1403,8 +1414,11 @@ export async function getCardDetail(
   cardId: string,
   includePokemonNumber = false,
 ): Promise<CatalogueDetailView | null> {
+  // A custom card belongs to whoever made it; a guessed or previously-seen id
+  // for another user's custom card must 404 like it never existed, not leak
+  // its detail.
   const row = await db
-    .prepare(`${cardSelect} WHERE c.id = ?2`)
+    .prepare(`${cardSelect} WHERE c.id = ?2 AND (c.owner_id IS NULL OR c.owner_id = ?1)`)
     .bind(ownerId, cardId)
     .first<CardRow>();
   return row ? detail(row, includePokemonNumber) : null;
@@ -1423,6 +1437,7 @@ export async function listSetFacets(
     FROM catalogue_cards c LEFT JOIN collection_cards cc ON cc.card_id = c.id AND cc.owner_id = ?1
     LEFT JOIN catalogue_sets set_meta ON set_meta.set_id=c.set_id AND set_meta.language=c.language
     WHERE c.is_active = 1 AND (?2 IS NULL OR c.language = ?2)
+      AND (c.owner_id IS NULL OR c.owner_id = ?1)
     GROUP BY c.set_id, c.set_name, c.language ORDER BY set_meta.release_date IS NULL,set_meta.release_date,c.set_name COLLATE NOCASE,c.set_id,c.language`,
     )
     .bind(ownerId, language ?? null)
@@ -1442,6 +1457,124 @@ export async function listSetFacets(
   }));
 }
 
+const tcgdexSetAbbreviationSchema = z
+  .object({
+    abbreviation: z
+      .object({ official: z.string().trim().min(1).max(16) })
+      .partial()
+      .optional(),
+  })
+  .passthrough();
+
+// Best-effort: "clear" on the Codes page means "go back to whatever TCGdex
+// says", which this repo doesn't keep around once an owner override replaces
+// it, so it re-fetches. A failure here just leaves the set with no code
+// rather than blocking the clear.
+async function fetchTcgdexSetAbbreviation(setId: string): Promise<string | null> {
+  try {
+    const response = await fetch(`https://api.tcgdex.net/v2/en/sets/${encodeURIComponent(setId)}`, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return null;
+    const parsed = tcgdexSetAbbreviationSchema.safeParse(await response.json());
+    return parsed.success ? (parsed.data.abbreviation?.official ?? null) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Pocket sets have no active cards (021_pocket_inactive.sql), so the INNER
+// join against is_active=1 cards naturally drops them from this list without
+// needing a separate Pocket check here.
+export async function listCatalogueSets(
+  db: D1Database,
+): Promise<{ sets: CatalogueSet[]; codeClashes: SetCodeClash[] }> {
+  const result = await db
+    .prepare(
+      `SELECT set_meta.set_id, set_meta.set_name, set_meta.language, set_meta.release_date,
+        set_meta.abbreviation, set_meta.abbreviation_source, COUNT(c.id) AS card_count
+       FROM catalogue_sets set_meta
+       JOIN catalogue_cards c ON c.set_id = set_meta.set_id AND c.language = set_meta.language
+       WHERE c.is_active = 1 AND c.owner_id IS NULL
+       GROUP BY set_meta.set_id, set_meta.set_name, set_meta.language, set_meta.release_date,
+        set_meta.abbreviation, set_meta.abbreviation_source
+       ORDER BY set_meta.release_date IS NULL, set_meta.release_date,
+        set_meta.set_name COLLATE NOCASE, set_meta.set_id, set_meta.language`,
+    )
+    .all<{
+      set_id: string;
+      set_name: string;
+      language: LanguageCode;
+      release_date: string | null;
+      abbreviation: string | null;
+      abbreviation_source: SetCodeSource | null;
+      card_count: number;
+    }>();
+  const sets = result.results.map((row) => ({
+    setId: row.set_id,
+    setName: row.set_name,
+    language: row.language,
+    releaseDate: row.release_date,
+    cardCount: row.card_count,
+    code: row.abbreviation,
+    codeSource: row.abbreviation_source,
+  }));
+  const setIdsByCode = new Map<string, string[]>();
+  for (const set of sets) {
+    if (!set.code) continue;
+    const setIds = setIdsByCode.get(set.code) ?? [];
+    if (!setIds.includes(set.setId)) setIds.push(set.setId);
+    setIdsByCode.set(set.code, setIds);
+  }
+  const codeClashes = [...setIdsByCode.entries()]
+    .filter(([, setIds]) => setIds.length > 1)
+    .map(([code, setIds]) => ({ code, setIds }));
+  return { sets, codeClashes };
+}
+
+export async function setCatalogueSetCode(
+  db: D1Database,
+  setId: string,
+  code: string | null,
+): Promise<void> {
+  const resolvedCode = code ?? (await fetchTcgdexSetAbbreviation(setId));
+  const resolvedSource: SetCodeSource | null =
+    code !== null ? 'owner' : resolvedCode ? 'tcgdex' : null;
+  const updated = await db
+    .prepare(
+      'UPDATE catalogue_sets SET abbreviation = ?1, abbreviation_source = ?2, updated_at = ?3 WHERE set_id = ?4',
+    )
+    .bind(resolvedCode, resolvedSource, nowSeconds(), setId)
+    .run();
+  if (updated.meta.changes < 1) throw new ApplicationError('catalogue_set_not_found', 404);
+}
+
+// Called from the live catalogue sync (never the staged-object-key replay
+// path, which has no set fetch to draw from). Only ever writes the TCGdex
+// value, and only over a prior TCGdex value or an unset one - an owner's
+// override on the Codes page must survive every future sync.
+export async function syncSetAbbreviations(
+  db: D1Database,
+  language: LanguageCode,
+  entries: Array<{ setId: string; abbreviation: string }>,
+): Promise<void> {
+  if (entries.length === 0) return;
+  const now = nowSeconds();
+  await db.batch(
+    entries.map((entry) =>
+      db
+        .prepare(
+          `UPDATE catalogue_sets SET abbreviation = ?1, abbreviation_source = 'tcgdex', updated_at = ?2
+           WHERE set_id = ?3 AND language = ?4
+             AND (abbreviation_source IS NULL OR abbreviation_source = 'tcgdex')
+             AND (abbreviation_source IS NULL OR abbreviation IS NOT ?1)`,
+        )
+        .bind(entry.abbreviation, now, entry.setId, language),
+    ),
+  );
+}
+
 export async function listSpeciesFacets(
   db: D1Database,
   ownerId: string,
@@ -1452,6 +1585,7 @@ export async function listSpeciesFacets(
       `SELECT c.species, COUNT(*) AS total, COUNT(CASE WHEN COALESCE(cc.quantity, 0) > 0 THEN 1 END) AS owned, GROUP_CONCAT(DISTINCT c.language) AS languages
     FROM catalogue_cards c LEFT JOIN collection_cards cc ON cc.card_id = c.id AND cc.owner_id = ?1
     WHERE c.is_active = 1 AND c.species IS NOT NULL AND (?2 IS NULL OR c.language = ?2)
+      AND (c.owner_id IS NULL OR c.owner_id = ?1)
     GROUP BY c.species ORDER BY c.species COLLATE NOCASE`,
     )
     .bind(ownerId, language ?? null)
@@ -1489,6 +1623,7 @@ export async function listSpeciesFacets(
 
 export async function createCustomCard(
   db: D1Database,
+  ownerId: string,
   input: Omit<ImportedCard, 'sourceId' | 'checksum' | 'sourceUpdatedAt'>,
 ): Promise<string> {
   const id = newId('custom');
@@ -1503,8 +1638,8 @@ export async function createCustomCard(
       .prepare(
         `INSERT INTO catalogue_cards
           (id, name, language, category, set_id, set_name, number, number_sort, supertype,
-           subtype, species, rarity, artist, is_custom, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?14)`,
+           subtype, species, rarity, artist, is_custom, owner_id, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?15, ?15)`,
       )
       .bind(
         id,
@@ -1520,6 +1655,7 @@ export async function createCustomCard(
         input.species ?? null,
         input.rarity ?? null,
         input.artist ?? null,
+        ownerId,
         now,
       ),
     db

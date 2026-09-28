@@ -1,12 +1,361 @@
-import type { ReactElement } from 'react';
-import type { CatalogueSearch } from '../routes/search-params';
+import { NATIONAL_POKEDEX, RARITY_LABELS, type FrameType, type RarityKey } from '@pokedex/shared';
+import { Link, useNavigate } from '@tanstack/react-router';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactElement,
+} from 'react';
+import { useCatalogueSearch } from '../api/queries/catalogue';
+import { recentlyDiscoveredSpecies, useDiscoverSpecies } from '../api/queries/pokedex';
+import { useSets } from '../api/queries/sets';
+import {
+  catalogueSearch,
+  pokedexSearch,
+  type CatalogueOwnedFilter,
+  type CatalogueSearch,
+} from '../routes/search-params';
+import { FilterChips } from '../ui/Chip';
+import { Icon } from '../ui/icons';
+import { SegmentedControl } from '../ui/SegmentedControl';
+import { Sheet } from '../ui/Sheet';
+import { SidePanel } from '../ui/SidePanel';
+import { useToast } from '../ui/Toast';
+import { BulkAddToBinder } from './catalogue/BulkAddToBinder';
+import { CatalogueGallery } from './catalogue/CatalogueGallery';
+import { CopyTools } from './catalogue/CopyTools';
+import { CustomCardForm } from './catalogue/CustomCardForm';
+import { FiltersPanel, FRAME_TYPE_LABELS } from './catalogue/FiltersPanel';
+import { Pagination } from './catalogue/Pagination';
+import { useIsDesktop } from './catalogue/useIsDesktop';
+import { CardInspector } from './card/CardInspector';
+import './catalogue/catalogue.css';
 
-// Placeholder route component — wave 2 replaces this with the real Catalogue screen.
+// The single canonical "no filters at all" state, derived from the schema's own
+// defaults rather than duplicated here, so it never drifts from search-params.ts.
+const BLANK_SEARCH = catalogueSearch.parse({});
+const BLANK_POKEDEX_SEARCH = pokedexSearch.parse({});
+
+const PAGE_SIZE = 50;
+
 export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement {
+  const navigate = useNavigate({ from: '/catalogue' });
+  const query = useCatalogueSearch(search);
+  const setsFacet = useSets();
+  const isDesktop = useIsDesktop();
+  const discover = useDiscoverSpecies();
+  const galleryRef = useRef<HTMLDivElement>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [queryDraft, setQueryDraft] = useState(search.q);
+  const [dirtyInspector, setDirtyInspector] = useState(false);
+  const toast = useToast();
+
+  useEffect(() => setQueryDraft(search.q), [search.q]);
+
+  const updateSearch = useCallback(
+    (patch: Partial<CatalogueSearch>, resetPage = true) => {
+      void navigate({
+        search: (prev) => ({ ...prev, ...patch, page: resetPage ? 1 : (patch.page ?? prev.page) }),
+      });
+    },
+    [navigate],
+  );
+
+  const speciesEntry = search.dex
+    ? NATIONAL_POKEDEX.find((entry) => entry.number === search.dex)
+    : undefined;
+  const discoveredNumber = useRef<number | undefined>(undefined);
+  const discoverMutate = discover.mutate;
+  // Only the species number decides whether a fresh discovery request is needed —
+  // discoverMutate is stable across renders (react-query memoises mutate), so this
+  // fires once per newly opened species, not on every render.
+  useEffect(() => {
+    if (!speciesEntry || discoveredNumber.current === speciesEntry.number) return;
+    discoveredNumber.current = speciesEntry.number;
+    if (recentlyDiscoveredSpecies(speciesEntry.number)) return;
+    discoverMutate({ number: speciesEntry.number, name: speciesEntry.name });
+  }, [speciesEntry, discoverMutate]);
+
+  const cards = query.data?.cards ?? [];
+  const total = query.data?.total ?? 0;
+  const busy = query.isLoading || query.isFetching;
+  const contextual = Boolean(speciesEntry) || search.set.length === 1;
+  const contextSetName = search.set.length === 1 ? cards[0]?.setName : undefined;
+
+  function moveToPage(nextPage: number): void {
+    updateSearch({ page: nextPage }, false);
+    requestAnimationFrame(() => galleryRef.current?.scrollIntoView({ block: 'start' }));
+  }
+
+  function openCard(cardId: string): void {
+    updateSearch({ card: cardId }, false);
+  }
+
+  // FEATURES.md: "a failed autosave keeps the inspector open and blocks leaving
+  // until the draft saves or the user retries" — Escape, the backdrop, and the
+  // chevrons all funnel through here rather than each re-implementing the guard.
+  function requestCloseCard(): void {
+    if (dirtyInspector) {
+      toast(
+        'error',
+        'Notes are still saving. Wait a moment, or fix the save error, then try again.',
+      );
+      return;
+    }
+    updateSearch({ card: undefined }, false);
+  }
+
+  const selectedIndex = search.card ? cards.findIndex((card) => card.id === search.card) : -1;
+  const preloadedArt = useRef<Map<string, HTMLImageElement>>(new Map());
+  // Preloads the open card's immediate neighbours' high-res art so pressing
+  // Next/Previous never shows a load flash — bounded the same way the old app's
+  // did (evict the oldest once the cache grows past a handful of images).
+  useEffect(() => {
+    if (selectedIndex < 0 || cards.length < 2) return;
+    for (const offset of [-1, 1]) {
+      const neighbour = cards[(selectedIndex + offset + cards.length) % cards.length];
+      const source = neighbour?.imageHighUrl;
+      if (!source || preloadedArt.current.has(source)) continue;
+      const image = new Image();
+      image.decoding = 'async';
+      image.src = source;
+      preloadedArt.current.set(source, image);
+    }
+    while (preloadedArt.current.size > 6) {
+      const oldest = preloadedArt.current.keys().next().value;
+      if (typeof oldest !== 'string') break;
+      preloadedArt.current.delete(oldest);
+    }
+  }, [cards, selectedIndex]);
+
+  function moveCard(delta: 1 | -1): void {
+    if (cards.length === 0) return;
+    if (dirtyInspector) {
+      toast(
+        'error',
+        'Notes are still saving. Wait a moment, or fix the save error, then try again.',
+      );
+      return;
+    }
+    const nextIndex = (Math.max(0, selectedIndex) + delta + cards.length) % cards.length;
+    const next = cards[nextIndex];
+    if (next) openCard(next.id);
+  }
+
+  function onOverlayKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    const target = event.target;
+    const editing =
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement;
+    if (editing) return;
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      moveCard(-1);
+    } else if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      moveCard(1);
+    }
+  }
+
+  const activeChips: Array<{ key: string; label: string }> = [
+    ...search.type.map((type) => ({
+      key: `type:${type}`,
+      label: `Type: ${FRAME_TYPE_LABELS[type as FrameType] ?? type}`,
+    })),
+    ...search.rarity.map((rarity) => ({
+      key: `rarity:${rarity}`,
+      label: `Rarity: ${RARITY_LABELS[rarity as RarityKey] ?? rarity}`,
+    })),
+    ...search.set.map((setId) => ({
+      key: `set:${setId}`,
+      label: `Set: ${setsFacet.data?.find((set) => set.setId === setId)?.setName ?? setId}`,
+    })),
+    ...(search.region ? [{ key: 'region', label: `Region: ${search.region}` }] : []),
+  ];
+  const activeFilterCount =
+    search.type.length + search.rarity.length + search.set.length + (search.region ? 1 : 0);
+
+  function removeChip(key: string): void {
+    if (key === 'region') return updateSearch({ region: undefined });
+    const [kind, value] = key.split(':');
+    if (kind === 'type') updateSearch({ type: search.type.filter((item) => item !== value) });
+    else if (kind === 'rarity')
+      updateSearch({ rarity: search.rarity.filter((item) => item !== value) });
+    else if (kind === 'set') updateSearch({ set: search.set.filter((item) => item !== value) });
+  }
+
+  const filtersPanel = <FiltersPanel filters={search} onChange={(patch) => updateSearch(patch)} />;
+
   return (
-    <section>
-      <h1>Catalogue</h1>
-      <pre>{JSON.stringify(search, null, 2)}</pre>
-    </section>
+    <div className="catalogue-screen">
+      <header className="page-heading">
+        <div>
+          {speciesEntry ? (
+            <Link className="text-button back-link" to="/pokedex" search={BLANK_POKEDEX_SEARCH}>
+              Back to National Pokédex
+            </Link>
+          ) : search.set.length === 1 ? (
+            <Link className="text-button back-link" to="/sets">
+              Back to Sets
+            </Link>
+          ) : null}
+          {contextual ? (
+            <Link className="text-button back-link" to="/catalogue" search={BLANK_SEARCH}>
+              Show full catalogue
+            </Link>
+          ) : null}
+          <h1>
+            {speciesEntry
+              ? `${speciesEntry.name} card gallery.`
+              : contextSetName
+                ? `${contextSetName} card gallery.`
+                : 'Find a physical card.'}
+          </h1>
+          {speciesEntry ? (
+            <p className="indexing-status">
+              {discover.isPending ? (
+                'Checking TCGdex for additional printings…'
+              ) : discover.isError ? (
+                <>
+                  Printing refresh failed.{' '}
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() =>
+                      discover.mutate({ number: speciesEntry.number, name: speciesEntry.name })
+                    }
+                  >
+                    Try again
+                  </button>
+                </>
+              ) : (
+                'English physical printings'
+              )}
+            </p>
+          ) : null}
+        </div>
+      </header>
+
+      <form
+        className="catalogue-search-bar"
+        role="search"
+        onSubmit={(event) => {
+          event.preventDefault();
+          updateSearch({ q: queryDraft });
+        }}
+      >
+        <label>
+          Search
+          <input
+            value={queryDraft}
+            maxLength={200}
+            placeholder="Name, set, number or artist"
+            onChange={(event) => setQueryDraft(event.target.value)}
+          />
+        </label>
+        <SegmentedControl<CatalogueOwnedFilter>
+          label="Collection"
+          value={search.owned}
+          options={[
+            { value: 'all', label: 'All' },
+            { value: 'owned', label: 'Owned' },
+            { value: 'missing', label: 'Missing' },
+          ]}
+          onChange={(owned) => updateSearch({ owned })}
+        />
+        <button type="button" aria-expanded={filtersOpen} onClick={() => setFiltersOpen(true)}>
+          <Icon name="filter" /> Filters
+          {activeFilterCount > 0 ? (
+            <span className="filter-count-badge">{activeFilterCount}</span>
+          ) : null}
+        </button>
+        <button type="submit" disabled={busy}>
+          {busy ? 'Searching…' : 'Search'}
+        </button>
+      </form>
+
+      {activeChips.length > 0 ? (
+        <div className="catalogue-active-filters">
+          <FilterChips items={activeChips} onRemove={removeChip} />
+          <button
+            type="button"
+            className="text-button"
+            onClick={() => updateSearch({ type: [], rarity: [], set: [], region: undefined })}
+          >
+            Clear all
+          </button>
+        </div>
+      ) : null}
+
+      <CopyTools filters={search} cards={cards} total={total} busy={busy} />
+      {!speciesEntry ? <CustomCardForm /> : null}
+      <BulkAddToBinder filters={search} total={total} />
+
+      <div ref={galleryRef}>
+        <CatalogueGallery
+          cards={cards}
+          total={total}
+          page={search.page}
+          loading={busy && cards.length === 0}
+          selectedCardId={search.card}
+          onOpen={openCard}
+        />
+      </div>
+      <Pagination
+        page={search.page}
+        totalPages={Math.max(1, Math.ceil(total / PAGE_SIZE))}
+        pending={busy}
+        label="Catalogue pages"
+        onPage={moveToPage}
+      />
+
+      {isDesktop ? (
+        <SidePanel open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Filters">
+          {filtersPanel}
+        </SidePanel>
+      ) : (
+        <Sheet open={filtersOpen} onClose={() => setFiltersOpen(false)} title="Filters">
+          {filtersPanel}
+        </Sheet>
+      )}
+
+      {search.card ? (
+        <SidePanel open onClose={requestCloseCard} title="Card">
+          <div className="card-overlay-chrome" onKeyDown={onOverlayKeyDown}>
+            <div className="card-overlay-nav">
+              <button
+                type="button"
+                aria-label="Previous card"
+                onClick={() => moveCard(-1)}
+                disabled={cards.length < 2}
+              >
+                <Icon name="chevron-left" />
+              </button>
+              <button
+                type="button"
+                aria-label="Next card"
+                onClick={() => moveCard(1)}
+                disabled={cards.length < 2}
+              >
+                <Icon name="chevron-right" />
+              </button>
+              {selectedIndex >= 0 ? (
+                <span>
+                  {selectedIndex + 1} of {cards.length}
+                </span>
+              ) : null}
+            </div>
+            <CardInspector
+              cardId={search.card}
+              onClose={requestCloseCard}
+              onDirtyChange={setDirtyInspector}
+            />
+          </div>
+        </SidePanel>
+      ) : null}
+    </div>
   );
 }

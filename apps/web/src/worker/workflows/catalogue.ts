@@ -12,6 +12,7 @@ import {
   catalogueSyncLanguage,
   setImportedCardReleaseDate,
   stageCatalogueCards,
+  syncSetAbbreviations,
   transformTcgdexCard,
   type ImportedCard,
 } from '../lib/catalogue';
@@ -33,7 +34,14 @@ const cardBriefsSchema = z
   .array(z.object({ id: z.string().trim().min(1).max(256) }).passthrough())
   .max(50_000);
 const setSchema = z
-  .object({ id: z.string().trim().min(1), releaseDate: z.string().date().nullable().optional() })
+  .object({
+    id: z.string().trim().min(1),
+    releaseDate: z.string().date().nullable().optional(),
+    abbreviation: z
+      .object({ official: z.string().trim().min(1).max(16) })
+      .partial()
+      .optional(),
+  })
   .passthrough();
 const batchIdsSchema = z
   .array(z.string().trim().min(1).max(256))
@@ -128,14 +136,15 @@ function scheduledLanguage(event: Readonly<WorkflowEvent<CatalogueWorkflowPayloa
   return catalogueSyncLanguage(event.payload.language);
 }
 
-interface SetReleaseDate {
+interface SetMeta {
   id: string;
   releaseDate: string | null;
+  abbreviation: string | null;
 }
 
 interface CatalogueFetcherRpc {
   fetchCards(language: string, ids: string[]): Promise<ImportedCard[]>;
-  fetchSets(language: string, ids: string[]): Promise<SetReleaseDate[]>;
+  fetchSets(language: string, ids: string[]): Promise<SetMeta[]>;
 }
 
 export class CatalogueFetcher extends DurableObject<CloudflareEnv> {
@@ -152,7 +161,7 @@ export class CatalogueFetcher extends DurableObject<CloudflareEnv> {
     return results.filter((card): card is ImportedCard => card !== null);
   }
 
-  async fetchSets(languageInput: string, idsInput: string[]): Promise<SetReleaseDate[]> {
+  async fetchSets(languageInput: string, idsInput: string[]): Promise<SetMeta[]> {
     const language = languageSchema.parse(languageInput);
     const ids = batchIdsSchema.parse(idsInput);
     return mapConcurrent(ids, OUTBOUND_CONCURRENCY, async (id) => {
@@ -163,16 +172,25 @@ export class CatalogueFetcher extends DurableObject<CloudflareEnv> {
         ),
       );
       if (!parsed.success) throw new Error('tcgdex_set_invalid');
-      return { id: parsed.data.id, releaseDate: parsed.data.releaseDate ?? null };
+      return {
+        id: parsed.data.id,
+        releaseDate: parsed.data.releaseDate ?? null,
+        abbreviation: parsed.data.abbreviation?.official ?? null,
+      };
     });
   }
+}
+
+interface FetchedLanguageCards {
+  cards: ImportedCard[];
+  setAbbreviations: Array<{ setId: string; abbreviation: string }>;
 }
 
 async function fetchLanguageCards(
   language: LanguageCode,
   step: WorkflowStep,
   fetcher: CatalogueFetcherRpc,
-): Promise<ImportedCard[]> {
+): Promise<FetchedLanguageCards> {
   const briefs = await step.do(`list-${language}-cards`, FETCH_STEP_CONFIG, async () => {
     const parsed = cardBriefsSchema.safeParse(
       await fetchTcgdex(`${encodeURIComponent(language)}/cards`, LIST_MAX_BYTES),
@@ -190,15 +208,23 @@ async function fetchLanguageCards(
 
   const setIds = [...new Set(cards.map((card) => card.setId))].sort();
   const releaseDates = new Map<string, string | null>();
+  const setAbbreviations: Array<{ setId: string; abbreviation: string }> = [];
   for (const [page, ids] of catalogueRequestChunks(setIds).entries()) {
-    const setDates = await step.do(`sets-${language}-${page}`, FETCH_STEP_CONFIG, () =>
+    const sets = await step.do(`sets-${language}-${page}`, FETCH_STEP_CONFIG, () =>
       fetcher.fetchSets(language, ids),
     );
-    for (const set of setDates) releaseDates.set(set.id, set.releaseDate);
+    for (const set of sets) {
+      releaseDates.set(set.id, set.releaseDate);
+      if (set.abbreviation)
+        setAbbreviations.push({ setId: set.id, abbreviation: set.abbreviation });
+    }
   }
-  return Promise.all(
-    cards.map((card) => setImportedCardReleaseDate(card, releaseDates.get(card.setId) ?? null)),
-  );
+  return {
+    cards: await Promise.all(
+      cards.map((card) => setImportedCardReleaseDate(card, releaseDates.get(card.setId) ?? null)),
+    ),
+    setAbbreviations,
+  };
 }
 
 interface CatalogueWorkflowPayload {
@@ -231,16 +257,23 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
         }),
       );
       currentStep = event.payload.objectKey ? 'read-catalogue-object' : 'fetch-language-cards';
-      const cards = event.payload.objectKey
-        ? await step.do('read-catalogue-object', async () => {
-            const object = await this.env.ART.get(event.payload.objectKey ?? '');
-            if (!object) throw new Error('catalogue_stage_missing');
-            if (object.size > LIST_MAX_BYTES) throw new Error('catalogue_stage_too_large');
-            const parsed = catalogueObjectSchema.safeParse(await object.json<unknown>());
-            if (!parsed.success || parsed.data.some((card) => card.language !== language))
-              throw new Error('catalogue_stage_invalid');
-            return parsed.data;
-          })
+      // The staged-object replay path (admin re-import from an uploaded
+      // snapshot) has no live set fetch to draw an abbreviation from, so it
+      // never touches catalogue_sets.abbreviation - only a live TCGdex fetch
+      // does.
+      const { cards, setAbbreviations } = event.payload.objectKey
+        ? {
+            cards: await step.do('read-catalogue-object', async () => {
+              const object = await this.env.ART.get(event.payload.objectKey ?? '');
+              if (!object) throw new Error('catalogue_stage_missing');
+              if (object.size > LIST_MAX_BYTES) throw new Error('catalogue_stage_too_large');
+              const parsed = catalogueObjectSchema.safeParse(await object.json<unknown>());
+              if (!parsed.success || parsed.data.some((card) => card.language !== language))
+                throw new Error('catalogue_stage_invalid');
+              return parsed.data;
+            }),
+            setAbbreviations: [] as Array<{ setId: string; abbreviation: string }>,
+          }
         : await fetchLanguageCards(language, step, fetcher);
 
       for (let offset = 0; offset < cards.length; offset += CATALOGUE_STAGE_CHUNK_SIZE) {
@@ -256,6 +289,11 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
       const applied = await step.do('apply-catalogue-run', async () =>
         applyStagedCatalogueRun(this.env.DB, runId, event.payload.allowDestructiveDrop ?? false),
       );
+      currentStep = 'sync-set-codes';
+      await step.do('sync-set-codes', async () => {
+        await syncSetAbbreviations(this.env.DB, language, setAbbreviations);
+        return null;
+      });
       currentStep = 'cleanup-catalogue-run';
       await step.do('cleanup-catalogue-run', async () => {
         if (event.payload.objectKey?.startsWith('staged/tcgdex/'))

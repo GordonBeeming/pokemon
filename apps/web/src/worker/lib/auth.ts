@@ -1,8 +1,9 @@
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import type { Context } from 'hono';
 import { jwtVerify, SignJWT } from 'jose';
+import type { UserRole } from '@pokedex/shared';
 import { timingSafeStringEqual } from './crypto';
-import { nowSeconds } from './db';
+import { newId, nowSeconds } from './db';
 import type { AuditInsert, PasskeyInsert, PasskeyRow, SessionPayload, UserRow } from './types';
 
 export const SESSION_COOKIE = 'pokedex_session';
@@ -173,23 +174,38 @@ export function enrolSecretMatches(
   return timingSafeStringEqual(input, env.ENROLL_SECRET);
 }
 
-export async function getOrCreateOwner(db: D1Database, label: string): Promise<UserRow> {
-  const existing = await db
-    .prepare('SELECT id, label, mutation_epoch, created_at FROM users WHERE id = ?1')
-    .bind('owner')
-    .first<UserRow>();
-  if (existing) return existing;
+const USER_COLUMNS = 'id, label, role, disabled_at, mutation_epoch, created_at';
+
+export async function getUserById(db: D1Database, id: string): Promise<UserRow | null> {
+  return db.prepare(`SELECT ${USER_COLUMNS} FROM users WHERE id = ?1`).bind(id).first<UserRow>();
+}
+
+// Every user (bootstrap admin, invited member, or one an admin creates by
+// hand later) gets a random id — nothing in runtime code depends on a fixed
+// 'owner' id any more; that literal only remains in migrations, which set it
+// on the one account that already existed before multi-user shipped.
+export async function createUser(db: D1Database, label: string, role: UserRole): Promise<UserRow> {
+  const id = newId('user');
   const now = nowSeconds();
   await db
-    .prepare('INSERT OR IGNORE INTO users (id, label, created_at) VALUES (?1, ?2, ?3)')
-    .bind('owner', label, now)
+    .prepare('INSERT INTO users (id, label, role, created_at) VALUES (?1, ?2, ?3, ?4)')
+    .bind(id, label, role, now)
     .run();
-  const created = await db
-    .prepare('SELECT id, label, mutation_epoch, created_at FROM users WHERE id = ?1')
-    .bind('owner')
-    .first<UserRow>();
-  if (!created) throw new Error('owner_create_failed');
+  const created = await getUserById(db, id);
+  if (!created) throw new Error('user_create_failed');
   return created;
+}
+
+// Used by dev-login (loopback only) and nothing else: picks a stable,
+// deterministic account to sign in as when the caller didn't ask for a
+// specific user id.
+export async function getFirstActiveAdmin(db: D1Database): Promise<UserRow | null> {
+  return db
+    .prepare(
+      `SELECT ${USER_COLUMNS} FROM users WHERE role = 'admin' AND disabled_at IS NULL
+       ORDER BY created_at ASC, id ASC LIMIT 1`,
+    )
+    .first<UserRow>();
 }
 
 export async function getPasskeys(db: D1Database, userId: string): Promise<PasskeyRow[]> {
@@ -211,11 +227,14 @@ export async function getPasskey(db: D1Database, id: string): Promise<PasskeyRow
     .first<PasskeyRow>();
 }
 
-function passkeyInsert(db: D1Database, input: PasskeyInsert, firstOnly: boolean) {
+function passkeyInsert(db: D1Database, input: PasskeyInsert, bootstrapOnly: boolean) {
   const values = '(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)';
-  const sql = firstOnly
+  // Bootstrap's guard is global ("no passkey exists anywhere yet"), not
+  // per-user: with multiple real users now possible, checking only this
+  // user's own passkeys would let bootstrap re-fire for every new invitee.
+  const sql = bootstrapOnly
     ? `INSERT INTO passkeys (id, user_id, public_key, counter, transports, device_label, name, created_at)
-       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8 WHERE NOT EXISTS (SELECT 1 FROM passkeys WHERE user_id = ?2)`
+       SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8 WHERE NOT EXISTS (SELECT 1 FROM passkeys)`
     : `INSERT INTO passkeys (id, user_id, public_key, counter, transports, device_label, name, created_at) VALUES ${values}`;
   return db
     .prepare(sql)
@@ -235,7 +254,12 @@ export async function insertPasskey(db: D1Database, input: PasskeyInsert): Promi
   await passkeyInsert(db, input, false).run();
 }
 
-export async function insertFirstPasskey(db: D1Database, input: PasskeyInsert): Promise<boolean> {
+export async function insertBootstrapPasskey(
+  db: D1Database,
+  input: PasskeyInsert,
+): Promise<boolean> {
+  // Safe to trust meta.changes here, unlike deletePasskey below: passkeys
+  // only has an AFTER DELETE trigger (migration 006), nothing on INSERT.
   const result = await passkeyInsert(db, input, true).run();
   return result.meta.changes === 1;
 }
@@ -258,6 +282,8 @@ export async function renamePasskey(
   userId: string,
   name: string | null,
 ): Promise<boolean> {
+  // Same reasoning as insertBootstrapPasskey: no trigger fires on UPDATE,
+  // only on DELETE, so meta.changes is trustworthy here.
   const result = await db
     .prepare('UPDATE passkeys SET name = ?1 WHERE id = ?2 AND user_id = ?3')
     .bind(name, id, userId)
@@ -270,18 +296,28 @@ export async function deletePasskey(
   id: string,
   userId: string,
 ): Promise<'deleted' | 'last_passkey' | 'not_found'> {
-  const deleted = await db
+  const before = await db
+    .prepare('SELECT 1 FROM passkeys WHERE id = ?1 AND user_id = ?2')
+    .bind(id, userId)
+    .first();
+  if (!before) return 'not_found';
+  await db
     .prepare(
       'DELETE FROM passkeys WHERE id = ?1 AND user_id = ?2 AND (SELECT COUNT(*) FROM passkeys WHERE user_id = ?2) > 1',
     )
     .bind(id, userId)
     .run();
-  if (deleted.meta.changes === 1) return 'deleted';
-  const exists = await db
+  // passkeys has an AFTER DELETE trigger (migration 006) that cascades a
+  // mutation_epoch bump and a session revocation, and D1 reports a
+  // statement's meta.changes as the sum including those cascaded writes —
+  // never just the top-level DELETE's own row count — so success is
+  // confirmed by re-reading the row, the same pattern already used for
+  // patchBinderDisplay/removeCollectionCopy on other triggered tables.
+  const after = await db
     .prepare('SELECT 1 FROM passkeys WHERE id = ?1 AND user_id = ?2')
     .bind(id, userId)
     .first();
-  return exists ? 'last_passkey' : 'not_found';
+  return after ? 'last_passkey' : 'deleted';
 }
 
 export async function logAudit(db: D1Database, input: AuditInsert): Promise<void> {

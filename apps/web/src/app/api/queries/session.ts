@@ -3,9 +3,14 @@ import { z } from 'zod';
 import { apiFetch, ApiError } from '../client';
 import { queryKeys } from '../keys';
 
-const sessionSchema = z
-  .object({ ok: z.literal(true), sub: z.string(), label: z.string() })
-  .strict();
+// Not strict: /me grows fields (role today) and an unknown field must never lock
+// everyone out of the shell. Role is optional so a pre-multi-user worker still parses.
+const sessionSchema = z.object({
+  ok: z.literal(true),
+  sub: z.string(),
+  label: z.string(),
+  role: z.enum(['admin', 'member']).optional(),
+});
 export type Session = z.infer<typeof sessionSchema>;
 
 /**

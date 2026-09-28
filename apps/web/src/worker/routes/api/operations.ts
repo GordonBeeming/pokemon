@@ -18,6 +18,7 @@ import { getArtResponse, listArtManifest } from '../../lib/art';
 import {
   createBinder,
   deleteBinder,
+  discardBinderDraftVersion,
   patchBinderDisplay,
   getCardBinderMatches,
   listInactiveBinderTargets,
@@ -52,7 +53,13 @@ import {
   previewFullPokedexInsert,
   type ArrangementMode,
 } from '../../lib/binders';
-import { getCardDetail, searchCards, type CatalogueFilters } from '../../lib/catalogue';
+import {
+  getCardDetail,
+  listCatalogueSets,
+  searchCards,
+  setCatalogueSetCode,
+  type CatalogueFilters,
+} from '../../lib/catalogue';
 import {
   incrementCollectionQuantity,
   patchCollectionNotes,
@@ -189,6 +196,8 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       addCardsToBinderVersion(env.DB, ownerId, versionId, cardIds, expectedRevision),
     cloneBinderVersion: (versionId: string, expectedRevision: number) =>
       cloneBinderVersion(env.DB, ownerId, versionId, expectedRevision),
+    discardBinderDraftVersion: (versionId: string, expectedRevision: number) =>
+      discardBinderDraftVersion(env.DB, ownerId, versionId, expectedRevision),
     activateBinderVersion: (versionId: string, expectedRevision: number) =>
       activateBinderVersion(env.DB, ownerId, versionId, expectedRevision),
     arrangeBinderVersion: (versionId: string, mode: ArrangementMode, expectedRevision: number) =>
@@ -287,6 +296,8 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       expectedRevision: number,
     ) =>
       previewFullPokedexInsert(env.DB, ownerId, versionId, at, regionPageBreaks, expectedRevision),
+    listSets: () => listCatalogueSets(env.DB),
+    setSetCode: (setId: string, code: string | null) => setCatalogueSetCode(env.DB, setId, code),
     artManifest: (cursor: string | null, limit: number) => listArtManifest(env.DB, cursor, limit),
     art: (cardId: string, variant: 'high' | 'low', request: Request) =>
       getArtResponse(env.DB, env.ART, cardId, variant, request),

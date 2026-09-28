@@ -20,10 +20,12 @@ describe('catalogueSearch', () => {
       region: 'Kanto',
       rarity: ['C', 'HV'],
       set: ['MEW'],
+      language: 'ja',
       owned: 'owned',
       sort: 'release-date',
       page: '3',
       card: 'abc123',
+      dex: '25',
     });
     expect(initial).toEqual({
       q: 'pikachu',
@@ -31,12 +33,25 @@ describe('catalogueSearch', () => {
       region: 'Kanto',
       rarity: ['C', 'HV'],
       set: ['MEW'],
+      language: 'ja',
       owned: 'owned',
       sort: 'release-date',
       page: 3,
       card: 'abc123',
+      dex: 25,
     });
     expect(catalogueSearch.parse(catalogueSearch.serialize(initial))).toEqual(initial);
+  });
+
+  it('round-trips a species-context search (dex only, no other filters)', () => {
+    const initial = catalogueSearch.parse({ dex: '150' });
+    expect(catalogueSearch.parse(catalogueSearch.serialize(initial))).toEqual(initial);
+    expect(initial.dex).toBe(150);
+  });
+
+  it('clamps dex to the National Pokédex range, dropping an out-of-range value', () => {
+    expect(catalogueSearch.parse({ dex: '0' }).dex).toBeUndefined();
+    expect(catalogueSearch.parse({ dex: '1026' }).dex).toBeUndefined();
   });
 
   it('accepts array-shaped list params as well as comma-joined strings', () => {
@@ -60,7 +75,13 @@ describe('catalogueSearch', () => {
 
 describe('pokedexSearch', () => {
   it('round-trips', () => {
-    const initial = pokedexSearch.parse({ region: 'Johto', filter: 'owned', page: '2', dex: '25' });
+    const initial = pokedexSearch.parse({
+      q: 'pika',
+      region: 'Johto',
+      filter: 'owned',
+      page: '2',
+      dex: '25',
+    });
     expect(pokedexSearch.parse(pokedexSearch.serialize(initial))).toEqual(initial);
   });
 
@@ -90,6 +111,15 @@ describe('binderSearch', () => {
 
   it('drops an invalid mode rather than throwing', () => {
     expect(binderSearch.parse({ mode: 'nonsense' }).mode).toBeUndefined();
+  });
+
+  it('treats page as 1-based and drops page 0 back to the first page', () => {
+    expect(binderSearch.parse({}).page).toBe(1);
+    expect(binderSearch.parse({ page: '0' }).page).toBe(1);
+    expect(binderSearch.parse({ page: '7', v: 'binder_version_x' })).toMatchObject({
+      page: 7,
+      v: 'binder_version_x',
+    });
   });
 });
 

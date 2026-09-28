@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { newId, nowSeconds } from './db';
-import { ApplicationError } from './log';
+import { ApplicationError, describeError, logError, logInfo } from './log';
 
 const LEGACY_BACKUP_VERSION = 2 as const;
 const BACKUP_VERSION = 7 as const;
@@ -482,6 +482,91 @@ async function backupArtRows(
 
 function parseBackupRows(kind: Exclude<BackupKind, 'art_manifest'>, rows: unknown[]): unknown[] {
   return z.array(backupRowSchemas[kind]).parse(rows);
+}
+
+async function backupWorkflowOwnerMac(ownerId: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(ownerId));
+  return Array.from(new Uint8Array(signature).slice(0, 16), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('');
+}
+
+const BACKUP_WORKFLOW_ID_PATTERN = /^(?:backup|restore)-([0-9a-f]{32})-[0-9a-f-]{36}$/u;
+
+// Cloudflare Workflows exposes only id/status/output for an instance, never
+// the params it was created with, so GET /backups/workflows/:id can't read
+// the owner back from the instance itself. Binding a keyed-hash proof of the
+// owner into the id at creation time (never the raw ownerId) lets that route
+// refuse a workflow started by someone else with no separate lookup table
+// and no race against a still-running instance that hasn't written anything
+// to D1 yet.
+export async function signedBackupWorkflowId(
+  kind: 'backup' | 'restore',
+  ownerId: string,
+  secret: string,
+): Promise<string> {
+  return `${kind}-${await backupWorkflowOwnerMac(ownerId, secret)}-${crypto.randomUUID()}`;
+}
+
+// Accepts a proof signed under the previous secret too, the same fallback
+// auth.ts's own session verification already gives SESSION_SECRET rotation:
+// otherwise rotating mid-flight would orphan every backup/restore poll that
+// started under the old secret.
+export async function verifyBackupWorkflowOwner(
+  workflowId: string,
+  ownerId: string,
+  secret: string,
+  previousSecret?: string,
+): Promise<boolean> {
+  const match = BACKUP_WORKFLOW_ID_PATTERN.exec(workflowId);
+  if (!match?.[1]) return false;
+  const mac = match[1];
+  if (mac === (await backupWorkflowOwnerMac(ownerId, secret))) return true;
+  return previousSecret ? mac === (await backupWorkflowOwnerMac(ownerId, previousSecret)) : false;
+}
+
+// The multi-user migration (025) adds users.disabled_at, but the scheduled
+// backup can run before or after that migration lands on a given
+// environment, so it checks the column exists rather than assuming either
+// shape.
+export async function scheduledBackupOwnerIds(db: D1Database): Promise<string[]> {
+  const columns = await db.prepare('PRAGMA table_info(users)').all<{ name: string }>();
+  const hasDisabledAt = columns.results.some((column) => column.name === 'disabled_at');
+  const result = await db
+    .prepare(
+      hasDisabledAt
+        ? 'SELECT id FROM users WHERE disabled_at IS NULL ORDER BY id'
+        : 'SELECT id FROM users ORDER BY id',
+    )
+    .all<{ id: string }>();
+  return result.results.map((row) => row.id);
+}
+
+// Kept outside index.ts (which imports `cloudflare:workers` at module scope
+// and so can't be loaded under the plain node test environment) so the
+// per-owner fan-out and its "one failure doesn't stop the rest" behaviour
+// stay unit-testable. Never throws: a scheduled handler that throws just
+// looks like a missed cron run in the dashboard, with no indication why.
+export async function runScheduledBackups(
+  db: D1Database,
+  startBackupWorkflow: (ownerId: string) => Promise<{ id: string }>,
+): Promise<void> {
+  const ownerIds = await scheduledBackupOwnerIds(db);
+  for (const ownerId of ownerIds) {
+    try {
+      const workflow = await startBackupWorkflow(ownerId);
+      logInfo({ evt: 'backup.scheduled_started', ownerId, workflowId: workflow.id });
+    } catch (error) {
+      logError({ evt: 'backup.scheduled_failed', ownerId, err: describeError(error) });
+    }
+  }
 }
 
 export async function createBackup(

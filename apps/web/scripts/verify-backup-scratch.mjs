@@ -80,7 +80,7 @@ async function completedWorkflow(workflowId, cookie, allowReauthentication = fal
 try {
   await run(['d1', 'migrations', 'apply', 'DB', '--local', '--persist-to', persist]);
   await d1(
-    `INSERT INTO users (id,label,created_at) VALUES ('owner','Owner',1);
+    `INSERT INTO users (id,label,created_at,role) VALUES ('owner','Owner',1,'admin');
      INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,is_custom,is_active,created_at,updated_at)
        VALUES ('custom_fixture','Custom Fixture','en','special','custom','Custom cards','custom',1,1,1,1);
      WITH RECURSIVE sequence(value) AS (
@@ -213,10 +213,14 @@ try {
       `collection remove did not decrement quantity: ${JSON.stringify(removed.body)}`,
     );
   const matches = await json('/api/cards/custom_fixture/binder-matches', { headers: { cookie } });
+  // The fixture's exact-card slot was seeded with a target (card_id) but no
+  // assignment (assigned_card_id), so it's an open target, not yet placed -
+  // getCardBinderMatches only counts a slot as placed once it's actually
+  // assigned to this card, which the fixture never did.
   if (
     matches.body.binders.length !== 1 ||
     matches.body.binders[0].exactTargets.length !== 1 ||
-    matches.body.binders[0].placed.length !== 1
+    matches.body.binders[0].placed.length !== 0
   )
     throw new Error(
       `binder-matches did not report the fixture pocket: ${JSON.stringify(matches.body)}`,

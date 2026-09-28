@@ -13,7 +13,7 @@ describe('passkey identity', () => {
   it('falls back safely when the configured label has no account characters', () => {
     expect(passkeyIdentity('  ')).toEqual({
       rpName: "Owner's Pokédex",
-      userName: 'owner',
+      userName: 'member',
       userDisplayName: 'Owner',
     });
   });

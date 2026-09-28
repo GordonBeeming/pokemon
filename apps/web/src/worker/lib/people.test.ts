@@ -1,0 +1,203 @@
+import { DatabaseSync } from 'node:sqlite';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createUser } from './auth';
+import { applyAllMigrations, sqliteD1 } from './d1-test-helper';
+import { ApplicationError } from './log';
+import {
+  cancelInvite,
+  claimInviteForNewUser,
+  createInvite,
+  getPerson,
+  listInvites,
+  listPeople,
+  lookupInvite,
+  patchPerson,
+} from './people';
+
+const databases: DatabaseSync[] = [];
+afterEach(() => {
+  for (const db of databases.splice(0)) db.close();
+});
+
+function setup(): D1Database {
+  const db = new DatabaseSync(':memory:');
+  databases.push(db);
+  applyAllMigrations(db);
+  return sqliteD1(db);
+}
+
+describe('listing and patching people', () => {
+  it('lists every user with a live passkey count and last-used time', async () => {
+    const db = setup();
+    const admin = await createUser(db, 'Gordon', 'admin');
+    await db
+      .prepare(
+        "INSERT INTO passkeys (id, user_id, public_key, counter, created_at, last_used_at) VALUES ('p1', ?1, x'00', 0, 1, 100), ('p2', ?1, x'00', 0, 1, 200)",
+      )
+      .bind(admin.id)
+      .run();
+    const people = await listPeople(db);
+    expect(people).toEqual([
+      expect.objectContaining({
+        id: admin.id,
+        label: 'Gordon',
+        role: 'admin',
+        disabledAt: null,
+        passkeyCount: 2,
+        lastUsedAt: new Date(200 * 1000).toISOString(),
+      }),
+    ]);
+    expect(await getPerson(db, 'missing')).toBeNull();
+  });
+
+  it('refuses to demote or disable the last active admin, including yourself', async () => {
+    const db = setup();
+    const admin = await createUser(db, 'Gordon', 'admin');
+    await expect(patchPerson(db, admin.id, { role: 'member' })).rejects.toMatchObject({
+      code: 'last_admin',
+    });
+    await expect(patchPerson(db, admin.id, { disabled: true })).rejects.toMatchObject({
+      code: 'last_admin',
+    });
+    // A second active admin makes either change on the first admin safe again.
+    await createUser(db, 'Second admin', 'admin');
+    await expect(patchPerson(db, admin.id, { role: 'member' })).resolves.toMatchObject({
+      role: 'member',
+    });
+  });
+
+  it('disabling revokes sessions and desktop tokens and can be reversed', async () => {
+    const db = setup();
+    const admin = await createUser(db, 'Gordon', 'admin');
+    await createUser(db, 'Second admin', 'admin');
+    const member = await createUser(db, 'Member', 'member');
+    await db
+      .prepare(
+        'INSERT INTO web_sessions (id_hash, user_id, mutation_epoch, expires_at, created_at) VALUES (?1, ?2, 0, 999999999, 1)',
+      )
+      .bind('session-hash', member.id)
+      .run();
+    await db
+      .prepare(
+        'INSERT INTO desktop_tokens (token_hash, owner_id, label, scopes, created_at) VALUES (?1, ?2, ?3, ?4, 1)',
+      )
+      .bind('token-hash', member.id, 'Desktop', '["catalogue:read"]')
+      .run();
+
+    const disabled = await patchPerson(db, member.id, { disabled: true });
+    expect(disabled.disabledAt).not.toBeNull();
+    const sessionRow = await db
+      .prepare('SELECT mutation_epoch, revoked_at FROM web_sessions WHERE id_hash = ?1')
+      .bind('session-hash')
+      .first<{ mutation_epoch: number; revoked_at: number | null }>();
+    expect(sessionRow?.revoked_at).toEqual(expect.any(Number));
+    expect(
+      await db
+        .prepare('SELECT mutation_epoch FROM users WHERE id = ?1')
+        .bind(member.id)
+        .first<{ mutation_epoch: number }>(),
+    ).toMatchObject({ mutation_epoch: 1 });
+    const tokenRow = await db
+      .prepare('SELECT revoked_at FROM desktop_tokens WHERE token_hash = ?1')
+      .bind('token-hash')
+      .first<{ revoked_at: number | null }>();
+    expect(tokenRow?.revoked_at).toEqual(expect.any(Number));
+
+    void admin;
+    const enabled = await patchPerson(db, member.id, { disabled: false });
+    expect(enabled.disabledAt).toBeNull();
+  });
+
+  it('rejects a patch for an unknown person', async () => {
+    await expect(patchPerson(setup(), 'missing', { role: 'admin' })).rejects.toMatchObject({
+      code: 'person_not_found',
+    });
+  });
+});
+
+describe('invites', () => {
+  it('creates a single-use, expiring invite and reports its public status', async () => {
+    const db = setup();
+    const admin = await createUser(db, 'Gordon', 'admin');
+    const { id, token, expiresAt } = await createInvite(db, admin.id, {
+      role: 'member',
+      label: 'Family member',
+    });
+    expect(id).toBeTruthy();
+    expect(expiresAt).toMatch(/\d{4}-\d{2}-\d{2}T/u);
+    expect(await lookupInvite(db, token)).toEqual({
+      valid: true,
+      expired: false,
+      used: false,
+      label: 'Family member',
+      role: 'member',
+      expiresAt,
+      invitedBy: 'Gordon',
+    });
+    expect(await lookupInvite(db, 'unknown-token')).toBeNull();
+
+    const invites = await listInvites(db);
+    expect(invites).toHaveLength(1);
+    expect(invites[0]).toMatchObject({ role: 'member', label: 'Family member', redeemedAt: null });
+  });
+
+  it('redeems an invite into a brand-new user with the invite role, exactly once', async () => {
+    const db = setup();
+    const admin = await createUser(db, 'Gordon', 'admin');
+    const { token } = await createInvite(db, admin.id, { role: 'member' });
+
+    const created = await claimInviteForNewUser(db, token, 'New member');
+    expect(created.role).toBe('member');
+    expect(created.id).not.toBe(admin.id);
+    expect(await lookupInvite(db, token)).toMatchObject({ valid: false, used: true });
+
+    // A second redemption attempt is refused and leaves no orphan user behind.
+    await expect(claimInviteForNewUser(db, token, 'Someone else')).rejects.toMatchObject({
+      code: 'invite_used',
+    });
+    expect(await listPeople(db)).toHaveLength(2);
+  });
+
+  it('refuses to redeem an expired or unknown invite', async () => {
+    const db = setup();
+    const admin = await createUser(db, 'Gordon', 'admin');
+    const { token } = await createInvite(db, admin.id, { role: 'member' });
+    await db
+      .prepare('UPDATE invites SET expires_at = 1 WHERE created_by = ?1')
+      .bind(admin.id)
+      .run();
+    await expect(claimInviteForNewUser(db, token, 'Late')).rejects.toMatchObject({
+      code: 'invite_expired',
+    });
+    await expect(claimInviteForNewUser(db, 'not-a-real-token', 'Nobody')).rejects.toMatchObject({
+      code: 'invite_invalid',
+    });
+    expect(await listPeople(db)).toHaveLength(1);
+  });
+
+  it('cancels an unredeemed invite but not one already redeemed', async () => {
+    const db = setup();
+    const admin = await createUser(db, 'Gordon', 'admin');
+    const pending = await createInvite(db, admin.id, { role: 'member' });
+    const redeemed = await createInvite(db, admin.id, { role: 'member' });
+    await claimInviteForNewUser(db, redeemed.token, 'Redeemed');
+
+    const invites = await listInvites(db);
+    const pendingId = invites.find((invite) => invite.redeemedAt === null)?.id;
+    const redeemedId = invites.find((invite) => invite.redeemedAt !== null)?.id;
+    if (!pendingId || !redeemedId) throw new Error('test setup invariant broken');
+
+    expect(await cancelInvite(db, pendingId)).toBe(true);
+    expect(await cancelInvite(db, redeemedId)).toBe(false);
+    expect(await cancelInvite(db, 'missing')).toBe(false);
+    void pending;
+  });
+});
+
+describe('ApplicationError shape', () => {
+  it('carries the codes the screens teams key their UI off', () => {
+    const error = new ApplicationError('last_admin', 409);
+    expect(error.code).toBe('last_admin');
+    expect(error.status).toBe(409);
+  });
+});

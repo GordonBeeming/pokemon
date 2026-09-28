@@ -8,6 +8,19 @@ export interface ActionBarItem {
   icon: IconName;
   onSelect: () => void;
   disabled?: boolean;
+  /** Visible keyboard hint shown after the label, e.g. "M" for Move. */
+  shortcut?: string;
+  tone?: 'danger';
+}
+
+function ItemContent({ item }: { item: ActionBarItem }): ReactElement {
+  return (
+    <>
+      <Icon name={item.icon} />
+      <span>{item.label}</span>
+      {item.shortcut ? <kbd className="action-bar-kbd">{item.shortcut}</kbd> : null}
+    </>
+  );
 }
 
 /** Icon+label actions for a selection (binder pockets, catalogue results). On phone
@@ -30,12 +43,14 @@ export function ActionBar({
         <button
           key={item.key}
           type="button"
-          className="action-bar-item"
+          className={
+            item.tone === 'danger' ? 'action-bar-item action-bar-danger' : 'action-bar-item'
+          }
           onClick={item.onSelect}
           disabled={item.disabled}
+          aria-keyshortcuts={item.shortcut}
         >
-          <Icon name={item.icon} />
-          <span>{item.label}</span>
+          <ItemContent item={item} />
         </button>
       ))}
       {overflow.length > 0 ? (
@@ -54,12 +69,16 @@ export function ActionBar({
                 <button
                   key={item.key}
                   type="button"
-                  className="action-bar-item action-bar-overflow-item"
+                  className={
+                    item.tone === 'danger'
+                      ? 'action-bar-item action-bar-overflow-item action-bar-danger'
+                      : 'action-bar-item action-bar-overflow-item'
+                  }
                   onClick={item.onSelect}
                   disabled={item.disabled}
+                  aria-keyshortcuts={item.shortcut}
                 >
-                  <Icon name={item.icon} />
-                  <span>{item.label}</span>
+                  <ItemContent item={item} />
                 </button>
               ))
             : null}

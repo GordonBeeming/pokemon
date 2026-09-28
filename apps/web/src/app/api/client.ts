@@ -49,7 +49,7 @@ export interface ApiFetchInit extends Omit<RequestInit, 'body'> {
  */
 export async function apiFetch<Output>(
   path: string,
-  schema: z.ZodType<Output>,
+  schema: z.ZodType<Output, z.ZodTypeDef, unknown>,
   init: ApiFetchInit = {},
 ): Promise<Output> {
   const headers = new Headers(init.headers);

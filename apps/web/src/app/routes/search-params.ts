@@ -72,24 +72,36 @@ const catalogueSearchSchema = z.object({
   region: z.string().min(1).optional(),
   rarity: csv(z.string()).default([]),
   set: csv(z.string()).default([]),
+  // Preserved from Sets & codes: a Japanese-language set stays scoped to Japanese
+  // printings after the jump into Catalogue (worker's catalogueFilters already
+  // accepts this as `language`).
+  language: z.string().min(1).optional(),
   owned: z.enum(catalogueOwnedFilters).default('all'),
   sort: z.enum(catalogueSortOrders).default('relevance'),
   page: z.coerce.number().int().min(1).default(1),
   card: z.string().min(1).optional(),
+  // A species opened from the National Pokédex: scopes the gallery to that
+  // Pokédex number and drives the "Species card gallery" contextual header.
+  dex: z.coerce.number().int().min(1).max(1025).optional(),
 });
 export const catalogueSearch = defineSearchParams(catalogueSearchSchema);
 export type CatalogueSearch = z.infer<typeof catalogueSearchSchema>;
+export type CatalogueOwnedFilter = (typeof catalogueOwnedFilters)[number];
 
 export const pokedexFilters = ['all', 'owned', 'missing'] as const;
 
 const pokedexSearchSchema = z.object({
+  q: z.string().default(''),
   region: z.string().min(1).optional(),
   filter: z.enum(pokedexFilters).default('all'),
   page: z.coerce.number().int().min(1).default(1),
+  // The focused tile — restored on return from a species gallery, per FEATURES.md's
+  // "focused tile survives leaving and returning".
   dex: z.coerce.number().int().min(1).max(1025).optional(),
 });
 export const pokedexSearch = defineSearchParams(pokedexSearchSchema);
 export type PokedexSearch = z.infer<typeof pokedexSearchSchema>;
+export type PokedexOwnedFilter = (typeof pokedexFilters)[number];
 
 const setsSearchSchema = z.object({
   set: z.string().min(1).optional(),
@@ -99,9 +111,12 @@ export type SetsSearch = z.infer<typeof setsSearchSchema>;
 
 export const binderModes = ['move', 'paste', 'insert'] as const;
 
+// `page` is 1-based so the URL matches the "Page n of total" the screen shows. `v` opens
+// a specific binder version (a draft being edited); without it the active version shows.
 const binderSearchSchema = z.object({
-  page: z.coerce.number().int().min(0).default(0),
-  sel: z.string().min(1).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  v: z.string().min(1).max(128).optional(),
+  sel: z.string().min(1).max(200).optional(),
   mode: z.enum(binderModes).optional(),
   q: z.string().default(''),
 });
