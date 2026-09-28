@@ -10,3 +10,5 @@ apps/web/.env*
 *.local
 .DS_Store
 .playwright-cli/
+playwright-report/
+test-results/
