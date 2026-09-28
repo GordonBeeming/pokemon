@@ -3488,3 +3488,89 @@ export async function listInactiveBinderTargets(
     number: row.number,
   }));
 }
+
+export interface OwnedTargetAssignment {
+  /** Pockets that will be (or were) marked as holding an owned copy, in page order. */
+  locations: BinderSlotLocation[];
+}
+
+/**
+ * Marks exact-card pockets as holding a copy the owner already has, for pockets the old
+ * "put in a binder" flow turned into an exact target without recording the copy as
+ * placed. Only unassigned exact-card pockets are touched, in page order, and only while
+ * the owner still has a loose copy of that card (owned minus copies already placed in an
+ * active binder), so it never claims a copy that is already somewhere else. With
+ * `apply: false` it only reports what it would do.
+ */
+export async function assignOwnedExactTargets(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  requestedRevision: number,
+  apply: boolean,
+): Promise<OwnedTargetAssignment> {
+  const version = await readVersion(db, ownerId, versionId);
+  requireEditable(version);
+  expectedRevision(version, requestedRevision);
+  const open = await db
+    .prepare(
+      `SELECT page.id AS page_id, page.position AS page_position, slot.row_index,
+         slot.column_index, slot.card_id
+       FROM binder_slots slot JOIN binder_pages page ON page.id = slot.binder_page_id
+       WHERE page.binder_version_id = ?1 AND slot.entry_kind = 'exact-card'
+         AND slot.card_id IS NOT NULL AND slot.assigned_card_id IS NULL
+       ORDER BY page.position, slot.row_index, slot.column_index`,
+    )
+    .bind(versionId)
+    .all<{
+      page_id: string;
+      page_position: number;
+      row_index: number;
+      column_index: number;
+      card_id: string;
+    }>();
+  if (open.results.length === 0) return { locations: [] };
+  const cardIds = [...new Set(open.results.map((slot) => slot.card_id))];
+  // Same scope the assignment assertion counts against: every active binder of this
+  // owner, plus this version when it is a draft.
+  const loose = await db
+    .prepare(
+      `SELECT owned.card_id, owned.quantity - (
+         SELECT COUNT(*) FROM binder_slots placed
+         JOIN binder_pages placed_page ON placed_page.id = placed.binder_page_id
+         JOIN binder_versions placed_version ON placed_version.id = placed_page.binder_version_id
+         JOIN binders placed_binder ON placed_binder.id = placed_version.binder_id
+         WHERE placed_binder.owner_id = ?1 AND placed.assigned_card_id = owned.card_id
+           AND (placed_version.id = ?2 OR placed_version.status = 'active')
+       ) AS loose
+       FROM collection_cards owned JOIN json_each(?3) wanted ON wanted.value = owned.card_id
+       WHERE owned.owner_id = ?1`,
+    )
+    .bind(ownerId, versionId, JSON.stringify(cardIds))
+    .all<{ card_id: string; loose: number }>();
+  const remaining = new Map(loose.results.map((row) => [row.card_id, row.loose]));
+  const chosen = open.results
+    .filter((slot) => {
+      const left = remaining.get(slot.card_id) ?? 0;
+      if (left <= 0) return false;
+      remaining.set(slot.card_id, left - 1);
+      return true;
+    })
+    .map((slot) => ({
+      slot,
+      at: { page: slot.page_position, row: slot.row_index, column: slot.column_index },
+    }));
+  const locations = chosen.map(({ at }) => at);
+  if (!apply || chosen.length === 0) return { locations };
+  const now = nowSeconds();
+  await runVersionBatch(db, ownerId, versionId, version.revision, false, [
+    ...chosen.flatMap(({ slot, at }) => [
+      assignmentUpdateStatement(db, slot.card_id, slot.page_id, at),
+      // Checked after the update so the batch aborts if this copy would take the
+      // placed count above what's owned (e.g. a copy placed elsewhere meanwhile).
+      assignmentQuantityAssertion(db, ownerId, version, slot.page_id, at, slot.card_id),
+    ]),
+    ...revisionStatements(db, version, now),
+  ]);
+  return { locations };
+}

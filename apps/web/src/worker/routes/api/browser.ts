@@ -984,6 +984,25 @@ browserApiRoutes.post('/binders/versions/:id/arrange', async (c) => {
     return apiFailure(c, error);
   }
 });
+// Marks exact-card pockets as holding copies the owner already has (see
+// assignOwnedExactTargets); `apply: false` previews the pockets it would mark.
+browserApiRoutes.post('/binders/versions/:id/assign-owned', async (c) => {
+  try {
+    const parsed = z
+      .object({ expectedRevision: z.number().int().nonnegative(), apply: z.boolean() })
+      .strict()
+      .safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const result = await ownerOperations(c.env, sessionOwner(c)).assignOwnedExactTargets(
+      c.req.param('id'),
+      parsed.data.expectedRevision,
+      parsed.data.apply,
+    );
+    return c.json({ ok: true, count: result.locations.length, locations: result.locations });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
 browserApiRoutes.post('/binders/versions/:id/pages', async (c) => {
   try {
     const parsed = binderRevisionRequestSchema.safeParse(await parsedJson(c.req.raw));
