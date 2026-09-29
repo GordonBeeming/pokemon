@@ -103,7 +103,7 @@ export function PeopleTab({ meId }: { meId: string | null }): ReactElement {
   const [inviting, setInviting] = useState(false);
   const [label, setLabel] = useState('');
   const [role, setRole] = useState<UserRole>('member');
-  const [created, setCreated] = useState<{ url: string; expiresAt: string } | null>(null);
+  const [created, setCreated] = useState<{ id: string; url: string } | null>(null);
 
   const busy = patchPerson.isPending;
 
@@ -177,65 +177,60 @@ export function PeopleTab({ meId }: { meId: string | null }): ReactElement {
             }
           />
         ))}
-        {created ? (
-          <li className="invite-row invite-row-new">
-            <span className="person-avatar person-avatar-invite" aria-hidden="true">
-              +
-            </span>
-            <span className="person-main">
-              <span className="person-name">
-                Invite link · works once · expires {formatDate(created.expiresAt)}
+        {pending.map((invite) => {
+          // The link exists only in the response that created it (the server keeps a
+          // hash), so the new invite's own row carries it until the page is left.
+          const link = created?.id === invite.id ? created.url : null;
+          return (
+            <li key={invite.id} className={link ? 'invite-row invite-row-new' : 'invite-row'}>
+              <span className="person-avatar person-avatar-invite" aria-hidden="true">
+                +
               </span>
-              <code className="invite-url">{created.url}</code>
-            </span>
-            <button
-              type="button"
-              className="button-primary"
-              onClick={() =>
-                void copyText(created.url).then((copied) =>
-                  toast(
-                    copied ? 'success' : 'error',
-                    copied ? 'Invite link copied.' : 'Copy failed; select the link instead.',
-                  ),
-                )
-              }
-            >
-              <Icon name="copy" />
-              Copy link
-            </button>
-          </li>
-        ) : null}
-        {pending.map((invite) => (
-          <li key={invite.id} className="invite-row">
-            <span className="person-avatar person-avatar-invite" aria-hidden="true">
-              +
-            </span>
-            <span className="person-main">
-              <span className="person-name">
-                Invite{invite.label ? ` for ${invite.label}` : ''} ·{' '}
-                {invite.role === 'admin' ? 'admin' : 'member'}
+              <span className="person-main">
+                <span className="person-name">
+                  Invite{invite.label ? ` for ${invite.label}` : ''} ·{' '}
+                  {invite.role === 'admin' ? 'admin' : 'member'}
+                </span>
+                <span className="settings-help">
+                  {link ? 'Works once' : 'Waiting'} · expires {formatDate(invite.expiresAt)}
+                </span>
+                {link ? <code className="invite-url">{link}</code> : null}
               </span>
-              <span className="settings-help">
-                Waiting · expires {formatDate(invite.expiresAt)}
-              </span>
-            </span>
-            <button
-              type="button"
-              disabled={cancelInvite.isPending}
-              onClick={() =>
-                cancelInvite.mutate(invite.id, {
-                  onSuccess: () => {
-                    toast('success', 'Invite cancelled. The link no longer works.');
-                    setCreated(null);
-                  },
-                  onError: (cause) => toast('error', peopleErrorMessage(cause)),
-                })
-              }
-            >
-              Cancel
-            </button>
-          </li>
-        ))}
+              {link ? (
+                <button
+                  type="button"
+                  className="button-primary"
+                  onClick={() =>
+                    void copyText(link).then((copied) =>
+                      toast(
+                        copied ? 'success' : 'error',
+                        copied ? 'Invite link copied.' : 'Copy failed; select the link instead.',
+                      ),
+                    )
+                  }
+                >
+                  <Icon name="copy" />
+                  Copy link
+                </button>
+              ) : null}
+              <button
+                type="button"
+                disabled={cancelInvite.isPending}
+                onClick={() =>
+                  cancelInvite.mutate(invite.id, {
+                    onSuccess: () => {
+                      toast('success', 'Invite cancelled. The link no longer works.');
+                      setCreated(null);
+                    },
+                    onError: (cause) => toast('error', peopleErrorMessage(cause)),
+                  })
+                }
+              >
+                Cancel
+              </button>
+            </li>
+          );
+        })}
       </ul>
       {inviting ? (
         <form
@@ -246,7 +241,7 @@ export function PeopleTab({ meId }: { meId: string | null }): ReactElement {
               { role, ...(label.trim() ? { label: label.trim() } : {}) },
               {
                 onSuccess: (result) => {
-                  setCreated({ url: result.inviteUrl, expiresAt: result.expiresAt });
+                  setCreated({ id: result.id, url: result.inviteUrl });
                   setInviting(false);
                   setLabel('');
                   toast(
