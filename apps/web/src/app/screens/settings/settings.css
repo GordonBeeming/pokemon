@@ -241,11 +241,6 @@
   color: #ffffff;
   border-radius: var(--radius-pill);
 }
-.person-avatar-invite {
-  font-size: 1.25rem;
-  color: var(--accent);
-  border: 2px dashed var(--accent);
-}
 .person-name {
   font-size: 0.9375rem;
   font-weight: 600;
@@ -266,8 +261,34 @@
   color: #334155;
   background: #f1f5f9;
 }
-.invite-row-new {
-  background: #f0fdff;
+.invite-created {
+  margin-top: 0.75rem;
+}
+.invite-section {
+  margin-top: 1rem;
+}
+.invite-section h3 {
+  margin: 0 0 0.25rem;
+  font-size: 0.9375rem;
+}
+.invite-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.invite-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0;
+  border-top: 1px solid #f1f5f9;
+}
+.invite-summary {
+  min-width: 0;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
 }
 
 .frame-row {
