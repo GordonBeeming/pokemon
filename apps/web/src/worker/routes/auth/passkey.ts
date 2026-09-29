@@ -115,7 +115,10 @@ export function passkeyIdentity(ownerLabel: string): {
     .replace(/[^a-z0-9]+/gu, '.')
     .replace(/^\.+|\.+$/gu, '');
   return {
-    rpName: `${userDisplayName || 'Owner'}'s Pokédex`,
+    // The site's name, the same for everyone who signs in here; the person is the
+    // user name. Managers that show it (iCloud Keychain, Google) title the passkey
+    // "Pokédex"; 1Password titles it from the domain instead.
+    rpName: 'Pokédex',
     userName: userName || 'member',
     userDisplayName: userDisplayName || 'Owner',
   };

@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { passkeyIdentity } from './passkey';
 
 describe('passkey identity', () => {
-  it('presents a human account name to passkey managers', () => {
+  it('names the site Pokédex and presents a human account name to passkey managers', () => {
     expect(passkeyIdentity('Gordon Beeming')).toEqual({
-      rpName: "Gordon Beeming's Pokédex",
+      rpName: 'Pokédex',
       userName: 'gordon.beeming',
       userDisplayName: 'Gordon Beeming',
     });
@@ -12,7 +12,7 @@ describe('passkey identity', () => {
 
   it('falls back safely when the configured label has no account characters', () => {
     expect(passkeyIdentity('  ')).toEqual({
-      rpName: "Owner's Pokédex",
+      rpName: 'Pokédex',
       userName: 'member',
       userDisplayName: 'Owner',
     });
