@@ -11,7 +11,10 @@
   font-weight: 700;
   letter-spacing: -0.02em;
 }
-.settings button {
+/* Segmented options draw their own track and selected pill (primitives.css). The
+   :where keeps this rule as weak as a plain `.settings button`, so .button-danger and
+   friends still win. */
+.settings button:where(:not(.segmented-control-option)) {
   display: inline-flex;
   align-items: center;
   justify-content: center;

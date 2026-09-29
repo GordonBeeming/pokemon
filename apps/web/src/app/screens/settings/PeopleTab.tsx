@@ -72,7 +72,11 @@ function PersonRow({
             key={role}
             type="button"
             aria-pressed={person.role === role}
-            className={person.role === role ? 'segmented-control-option-active' : undefined}
+            className={
+              person.role === role
+                ? 'segmented-control-option segmented-control-option-active'
+                : 'segmented-control-option'
+            }
             disabled={busy}
             onClick={() => {
               if (person.role !== role) onRole(role);
