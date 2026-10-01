@@ -906,6 +906,9 @@ export function BinderView({
           <p className="binder-meta">
             <span className="binder-page-indicator">
               Page {pageIndex + 1} / {Math.max(pageCount, 1)}
+              {currentPage?.kind === 'reserved'
+                ? ` · Reserved${currentPage.label ? `: ${currentPage.label}` : ''}`
+                : ''}
             </span>
             {phone ? null : <> · {metaText}</>}
           </p>

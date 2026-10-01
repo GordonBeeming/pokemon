@@ -592,10 +592,23 @@ an action at the end */
   background: #e7e0f3;
 }
 .binder-page-reserved-label {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   margin: 0;
-  font-size: 0.8125rem;
+  overflow: hidden;
+  font-size: 0.6875rem;
   font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
   color: #4c1d95;
+  /* Reads bottom to top, like a spine label. */
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
 }
 .binder-page-grid {
   display: grid;

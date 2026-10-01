@@ -357,8 +357,18 @@ export function PageTrack(props: PageTrackProps): ReactElement {
                   gap: geometry.gap,
                 }}
               >
+                {/* Up the page's left margin, so a reserved page is no taller than its
+                    neighbours. A phone's margin is too thin to read in; there the
+                    header names the page and this stays for screen readers. */}
                 {reserved ? (
-                  <p className="binder-page-reserved-label">
+                  <p
+                    className={
+                      geometry.pad >= 12
+                        ? 'binder-page-reserved-label'
+                        : 'binder-page-reserved-label sr-only'
+                    }
+                    style={{ width: geometry.pad }}
+                  >
                     Reserved page{page.label ? `: ${page.label}` : ''}
                   </p>
                 ) : null}
