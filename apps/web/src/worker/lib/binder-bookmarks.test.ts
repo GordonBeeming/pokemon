@@ -194,6 +194,69 @@ describe('binder bookmarks', () => {
     expect(copied[0]?.id).not.toBe(marks[0]?.id);
     expect(copied[0]?.pageId).not.toBe(marks[0]?.pageId);
   });
+  it('bookmarks an ordinary page by name without reserving it, and lists it like a reserved page', async () => {
+    const { db, binder } = await setup(12);
+    const named = await reserveBinderPage(
+      db,
+      'owner',
+      binder.version.id,
+      1,
+      false,
+      'Johto starts',
+      binder.version.revision,
+    );
+    expect(named.pages[0]).toMatchObject({ kind: 'slots', label: 'Johto starts' });
+    const reserved = await reserveBinderPage(
+      db,
+      'owner',
+      binder.version.id,
+      2,
+      true,
+      'Art',
+      named.version.revision,
+    );
+    expect(
+      (await getBinderBookmarks(db, 'owner', binder.version.id)).map((mark) => ({
+        kind: mark.kind,
+        name: mark.name,
+        page: mark.at.page,
+      })),
+    ).toEqual([
+      { kind: 'page', name: 'Johto starts', page: 1 },
+      { kind: 'reserved-page', name: 'Art', page: 2 },
+    ]);
+
+    const clone = await cloneBinderVersion(
+      db,
+      'owner',
+      binder.version.id,
+      reserved.version.revision,
+    );
+    expect(
+      (await getBinderBookmarks(db, 'owner', clone.version.id)).map((mark) => ({
+        kind: mark.kind,
+        name: mark.name,
+        page: mark.at.page,
+      })),
+    ).toEqual([
+      { kind: 'page', name: 'Johto starts', page: 1 },
+      { kind: 'reserved-page', name: 'Art', page: 2 },
+    ]);
+
+    const cleared = await reserveBinderPage(
+      db,
+      'owner',
+      binder.version.id,
+      1,
+      false,
+      null,
+      reserved.version.revision,
+    );
+    expect(cleared.pages[0]).toMatchObject({ kind: 'slots', label: null });
+    expect(
+      (await getBinderBookmarks(db, 'owner', binder.version.id)).map((mark) => mark.name),
+    ).toEqual(['Art']);
+  });
   it('removes bookmarks when their pocket is trimmed or page deleted', async () => {
     const { db, binder } = await setup();
     const pages = (await getBinderVersion(db, 'owner', binder.version.id, 0, 2)).pages;

@@ -891,9 +891,10 @@ export async function searchBinderSpaces(
         OR (s.entry_kind='exact-card' AND instr(${foldText("COALESCE(c.name,'') || ' ' || COALESCE(c.set_name,'') || ' ' || COALESCE(c.number,'')")},?2)>0))
     UNION ALL
     SELECT position AS page,NULL AS row,NULL AS column,'reserved-page' AS kind,NULL AS pokemon_number,NULL AS assigned_card_id,
-      'Reserved page: ' || COALESCE(label,'Unlabelled') AS label
-    FROM binder_pages WHERE binder_version_id=?1 AND kind='reserved'
-      AND instr(${foldText("'reserved page ' || COALESCE(label,'')")},?2)>0
+      CASE WHEN kind='reserved' THEN 'Reserved page: ' || COALESCE(label,'Unlabelled')
+        ELSE 'Page: ' || label END AS label
+    FROM binder_pages WHERE binder_version_id=?1 AND (kind='reserved' OR label IS NOT NULL)
+      AND instr(${foldText("CASE WHEN kind='reserved' THEN 'reserved page ' ELSE 'page ' END || COALESCE(label,'')")},?2)>0
       AND json_valid(?8)
     ORDER BY page,row,column LIMIT 51 OFFSET ?7
   `,
@@ -1866,10 +1867,14 @@ export async function cloneBinderVersion(
   expectedRevision(source, requestedRevision);
   const pages = await listPageRows(db, sourceVersionId);
   const newVersionId = newId('binder_version');
+  // Kind and label travel with the page, so a draft keeps its reserved pages and page
+  // bookmarks.
   const mapping = pages.map((page) => ({
     sourceId: page.id,
     newId: newId('page'),
     position: page.position,
+    kind: page.kind ?? 'slots',
+    label: page.label ?? null,
   }));
   const mappingJson = JSON.stringify(mapping);
   const now = nowSeconds();
@@ -1888,11 +1893,13 @@ export async function cloneBinderVersion(
       .prepare(
         `WITH mapping AS (
           SELECT json_extract(value, '$.newId') AS new_id,
-            CAST(json_extract(value, '$.position') AS INTEGER) AS position
+            CAST(json_extract(value, '$.position') AS INTEGER) AS position,
+            json_extract(value, '$.kind') AS kind,
+            json_extract(value, '$.label') AS label
           FROM json_each(?1)
          )
-         INSERT INTO binder_pages (id, binder_version_id, position)
-         SELECT new_id, ?2, position FROM mapping`,
+         INSERT INTO binder_pages (id, binder_version_id, position, kind, label)
+         SELECT new_id, ?2, position, kind, label FROM mapping`,
       )
       .bind(mappingJson, newVersionId),
     db
@@ -2901,8 +2908,10 @@ export async function reserveBinderPage(
     .prepare('SELECT kind FROM binder_pages WHERE id = ?1')
     .bind(page.id)
     .first<{ kind: 'slots' | 'reserved' }>();
-  if (reserved && currentPage?.kind === 'reserved') {
-    // Already reserved: a label-only rename must not reflow or move any other page's slots.
+  if (reserved === (currentPage?.kind === 'reserved')) {
+    // The page keeps its kind, so this only names it: renaming a reserved page, or
+    // bookmarking an ordinary page (a name without reserving its pockets; null clears
+    // it). Neither may reflow or move any other page's slots.
     await runVersionBatch(db, ownerId, versionId, version.revision, false, [
       db.prepare('UPDATE binder_pages SET label = ?1 WHERE id = ?2').bind(label, page.id),
       ...revisionStatements(db, version, nowSeconds()),
@@ -2915,7 +2924,8 @@ export async function reserveBinderPage(
   await runVersionBatch(db, ownerId, versionId, version.revision, false, [
     db
       .prepare('UPDATE binder_pages SET kind = ?1, label = ?2 WHERE id = ?3')
-      .bind(reserved ? 'reserved' : 'slots', reserved ? label : null, page.id),
+      // Unreserving with a label keeps the page bookmarked under that name.
+      .bind(reserved ? 'reserved' : 'slots', label, page.id),
     ...revisionStatements(db, version, nowSeconds()),
   ]);
   return mutationResult(db, ownerId, versionId, [pagePosition]);
@@ -2975,7 +2985,18 @@ export async function getBinderBookmarks(
         at: { page: page.position, row: 0, column: 0 },
       }),
     );
-  return [...pocketBookmarks, ...reservedBookmarks].sort(
+  const pageBookmarks = pages
+    .filter((page) => page.kind !== 'reserved' && page.label)
+    .map((page) =>
+      binderBookmarkSchema.parse({
+        id: `page:${page.id}`,
+        kind: 'page',
+        name: page.label,
+        pageId: page.id,
+        at: { page: page.position, row: 0, column: 0 },
+      }),
+    );
+  return [...pocketBookmarks, ...reservedBookmarks, ...pageBookmarks].sort(
     (a, b) => a.at.page - b.at.page || a.at.row - b.at.row || a.at.column - b.at.column,
   );
 }

@@ -174,6 +174,62 @@ export function ReserveSleevePanel({
   );
 }
 
+/** Names an ordinary page so it shows in the bookmark list and heads its section, the
+ * way a reserved page does, while its pockets stay in use. */
+export function PageBookmarkPanel({
+  initialName,
+  pending,
+  error,
+  onSave,
+  onRemove,
+  onClose,
+}: {
+  initialName: string;
+  pending: boolean;
+  error: string | null;
+  onSave: (name: string) => void;
+  onRemove: () => void;
+  onClose: () => void;
+}): ReactElement {
+  const [name, setName] = useState(initialName);
+  const bookmarked = initialName !== '';
+  return (
+    <Panel title={bookmarked ? 'Edit page bookmark' : 'Bookmark this page'} onClose={onClose}>
+      <form
+        className="panel-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!pending && name.trim()) onSave(name.trim());
+        }}
+      >
+        <PanelError error={error} />
+        <label className="panel-field">
+          <span>Bookmark name</span>
+          <input
+            value={name}
+            maxLength={120}
+            disabled={pending}
+            onChange={(event) => setName(event.target.value)}
+          />
+        </label>
+        <p className="panel-help">
+          The page shows this name, joins the bookmark list, and its pockets stay in use.
+        </p>
+        <div className="panel-actions">
+          <button type="submit" className="button-primary" disabled={pending || !name.trim()}>
+            {bookmarked ? 'Save bookmark' : 'Bookmark this page'}
+          </button>
+          {bookmarked ? (
+            <button type="button" className="button-text" disabled={pending} onClick={onRemove}>
+              Remove bookmark
+            </button>
+          ) : null}
+        </div>
+      </form>
+    </Panel>
+  );
+}
+
 export function PageReservePanel({
   reserved,
   initialLabel,

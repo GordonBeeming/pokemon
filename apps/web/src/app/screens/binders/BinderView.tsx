@@ -73,6 +73,7 @@ import { InsertPagesPanel, MovePagePanel, movedPageOrder } from './panels/PagePa
 import { PastePanel } from './panels/PastePanel';
 import {
   BookmarkPanel,
+  PageBookmarkPanel,
   PageReservePanel,
   RemovePanel,
   ReserveSleevePanel,
@@ -100,6 +101,7 @@ type PanelKind =
   | 'remove'
   | 'reserve'
   | 'page-reserve'
+  | 'page-bookmark'
   | 'insert-pages'
   | 'move-page'
   | 'manage'
@@ -221,7 +223,9 @@ export function BinderView({
   // Each page's header names the section it sits in: the nearest reserved page (or,
   // per binder, the nearest bookmark of any kind) at or before it.
   const sectionMarks = (bookmarks.data ?? [])
-    .filter((bookmark) => pageSection === 'bookmark' || bookmark.kind === 'reserved-page')
+    // Named pages: reserved pages and bookmarked ordinary pages. Pocket bookmarks
+    // count only when the binder is set to follow any bookmark.
+    .filter((bookmark) => pageSection === 'bookmark' || bookmark.kind !== 'pocket')
     .map((bookmark) => ({ page: bookmark.at.page, name: bookmark.name }))
     .sort((a, b) => a.page - b.page);
   const sectionFor = (index: number): string | null => {
@@ -783,6 +787,7 @@ export function BinderView({
         )
       : undefined;
   const reservedPage = currentPage?.kind === 'reserved';
+  const pageBookmarkName = !reservedPage ? (currentPage?.label ?? '') : '';
   const pageRemovable =
     currentPage !== undefined &&
     currentPage.kind !== 'reserved' &&
@@ -851,8 +856,10 @@ export function BinderView({
 
   const pageMenuActions: PageMenuActions = {
     reservedPage,
+    bookmarkedPage: pageBookmarkName !== '',
     canRemove: pageRemovable,
     onReservePage: () => setPanel('page-reserve'),
+    onBookmarkPage: () => setPanel('page-bookmark'),
     onInsertPages: () => setPanel('insert-pages'),
     onMoveTo: () => setPanel('move-page'),
     onEarlier: () => reorder(-1),
@@ -901,8 +908,8 @@ export function BinderView({
         value={pageSection}
         onChange={(value) => void patchDisplay({ pageSection: value })}
         options={[
-          { value: 'reserved', label: 'Reserved page' },
-          { value: 'bookmark', label: 'Bookmark' },
+          { value: 'reserved', label: 'Page name' },
+          { value: 'bookmark', label: 'Any bookmark' },
           { value: 'none', label: 'Nothing' },
         ]}
       />
@@ -1495,6 +1502,34 @@ export function BinderView({
           }
           onUnreserve={() =>
             void run('Page unreserved.', (revision) =>
+              binderApi.reservePage(versionId, pageIndex, false, null, revision),
+            ).then(
+              () =>
+                void queryClient.invalidateQueries({
+                  queryKey: queryKeys.binders.bookmarks(versionId),
+                }),
+            )
+          }
+          onClose={closePanel}
+        />
+      ) : null}
+      {panel === 'page-bookmark' && versionId ? (
+        <PageBookmarkPanel
+          initialName={pageBookmarkName}
+          pending={pending}
+          error={writer.error}
+          onSave={(name) =>
+            void run(`Page bookmarked as ${name}.`, (revision) =>
+              binderApi.reservePage(versionId, pageIndex, false, name, revision),
+            ).then(
+              () =>
+                void queryClient.invalidateQueries({
+                  queryKey: queryKeys.binders.bookmarks(versionId),
+                }),
+            )
+          }
+          onRemove={() =>
+            void run('Page bookmark removed.', (revision) =>
               binderApi.reservePage(versionId, pageIndex, false, null, revision),
             ).then(
               () =>

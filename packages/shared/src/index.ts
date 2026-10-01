@@ -510,7 +510,9 @@ export const binderReservePageRequestSchema = binderRevisionRequestSchema
   })
   .strict();
 
-export const binderBookmarkKindSchema = z.enum(['pocket', 'reserved-page']);
+// 'page' is a named ordinary page: it bookmarks the page like a reserved page does,
+// without reserving its pockets.
+export const binderBookmarkKindSchema = z.enum(['pocket', 'reserved-page', 'page']);
 export type BinderBookmarkKind = z.infer<typeof binderBookmarkKindSchema>;
 
 export const binderBookmarkSchema = z

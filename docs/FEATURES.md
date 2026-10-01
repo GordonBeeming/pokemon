@@ -541,6 +541,14 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] keep · "Reserve this page" / "Edit page label" offers an optional label, and "Unreserve this
       page" once reserved · done when: reserving a page with a label shows that label in the bookmark
       jump list.
+- [ ] new · "Bookmark this page" names an ordinary page without reserving it: the page header shows
+      the name, it joins the bookmark jump list and binder search, later pages show it as their
+      section, and its pockets stay in use · done when: bookmarking page 2 as "Starters" lists
+      "Starters · page 2", page 3's header reads "Starters", and page 2's targets are unchanged.
+- [ ] new · Every page has a header with its page number, the name of a reserved or bookmarked page,
+      and on the right the section it sits in; Display → "Page header shows" picks, per binder,
+      page names, any bookmark, or nothing · done when: all pages on screen are the same height and
+      switching the setting changes what the right side shows.
 - [ ] keep · "Move page earlier" / "Move page later" reorders pages, and the page stepper reflects
       the new order immediately · done when: moving the second page earlier swaps its position with
       the first page.

@@ -360,16 +360,18 @@ export function PageTrack(props: PageTrackProps): ReactElement {
                 }}
               >
                 {/* Every page carries the same header row, so pages are always one
-                    height: its page number, a reserved page's name beside it, and on
-                    the right the section the page sits in. */}
+                    height: its page number, the name of a reserved or bookmarked page
+                    beside it, and on the right the section the page sits in. */}
                 <p className="binder-page-header">
                   <span>Page {index + 1}</span>
                   {reserved ? (
                     <span className="binder-page-reserved-label">
                       Reserved{page.label ? `: ${page.label}` : ''}
                     </span>
+                  ) : page?.label ? (
+                    <span className="binder-page-reserved-label">{page.label}</span>
                   ) : null}
-                  {!reserved && props.sectionFor?.(index) ? (
+                  {!reserved && !page?.label && props.sectionFor?.(index) ? (
                     <span className="binder-page-section">{props.sectionFor(index)}</span>
                   ) : null}
                 </p>

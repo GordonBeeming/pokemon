@@ -6,8 +6,11 @@ import { SelectField } from '../../ui/SelectField';
 
 export interface PageMenuActions {
   reservedPage: boolean;
+  /** An ordinary page that carries a bookmark name. */
+  bookmarkedPage: boolean;
   canRemove: boolean;
   onReservePage: () => void;
+  onBookmarkPage: () => void;
   onInsertPages: () => void;
   onMoveTo: () => void;
   onEarlier: () => void;
@@ -223,6 +226,17 @@ function pageActions(
       disabled,
       run: actions.onReservePage,
     },
+    // A reserved page is already named; a bookmark is the same name on a page that
+    // keeps its pockets.
+    ...(actions.reservedPage
+      ? []
+      : [
+          {
+            label: actions.bookmarkedPage ? 'Edit page bookmark' : 'Bookmark this page',
+            disabled,
+            run: actions.onBookmarkPage,
+          },
+        ]),
     { label: 'Add blank pages here…', disabled, run: actions.onInsertPages },
     {
       label: 'Move this page to…',

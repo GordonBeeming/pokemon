@@ -321,6 +321,42 @@ test.describe('binder pages from anywhere', () => {
       'Reserved: Art',
     );
   });
+
+  test('bookmarking a page names it, lists it, and heads the pages after it', async ({ page }) => {
+    const binder = await createBinder(page.request, 4, species(1, 30));
+    await openBinder(page, binder, 2);
+    await page.locator('.binder-tools-trigger').tap();
+    await page.getByRole('button', { name: 'Bookmark this page' }).tap();
+    const panel = page.getByRole('dialog', { name: 'Bookmark this page' });
+    await panel.getByLabel('Bookmark name').fill('Starters');
+    await panel.getByRole('button', { name: 'Bookmark this page' }).tap();
+    await expectDoneAndClosed(page, 'Page bookmarked as Starters.');
+
+    const current = page.locator('.binder-page:not(.binder-page-peek)');
+    await expect(current.locator('.binder-page-reserved-label')).toHaveText('Starters');
+    // Still an ordinary page: its pockets keep their targets.
+    await expect(current).not.toHaveClass(/binder-page-reserved/);
+    await expect(current.locator('[data-pocket="1:0:0"]')).toBeVisible();
+
+    await page.getByRole('button', { name: /Jump to bookmark/ }).tap();
+    await expect(page.getByRole('option', { name: 'Starters · page 2' })).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    await openBinder(page, binder, 3);
+    await expect(
+      page.locator('.binder-page:not(.binder-page-peek) .binder-page-section'),
+    ).toHaveText('Starters');
+
+    await openBinder(page, binder, 2);
+    await page.locator('.binder-tools-trigger').tap();
+    await page.getByRole('button', { name: 'Edit page bookmark' }).tap();
+    await page
+      .getByRole('dialog', { name: 'Edit page bookmark' })
+      .getByRole('button', { name: 'Remove bookmark' })
+      .tap();
+    await expectDoneAndClosed(page, 'Page bookmark removed.');
+    await expect(current.locator('.binder-page-reserved-label')).toHaveCount(0);
+  });
 });
 
 test.describe('basic controls', () => {
