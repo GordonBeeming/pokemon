@@ -61,6 +61,8 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
   const toast = useToast();
 
   useEffect(() => setQueryDraft(search.q), [search.q]);
+  const [numberDraft, setNumberDraft] = useState(search.number);
+  useEffect(() => setNumberDraft(search.number), [search.number]);
 
   const updateSearch = useCallback(
     (patch: Partial<CatalogueSearch>, resetPage = true) => {
@@ -220,7 +222,8 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
   // only sign on a phone of whose cards these are.
   const countedFilters = activeFilterCount - (search.artist ? 1 : 0);
   const phoneSummary = [
-    search.q ? `“${search.q}”` : search.artist ? null : 'Search cards',
+    search.q ? `“${search.q}”` : search.artist || search.number ? null : 'Search cards',
+    search.number ? `No. ${search.number}` : null,
     search.artist ?? null,
     search.owned === 'owned' ? 'Owned' : search.owned === 'missing' ? 'Missing' : null,
     countedFilters > 0 ? `${countedFilters} filter${countedFilters === 1 ? '' : 's'}` : null,
@@ -348,7 +351,7 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
             role="search"
             onSubmit={(event) => {
               event.preventDefault();
-              updateSearch({ q: queryDraft });
+              updateSearch({ q: queryDraft, number: numberDraft.trim() });
             }}
           >
             <label className="catalogue-search-field">
@@ -360,6 +363,20 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
                 onChange={(event) => setQueryDraft(event.target.value)}
               />
             </label>
+            {/* A species gallery's search box already takes a number; everywhere else a
+                second box narrows the search to one printing ("Squirtle" + "33"). */}
+            {!speciesEntry ? (
+              <label className="catalogue-number-field">
+                Card no.
+                <input
+                  value={numberDraft}
+                  maxLength={32}
+                  placeholder="e.g. 33"
+                  autoCapitalize="characters"
+                  onChange={(event) => setNumberDraft(event.target.value)}
+                />
+              </label>
+            ) : null}
             <div className="bar-field">
               <span className="bar-field-label" aria-hidden="true">
                 Collection

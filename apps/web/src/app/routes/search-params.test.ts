@@ -17,6 +17,8 @@ describe('catalogueSearch', () => {
   it('round-trips a fully populated search', () => {
     const initial = catalogueSearch.parse({
       q: 'pikachu',
+      // The router hands an all-digit value over as a number; it must come back as text.
+      number: 33,
       type: ['lightning', 'colorless'],
       region: 'Kanto',
       rarity: ['C', 'HV'],
@@ -31,6 +33,7 @@ describe('catalogueSearch', () => {
     });
     expect(initial).toEqual({
       q: 'pikachu',
+      number: '33',
       type: ['lightning', 'colorless'],
       region: 'Kanto',
       rarity: ['C', 'HV'],

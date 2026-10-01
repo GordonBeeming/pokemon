@@ -162,9 +162,11 @@ export function CardPicker({
                 onClick={() => onPick?.(card)}
               >
                 <CardFrame card={frameCardFrom(card)} state="owned" forceSolid palette={palette} />
-                <span className="card-picker-name">{card.name}</span>
-                <span className="card-picker-meta">
-                  {card.setName} · {card.number}
+                <span className="card-picker-name" title={card.name}>
+                  {card.name}
+                </span>
+                <span className="card-picker-meta" title={`${card.number} · ${card.setName}`}>
+                  {card.number} · {card.setName}
                 </span>
               </button>
             ),

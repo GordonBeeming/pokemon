@@ -23,7 +23,8 @@
   align-items: flex-end;
   gap: 0.75rem;
 }
-.catalogue-search-field {
+.catalogue-search-field,
+.catalogue-number-field {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -34,6 +35,13 @@
 .catalogue-search-field {
   flex: 1 1 16rem;
   min-width: 12rem;
+}
+.catalogue-number-field {
+  flex: 0 0 7rem;
+}
+.catalogue-number-field input {
+  width: 100%;
+  min-width: 0;
 }
 .catalogue-search-bar input {
   height: 2.75rem;
@@ -191,9 +199,14 @@
   color: var(--muted);
 }
 
+/* On a phone the name and number boxes share a row, the number box narrow. */
 @media (max-width: 480px) {
   .catalogue-search-field {
-    min-width: 100%;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .catalogue-number-field {
+    flex-basis: 5.5rem;
   }
 }
 

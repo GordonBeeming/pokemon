@@ -100,6 +100,14 @@ describe('catalogue search filters', () => {
     expect(await ids(db, { artist: 'Ken' })).toEqual([]);
   });
 
+  it('narrows by printed card number alongside other filters, ignoring leading zeros', async () => {
+    const db = setup();
+    expect(await ids(db, { setIds: ['set-a'], cardNumber: '003' })).toEqual(['kanto-other']);
+    expect(await ids(db, { setIds: ['set-a'], cardNumber: '#3' })).toEqual(['kanto-other']);
+    expect(await ids(db, { setIds: ['set-b'], cardNumber: '3' })).toEqual([]);
+    expect(await ids(db, { cardNumber: '2' })).toEqual(['fire-mon']);
+  });
+
   it('combines frame type and rarity filters', async () => {
     const db = setup();
     expect(await ids(db, { frameTypes: ['grass'], rarityKeys: ['C'] })).toEqual(['grass-mon']);

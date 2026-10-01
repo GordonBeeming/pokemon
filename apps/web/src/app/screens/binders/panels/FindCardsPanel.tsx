@@ -51,9 +51,11 @@ function AddAndPlaceTile({
       }
     >
       <CardFrame card={frameCardFrom(card)} state="owned" forceSolid palette={palette} />
-      <span className="card-picker-name">{card.name}</span>
-      <span className="card-picker-meta">
-        {card.setName} · {card.number}
+      <span className="card-picker-name" title={card.name}>
+        {card.name}
+      </span>
+      <span className="card-picker-meta" title={`${card.number} · ${card.setName}`}>
+        {card.number} · {card.setName}
       </span>
       <span className="find-cards-action">Add a copy and place</span>
     </button>
@@ -162,9 +164,14 @@ export function FindCardsPanel({
                 {card ? (
                   <CardFrame card={frameCardFrom(card)} state="owned" palette={palette} />
                 ) : null}
-                <span className="card-picker-name">{candidate.name}</span>
-                <span className="card-picker-meta">
-                  {candidate.setCode ?? candidate.setName} · {candidate.number} ·{' '}
+                <span className="card-picker-name" title={candidate.name}>
+                  {candidate.name}
+                </span>
+                <span
+                  className="card-picker-meta"
+                  title={`${candidate.number} · ${candidate.setName} · ${candidate.available} spare`}
+                >
+                  {candidate.number} · {candidate.setCode ?? candidate.setName} ·{' '}
                   {candidate.available} spare
                 </span>
                 <span className="find-cards-action">Place</span>

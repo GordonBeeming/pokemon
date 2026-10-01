@@ -33,11 +33,22 @@ const detailResponseSchema = z
 export function catalogueWireParams(
   filters: Pick<
     CatalogueSearch,
-    'q' | 'type' | 'region' | 'rarity' | 'set' | 'language' | 'owned' | 'sort' | 'dex' | 'artist'
+    | 'q'
+    | 'number'
+    | 'type'
+    | 'region'
+    | 'rarity'
+    | 'set'
+    | 'language'
+    | 'owned'
+    | 'sort'
+    | 'dex'
+    | 'artist'
   >,
 ): URLSearchParams {
   const params = new URLSearchParams({ includePokemonNumber: 'true' });
   if (filters.q) params.set('q', filters.q);
+  if (filters.number) params.set('number', filters.number);
   if (filters.owned !== 'all') params.set('owned', filters.owned === 'owned' ? 'true' : 'false');
   if (filters.sort === 'release-date') params.set('sort', 'release');
   for (const type of filters.type) params.append('type', type);

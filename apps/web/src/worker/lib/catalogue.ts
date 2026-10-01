@@ -79,6 +79,9 @@ export interface CatalogueFilters {
   setId?: string;
   species?: string;
   artist?: string;
+  /** The printed card number, matched like a numeric search (leading zeros and any
+   * set total ignored), so it narrows a name search to one printing. */
+  cardNumber?: string;
   pokedexNumber?: number;
   cursor?: string | null;
   includePokemonNumber?: boolean;
@@ -1345,6 +1348,12 @@ export async function searchCards(
     where.push(`c.species = ?${values.length + 1}`);
     values.push(filters.species);
   }
+  const cardNumberFilter = filters.cardNumber?.trim().replace(/^#/u, '').toUpperCase();
+  if (cardNumberFilter) {
+    const numerator = "trim(substr(c.number, 1, instr(c.number || '/', '/') - 1))";
+    where.push(`upper(ltrim(${numerator}, '0')) = ltrim(?${values.length + 1}, '0')`);
+    values.push(cardNumberFilter);
+  }
   if (filters.artist) {
     const spellings = await artistSpellings(db, filters.artist);
     const placeholders = spellings.map((_, index) => `?${values.length + index + 1}`);
@@ -1396,6 +1405,7 @@ export async function searchCards(
     setIds: filters.setIds?.slice().sort() ?? null,
     species: filters.species ?? null,
     artist: filters.artist ?? null,
+    numberFilter: cardNumberFilter || null,
     pokedexNumber: filters.pokedexNumber ?? null,
     region: filters.region ?? null,
     frameTypes: filters.frameTypes?.slice().sort() ?? null,

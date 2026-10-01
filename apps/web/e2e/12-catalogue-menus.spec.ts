@@ -62,3 +62,31 @@ test('Settings adds a custom card, which the catalogue then finds by name', asyn
   await page.goto(`/catalogue?q=${encodeURIComponent(name)}`);
   await expect(page.locator('.catalogue-grid button.card-frame').first()).toBeVisible();
 });
+
+test('a card number box narrows a name search to one printing', async ({ page }) => {
+  const all = await page.request.get('/api/catalogue/search?q=squirtle&limit=100');
+  expect(all.ok()).toBe(true);
+  const body = (await all.json()) as { total: number; cards: { number: string }[] };
+  const target = body.cards.find((card) => /^\d+$/u.test(card.number));
+  if (!target) throw new Error('no Squirtle with a plain number in this database copy');
+  const narrowed = await page.request.get(
+    `/api/catalogue/search?q=squirtle&number=${encodeURIComponent(target.number)}&limit=100`,
+  );
+  const narrowedBody = (await narrowed.json()) as { total: number };
+  expect(narrowedBody.total).toBeGreaterThan(0);
+  expect(narrowedBody.total).toBeLessThan(body.total);
+
+  await page.goto('/catalogue?q=squirtle');
+  await ensureCatalogueControlsOpen(page);
+  await page.getByLabel('Card no.').fill(target.number);
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  // The router keeps an all-digit string as text by writing it JSON-quoted ("33").
+  await expect
+    .poll(() => new URL(page.url()).searchParams.get('number')?.replace(/"/gu, ''))
+    .toBe(target.number);
+  await expect(page.getByText(new RegExp(`of ${narrowedBody.total} cards?\\.`))).toBeVisible();
+  // It survives a reload as the same number.
+  await page.reload();
+  await ensureCatalogueControlsOpen(page);
+  await expect(page.getByLabel('Card no.')).toHaveValue(target.number);
+});

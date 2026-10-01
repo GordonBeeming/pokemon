@@ -1045,6 +1045,9 @@ an action at the end */
 .binder-panel .card-picker-item {
   flex-direction: column;
   align-items: stretch;
+  /* The card sits at the top of every tile; text below is one line each, so tiles in
+     a row match without the card drifting down to make room. */
+  justify-content: flex-start;
   gap: 0.25rem;
   min-width: 0;
   height: auto;
@@ -1064,10 +1067,16 @@ an action at the end */
   font-weight: 600;
   color: var(--accent-deep);
 }
+.card-picker-name,
+.card-picker-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .card-picker-name {
   font-size: 0.8125rem;
   font-weight: 600;
-  overflow-wrap: anywhere;
 }
 .card-picker-meta {
   font-size: 0.75rem;

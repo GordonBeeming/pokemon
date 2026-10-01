@@ -19,6 +19,12 @@ function dropInvalid<Shape extends z.ZodRawShape>(
   return schema.parse(accepted);
 }
 
+// The router parses query values as JSON, so free text that happens to be all digits
+// ("33", a card number or a numeric search) arrives as a number; read it back as text.
+function text() {
+  return z.preprocess((value) => (typeof value === 'number' ? String(value) : value), z.string());
+}
+
 // List params can arrive as a real array (repeated keys) or as one comma-joined
 // string (a typed-in or bookmarked URL), so both shapes are accepted on the way in.
 function csv<Item extends z.ZodTypeAny>(item: Item) {
@@ -67,7 +73,9 @@ export const catalogueSortOrders = [
 ] as const;
 
 const catalogueSearchSchema = z.object({
-  q: z.string().default(''),
+  q: text().default(''),
+  // The printed card number, on top of the search text: "Squirtle" then "33".
+  number: text().pipe(z.string().trim().max(32)).default(''),
   type: csv(z.string()).default([]),
   region: z.string().min(1).optional(),
   rarity: csv(z.string()).default([]),
@@ -92,7 +100,7 @@ export type CatalogueOwnedFilter = (typeof catalogueOwnedFilters)[number];
 export const pokedexFilters = ['all', 'owned', 'missing'] as const;
 
 const pokedexSearchSchema = z.object({
-  q: z.string().default(''),
+  q: text().default(''),
   region: z.string().min(1).optional(),
   filter: z.enum(pokedexFilters).default('all'),
   page: z.coerce.number().int().min(1).default(1),
@@ -113,7 +121,7 @@ export type SetsSearch = z.infer<typeof setsSearchSchema>;
 export const illustratorSortOrders = ['name', 'card-count'] as const;
 
 const illustratorsSearchSchema = z.object({
-  q: z.string().default(''),
+  q: text().default(''),
   sort: z.enum(illustratorSortOrders).default('name'),
 });
 export const illustratorsSearch = defineSearchParams(illustratorsSearchSchema);
@@ -129,7 +137,7 @@ const binderSearchSchema = z.object({
   v: z.string().min(1).max(128).optional(),
   sel: z.string().min(1).max(200).optional(),
   mode: z.enum(binderModes).optional(),
-  q: z.string().default(''),
+  q: text().default(''),
 });
 export const binderSearch = defineSearchParams(binderSearchSchema);
 export type BinderSearch = z.infer<typeof binderSearchSchema>;
