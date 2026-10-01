@@ -160,15 +160,19 @@ test('Reserve page for fills the page’s empty pockets with a set target', asyn
     phone,
     panel.getByRole('button', { name: new RegExp(`^${escape(set.setName)}`) }),
   );
-  await press(page, phone, panel.getByRole('button', { name: 'Reserve 9 empty pockets' }));
+  await expect(panel.getByRole('button', { name: 'Reserve 9 empty pockets' })).toBeEnabled();
+  await panel.getByLabel('How many pages').fill('2');
+  await press(page, phone, panel.getByRole('button', { name: 'Reserve 2 pages' }));
   await expect(page.getByRole('dialog')).toHaveCount(0);
 
-  const reserved = await api.binderPage(page.request, versionId, 1);
-  expect((reserved.pages[0]?.slots ?? []).map((slot) => slot.entryKind)).toEqual(
-    Array.from({ length: 9 }, () => 'set'),
-  );
+  for (const index of [1, 2]) {
+    const reserved = await api.binderPage(page.request, versionId, index);
+    expect((reserved.pages[0]?.slots ?? []).map((slot) => slot.entryKind)).toEqual(
+      Array.from({ length: 9 }, () => 'set'),
+    );
+  }
   // The pages either side are untouched.
-  for (const index of [0, 2]) {
+  for (const index of [0, 3]) {
     const other = await api.binderPage(page.request, versionId, index);
     expect((other.pages[0]?.slots ?? []).every((slot) => slot.entryKind === 'empty')).toBe(true);
   }

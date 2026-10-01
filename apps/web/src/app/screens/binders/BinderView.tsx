@@ -865,7 +865,6 @@ export function BinderView({
     canRemove: pageRemovable,
     onReservePage: () => setPanel('page-reserve'),
     onBookmarkPage: () => setPanel('page-bookmark'),
-    emptyPockets: pageEmptyPockets,
     onFillPage: () => setPanel('page-fill'),
     onInsertPages: () => setPanel('insert-pages'),
     onMoveTo: () => setPanel('move-page'),
@@ -1552,11 +1551,15 @@ export function BinderView({
       {panel === 'page-fill' && versionId ? (
         <PageFillPanel
           emptyPockets={pageEmptyPockets}
+          pagesLeft={Math.max(1, pageCount - pageIndex)}
           pending={pending}
           error={writer.error}
-          onFill={(target, name) =>
-            void run(`Page reserved for any ${name}.`, (revision) =>
-              binderApi.fillPage(versionId, pageIndex, target, revision),
+          onFill={(target, name, pages) =>
+            void run(
+              pages === 1
+                ? `Page reserved for any ${name}.`
+                : `${pages} pages reserved for any ${name}.`,
+              (revision) => binderApi.fillPage(versionId, pageIndex, target, pages, revision),
             )
           }
           onClose={closePanel}

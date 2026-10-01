@@ -2600,9 +2600,9 @@ async function requireSets(db: D1Database, entries: readonly BinderEntry[]): Pro
 }
 
 /**
- * Gives every empty pocket on one page the same any-card target (a Pokémon or a set).
- * Unlike an insert, nothing shifts: pockets that already hold something keep it, and
- * no other page is touched.
+ * Gives every empty pocket on a run of pages the same any-card target (a Pokémon or a
+ * set). Unlike an insert, nothing shifts: pockets that already hold something keep it,
+ * wholly reserved pages in the run are passed over, and no other page is touched.
  */
 export async function fillBinderPage(
   db: D1Database,
@@ -2611,14 +2611,21 @@ export async function fillBinderPage(
   pagePosition: number,
   entry: Extract<BinderEntry, { kind: 'pokemon' | 'set' }>,
   requestedRevision: number,
+  pageCount = 1,
 ): Promise<BinderMutationResult> {
   const version = await readVersion(db, ownerId, versionId);
   requireEditable(version);
   expectedRevision(version, requestedRevision);
+  const lastPosition = pagePosition + pageCount - 1;
   await pageAt(db, versionId, pagePosition);
+  if (pageCount > 1) await pageAt(db, versionId, lastPosition);
   await requireSets(db, [entry]);
   const empty = (await materializedSlots(db, versionId)).filter(
-    (slot) => slot.page_position === pagePosition && slotEntry(slot) === null,
+    (slot) =>
+      slot.page_position >= pagePosition &&
+      slot.page_position <= lastPosition &&
+      (pageCount === 1 || slot.page_kind !== 'reserved') &&
+      slotEntry(slot) === null,
   );
   if (empty.length === 0) domainError('binder_page_no_empty_pockets');
   const target: BinderEntry = { ...entry, startsNewPage: false };

@@ -12,6 +12,7 @@ import {
   getCardBinderMatches,
   insertBinderEntries,
   placeCard,
+  reserveBinderPage,
   searchBinderSpaces,
   setBinderEntryAssignment,
   setBinderSlot,
@@ -280,6 +281,49 @@ describe('fillBinderPage', () => {
         filled.version.revision,
       ),
     ).rejects.toMatchObject({ code: 'binder_page_no_empty_pockets' });
+  });
+
+  it('fills a run of pages, passing over a wholly reserved page', async () => {
+    const { db } = setup();
+    const created = await createBinder(
+      db,
+      'owner',
+      'Binder',
+      { kind: '2x2', rows: 2, columns: 2 },
+      16,
+    );
+    const versionId = created.version.id;
+    const reserved = await reserveBinderPage(
+      db,
+      'owner',
+      versionId,
+      1,
+      true,
+      'Art',
+      created.version.revision,
+    );
+    const filled = await fillBinderPage(
+      db,
+      'owner',
+      versionId,
+      0,
+      classic,
+      reserved.version.revision,
+      3,
+    );
+    const kinds = async (index: number) =>
+      (await getBinderVersion(db, 'owner', versionId, index, 1)).pages[0]?.slots.map(
+        (slot) => slot.entryKind,
+      );
+    expect(await kinds(0)).toEqual(['set', 'set', 'set', 'set']);
+    expect(await kinds(1)).toEqual(['empty', 'empty', 'empty', 'empty']);
+    expect(await kinds(2)).toEqual(['set', 'set', 'set', 'set']);
+    expect(await kinds(3)).toEqual(['empty', 'empty', 'empty', 'empty']);
+
+    // A run that would pass the last page is refused whole.
+    await expect(
+      fillBinderPage(db, 'owner', versionId, 3, classic, filled.version.revision, 2),
+    ).rejects.toMatchObject({ code: 'binder_page_not_found' });
   });
 
   it('can reserve a page for one Pokémon', async () => {

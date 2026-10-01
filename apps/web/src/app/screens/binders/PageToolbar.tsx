@@ -11,8 +11,6 @@ export interface PageMenuActions {
   canRemove: boolean;
   onReservePage: () => void;
   onBookmarkPage: () => void;
-  /** Empty pockets on this page that "Reserve page for" would fill. */
-  emptyPockets: number;
   onFillPage: () => void;
   onInsertPages: () => void;
   onMoveTo: () => void;
@@ -246,7 +244,7 @@ function pageActions(
       : [
           {
             label: 'Reserve page for…',
-            disabled: disabled || actions.emptyPockets === 0,
+            disabled,
             run: actions.onFillPage,
           },
         ]),

@@ -14,21 +14,25 @@ type Kind = PageFillTarget['kind'];
 const PAGE_SIZE = 40;
 
 /**
- * Reserves a page for one thing: every empty pocket on it becomes the same any-card
- * target (any printing of a Pokémon, or any card from a set). Pockets that already hold
- * something are left alone and nothing on other pages moves.
+ * Reserves a page, or a run of pages starting here, for one thing: every empty pocket
+ * becomes the same any-card target (any printing of a Pokémon, or any card from a set).
+ * Pockets that already hold something are left alone and nothing else moves.
  */
 export function PageFillPanel({
   emptyPockets,
+  pagesLeft,
   pending,
   error,
   onFill,
   onClose,
 }: {
+  /** Empty pockets on the page the panel was opened from. */
   emptyPockets: number;
+  /** Pages from this one to the end of the binder: the most that can be reserved. */
+  pagesLeft: number;
   pending: boolean;
   error: string | null;
-  onFill: (target: PageFillTarget, name: string) => void;
+  onFill: (target: PageFillTarget, name: string, pages: number) => void;
   onClose: () => void;
 }): ReactElement {
   const sets = useSets();
@@ -43,14 +47,23 @@ export function PageFillPanel({
   const pokemon = kind === 'pokemon' ? filterPokemon(query) : [];
   const matchingSets = kind === 'set' ? filterSets(sets.data ?? [], query) : [];
   const total = kind === 'pokemon' ? pokemon.length : matchingSets.length;
+  const [pagesText, setPagesText] = useState('1');
+  const pages = Number(pagesText);
+  const pagesValid = Number.isInteger(pages) && pages >= 1 && pages <= pagesLeft;
   const pockets = `${emptyPockets} empty ${emptyPockets === 1 ? 'pocket' : 'pockets'}`;
+  // One page names its pockets; a run of pages is counted in pages, since only this
+  // page's pockets are known here.
+  const scope = pages === 1 ? pockets : `${pages} pages`;
+  const nothingToFill = pages === 1 && emptyPockets === 0;
 
   return (
     <Panel title="Reserve page for" onClose={onClose} wide>
       <p className="panel-lead">
-        {emptyPockets > 0
-          ? `The ${pockets} on this page will take any card that fits. Nothing else moves.`
-          : 'This page has no empty pockets to reserve.'}
+        {nothingToFill
+          ? 'This page has no empty pockets to reserve.'
+          : pages === 1 || !pagesValid
+            ? `The ${pockets} on this page will take any card that fits. Nothing else moves.`
+            : `Every empty pocket on this page and the next ${pages - 1} will take any card that fits. Nothing else moves.`}
       </p>
       <div className="panel-form">
         <SegmentedControl<Kind>
@@ -157,6 +170,19 @@ export function PageFillPanel({
           </button>
         </nav>
       </div>
+      <label className="panel-field page-fill-pages">
+        <span>How many pages</span>
+        <input
+          type="number"
+          inputMode="numeric"
+          min="1"
+          max={pagesLeft}
+          step="1"
+          value={pagesText}
+          disabled={pending}
+          onChange={(event) => setPagesText(event.target.value)}
+        />
+      </label>
       <footer className="panel-footer">
         {error ? (
           <p role="alert" className="panel-error">
@@ -164,17 +190,21 @@ export function PageFillPanel({
           </p>
         ) : null}
         <p role="status">
-          {chosen ? `${pockets} for any ${chosen.name}.` : 'Choose what this page is for.'}
+          {!pagesValid
+            ? `Enter 1 to ${pagesLeft} ${pagesLeft === 1 ? 'page' : 'pages'}.`
+            : chosen
+              ? `${scope} for any ${chosen.name}.`
+              : 'Choose what this page is for.'}
         </p>
         <button
           type="button"
           className="button-primary"
-          disabled={pending || !chosen || emptyPockets === 0}
+          disabled={pending || !chosen || !pagesValid || nothingToFill}
           onClick={() => {
-            if (chosen) onFill(chosen.target, chosen.name);
+            if (chosen) onFill(chosen.target, chosen.name, pages);
           }}
         >
-          Reserve {pockets}
+          Reserve {pagesValid ? scope : pockets}
         </button>
       </footer>
     </Panel>

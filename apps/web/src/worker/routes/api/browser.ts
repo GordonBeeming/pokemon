@@ -1177,6 +1177,7 @@ browserApiRoutes.post('/binders/versions/:id/pages/fill', async (c) => {
         parsed.data.page,
         { ...parsed.data.target, startsNewPage: false },
         parsed.data.expectedRevision,
+        parsed.data.pages,
       ),
     });
   } catch (error) {

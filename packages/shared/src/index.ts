@@ -471,6 +471,8 @@ export const binderInsertRequestSchema = binderRevisionRequestSchema
 export const binderFillPageRequestSchema = binderRevisionRequestSchema
   .extend({
     page: z.number().int().nonnegative(),
+    // How many pages to fill, starting at `page`.
+    pages: z.number().int().min(1).max(300).default(1),
     target: z.discriminatedUnion('kind', [
       z
         .object({

@@ -461,8 +461,9 @@ export const binderApi = {
     target:
       | { kind: 'pokemon'; pokemonNumber: number }
       | { kind: 'set'; setId: string; setLanguage: string },
+    pages: number,
     expectedRevision: number,
-  ) => mutate(versionId, '/pages/fill', 'POST', { page, target, expectedRevision }),
+  ) => mutate(versionId, '/pages/fill', 'POST', { page, pages, target, expectedRevision }),
   compactRemove: (versionId: string, at: BinderSlotLocation, expectedRevision: number) =>
     mutate(versionId, '/entries/remove', 'POST', { at, expectedRevision }),
   shift: (versionId: string, from: BinderSlotLocation, offset: number, expectedRevision: number) =>
