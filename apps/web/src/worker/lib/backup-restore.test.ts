@@ -399,9 +399,9 @@ describe('backup restore', () => {
       // back to the same defaults the column itself gives a fresh binder.
       expect(
         database
-          .prepare('SELECT peek_columns, show_frame FROM binders WHERE id = ?1')
+          .prepare('SELECT peek_columns, show_frame, page_section FROM binders WHERE id = ?1')
           .get('v3-binder'),
-      ).toEqual({ peek_columns: 1, show_frame: 1 });
+      ).toEqual({ peek_columns: 1, show_frame: 1, page_section: 'reserved' });
       expect(
         database.prepare('SELECT kind, label FROM binder_pages WHERE id = ?1').get('v3-page'),
       ).toEqual({ kind: 'slots', label: null });
@@ -555,7 +555,7 @@ describe('backup restore', () => {
     const { database, db, art } = setup();
     await seedReferencedArt(art);
     database.exec(`
-      UPDATE binders SET peek_columns = 2, show_frame = 0 WHERE id = 'binder-1';
+      UPDATE binders SET peek_columns = 2, show_frame = 0, page_section = 'bookmark' WHERE id = 'binder-1';
       INSERT INTO user_settings (owner_id, key, value_json, updated_at)
       VALUES ('owner', 'frame-palette', '{"grass":"#00ff00"}', 1);
       INSERT INTO collection_events (id, owner_id, card_id, delta, source, slot_id, created_at)
@@ -573,9 +573,9 @@ describe('backup restore', () => {
 
     expect(
       database
-        .prepare('SELECT peek_columns, show_frame FROM binders WHERE id = ?1')
+        .prepare('SELECT peek_columns, show_frame, page_section FROM binders WHERE id = ?1')
         .get('binder-1'),
-    ).toEqual({ peek_columns: 2, show_frame: 0 });
+    ).toEqual({ peek_columns: 2, show_frame: 0, page_section: 'bookmark' });
     expect(
       database
         .prepare('SELECT value_json FROM user_settings WHERE owner_id = ? AND key = ?')

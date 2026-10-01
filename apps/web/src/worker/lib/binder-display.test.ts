@@ -24,7 +24,7 @@ describe('binder display preferences', () => {
   it('defaults every binder to one peek column and the frame shown', async () => {
     const { db } = await setup();
     const [binder] = await listBinders(db, 'owner');
-    expect(binder).toMatchObject({ peekColumns: 1, showFrame: true });
+    expect(binder).toMatchObject({ peekColumns: 1, showFrame: true, pageSection: 'reserved' });
   });
 
   it('updates peekColumns and showFrame independently', async () => {
@@ -33,6 +33,14 @@ describe('binder display preferences', () => {
     expect(afterPeek).toMatchObject({ peekColumns: 2, showFrame: true });
     const afterFrame = await patchBinderDisplay(db, 'owner', binderId, { showFrame: false });
     expect(afterFrame).toMatchObject({ peekColumns: 2, showFrame: false });
+    const afterSection = await patchBinderDisplay(db, 'owner', binderId, {
+      pageSection: 'bookmark',
+    });
+    expect(afterSection).toMatchObject({
+      peekColumns: 2,
+      showFrame: false,
+      pageSection: 'bookmark',
+    });
   });
 
   it('refuses an empty patch', async () => {

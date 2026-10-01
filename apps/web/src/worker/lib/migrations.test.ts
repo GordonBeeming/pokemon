@@ -761,3 +761,34 @@ describe('migration 024 backup coverage for settings and events', () => {
     ).toThrow(/CHECK constraint/u);
   });
 });
+
+describe('migration 026 binder page section', () => {
+  it('keeps every existing binder on the reserved-page section and allows only known values', () => {
+    const database = databaseAtMigrationEighteen();
+    for (const name of [
+      '019_card_types.sql',
+      '020_set_codes.sql',
+      '021_pocket_inactive.sql',
+      '022_settings_and_binder_display.sql',
+      '023_collection_events.sql',
+      '024_backup_settings_events.sql',
+      '025_multiuser.sql',
+    ])
+      database.exec(migration(name));
+    database.exec(`
+      INSERT INTO binders (id, owner_id, name, created_at, updated_at, peek_columns, show_frame)
+      VALUES ('binder-1', 'owner-a', 'Binder', 1, 1, 2, 0);
+    `);
+    database.exec(migration('026_binder_page_section.sql'));
+
+    expect(
+      database
+        .prepare('SELECT peek_columns, show_frame, page_section FROM binders WHERE id = ?')
+        .get('binder-1'),
+    ).toEqual({ peek_columns: 2, show_frame: 0, page_section: 'reserved' });
+    database.exec("UPDATE binders SET page_section = 'bookmark' WHERE id = 'binder-1'");
+    expect(() =>
+      database.exec("UPDATE binders SET page_section = 'sleeve' WHERE id = 'binder-1'"),
+    ).toThrow(/CHECK constraint/u);
+  });
+});

@@ -1,4 +1,5 @@
 import {
+  type BinderDisplayPatchRequest,
   binderAssignmentCandidateSchema,
   binderBookmarkSchema,
   binderFullPokedexPreviewSchema,
@@ -21,7 +22,6 @@ import {
   type BinderLayout,
   type BinderPasteRequest,
   type BinderSlotLocation,
-  type PeekColumns,
 } from '@pokedex/shared';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
@@ -413,7 +413,7 @@ export const binderApi = {
       method: 'DELETE',
       body: { confirmationName },
     }).then(() => undefined),
-  patchDisplay: (binderId: string, patch: { peekColumns?: PeekColumns; showFrame?: boolean }) =>
+  patchDisplay: (binderId: string, patch: BinderDisplayPatchRequest) =>
     apiFetch(`/api/binders/${encodeURIComponent(binderId)}`, patchBinderEnvelopeSchema, {
       method: 'PATCH',
       body: patch,

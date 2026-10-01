@@ -105,6 +105,7 @@ export function applyAllMigrations(database: DatabaseSync): void {
     '023_collection_events.sql',
     '024_backup_settings_events.sql',
     '025_multiuser.sql',
+    '026_binder_page_section.sql',
   ])
     database.exec(readFileSync(new URL(name, directory), 'utf8'));
 }

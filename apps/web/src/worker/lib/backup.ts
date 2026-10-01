@@ -79,6 +79,7 @@ const binderRow = z
     // restores fine, defaulting to the same values the column DEFAULTs give.
     peek_columns: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
     show_frame: z.union([z.literal(0), z.literal(1)]).optional(),
+    page_section: z.enum(['reserved', 'bookmark', 'none']).optional(),
   })
   .strict();
 const versionRow = z
@@ -321,7 +322,7 @@ const backupQueries: readonly BackupQuery[] = [
   {
     kind: 'binders',
     sql: `SELECT b.rowid AS backup_cursor, b.id, b.owner_id, b.name, b.active_version_id,
-      b.created_at, b.updated_at, b.peek_columns, b.show_frame FROM binders b
+      b.created_at, b.updated_at, b.peek_columns, b.show_frame, b.page_section FROM binders b
      WHERE b.owner_id = ?1 AND b.rowid > ?2 ORDER BY b.rowid LIMIT ?3`,
   },
   {
@@ -1065,9 +1066,10 @@ export async function restoreBackup(
           .bind(restoreRunId, ownerId),
         db
           .prepare(
-            `INSERT INTO binders (id,owner_id,name,active_version_id,created_at,updated_at,peek_columns,show_frame)
+            `INSERT INTO binders (id,owner_id,name,active_version_id,created_at,updated_at,peek_columns,show_frame,page_section)
            SELECT json_extract(j.value,'$.id'),?2,json_extract(j.value,'$.name'),NULL,json_extract(j.value,'$.created_at'),json_extract(j.value,'$.updated_at'),
-             COALESCE(json_extract(j.value,'$.peek_columns'),1),COALESCE(json_extract(j.value,'$.show_frame'),1)
+             COALESCE(json_extract(j.value,'$.peek_columns'),1),COALESCE(json_extract(j.value,'$.show_frame'),1),
+             COALESCE(json_extract(j.value,'$.page_section'),'reserved')
            FROM ${jsonRows} AND c.kind='binders'`,
           )
           .bind(restoreRunId, ownerId),

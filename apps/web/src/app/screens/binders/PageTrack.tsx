@@ -60,6 +60,8 @@ export interface PageTrackProps {
   edgeButtons?: 'beside' | 'overlay';
   /** Page turns from the edge buttons wait while a write is in flight, as the pager's do. */
   busy?: boolean;
+  /** The section a page belongs to: the name of the nearest reserved page before it. */
+  sectionFor?: (pageIndex: number) => string | null;
 }
 
 export const locationKey = (at: BinderSlotLocation): string => `${at.page}:${at.row}:${at.column}`;
@@ -82,12 +84,6 @@ interface DragState {
   touch: boolean;
   started: boolean;
   pickupTimer: ReturnType<typeof setTimeout> | null;
-}
-
-/** Two pages share a sleeve, front then back, like a real binder: pages 1 and 2 are
- * sleeve 1. */
-function sleeveText(index: number): string {
-  return `Sleeve ${Math.floor(index / 2) + 1} · ${index % 2 === 0 ? 'front' : 'back'}`;
 }
 
 export function PageTrack(props: PageTrackProps): ReactElement {
@@ -364,7 +360,8 @@ export function PageTrack(props: PageTrackProps): ReactElement {
                 }}
               >
                 {/* Every page carries the same header row, so pages are always one
-                    height: its page and sleeve, and a reserved page's name between. */}
+                    height: its page number, a reserved page's name beside it, and on
+                    the right the section the page sits in. */}
                 <p className="binder-page-header">
                   <span>Page {index + 1}</span>
                   {reserved ? (
@@ -372,7 +369,9 @@ export function PageTrack(props: PageTrackProps): ReactElement {
                       Reserved{page.label ? `: ${page.label}` : ''}
                     </span>
                   ) : null}
-                  <span>{sleeveText(index)}</span>
+                  {!reserved && props.sectionFor?.(index) ? (
+                    <span className="binder-page-section">{props.sectionFor(index)}</span>
+                  ) : null}
                 </p>
                 <div
                   className="binder-page-grid"

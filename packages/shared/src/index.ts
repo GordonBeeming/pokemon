@@ -224,6 +224,7 @@ export const binderViewSchema = z
     updatedAt: z.string().datetime(),
     peekColumns: z.union([z.literal(0), z.literal(1), z.literal(2)]).optional(),
     showFrame: z.boolean().optional(),
+    pageSection: z.enum(['reserved', 'bookmark', 'none']).optional(),
   })
   .strict();
 export type BinderView = z.infer<typeof binderViewSchema>;
@@ -635,13 +636,24 @@ export type FramePalettePutRequest = z.infer<typeof framePalettePutRequestSchema
 export const peekColumnsSchema = z.union([z.literal(0), z.literal(1), z.literal(2)]);
 export type PeekColumns = z.infer<typeof peekColumnsSchema>;
 
+/** What a binder page's header names on its right: the nearest reserved page before
+ * it, the nearest bookmark, or nothing. */
+export const pageSectionSchema = z.enum(['reserved', 'bookmark', 'none']);
+export type PageSection = z.infer<typeof pageSectionSchema>;
+
 export const binderDisplayPatchRequestSchema = z
   .object({
     peekColumns: peekColumnsSchema.optional(),
     showFrame: z.boolean().optional(),
+    pageSection: pageSectionSchema.optional(),
   })
   .strict()
-  .refine((value) => value.peekColumns !== undefined || value.showFrame !== undefined);
+  .refine(
+    (value) =>
+      value.peekColumns !== undefined ||
+      value.showFrame !== undefined ||
+      value.pageSection !== undefined,
+  );
 export type BinderDisplayPatchRequest = z.infer<typeof binderDisplayPatchRequestSchema>;
 
 export const collectionRemoveRequestSchema = z.discriminatedUnion('source', [

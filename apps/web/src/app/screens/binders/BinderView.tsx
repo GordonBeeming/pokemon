@@ -1,7 +1,9 @@
 import {
   type BinderBookmark,
+  type BinderDisplayPatchRequest,
   type BinderSearchMatch,
   type BinderSlotLocation,
+  type PageSection,
   type PeekColumns,
 } from '@pokedex/shared';
 import { useQueryClient } from '@tanstack/react-query';
@@ -208,9 +210,29 @@ export function BinderView({
   }, [versionId]);
 
   const editable = version !== undefined && version.status !== 'archived';
-  const [display, setDisplay] = useState<{ peek?: PeekColumns; frame?: boolean }>({});
+  const [display, setDisplay] = useState<{
+    peek?: PeekColumns;
+    frame?: boolean;
+    section?: PageSection;
+  }>({});
   const peek: PeekColumns = display.peek ?? binder?.peekColumns ?? 0;
   const showFrame = display.frame ?? binder?.showFrame ?? true;
+  const pageSection: PageSection = display.section ?? binder?.pageSection ?? 'reserved';
+  // Each page's header names the section it sits in: the nearest reserved page (or,
+  // per binder, the nearest bookmark of any kind) at or before it.
+  const sectionMarks = (bookmarks.data ?? [])
+    .filter((bookmark) => pageSection === 'bookmark' || bookmark.kind === 'reserved-page')
+    .map((bookmark) => ({ page: bookmark.at.page, name: bookmark.name }))
+    .sort((a, b) => a.page - b.page);
+  const sectionFor = (index: number): string | null => {
+    if (pageSection === 'none') return null;
+    let name: string | null = null;
+    for (const mark of sectionMarks) {
+      if (mark.page > index) break;
+      name = mark.name;
+    }
+    return name;
+  };
 
   // --- selection -----------------------------------------------------------------
   const selParts = parseSlotId(search.sel);
@@ -692,13 +714,11 @@ export function BinderView({
   }
 
   // --- display settings -----------------------------------------------------------
-  async function patchDisplay(patch: {
-    peekColumns?: PeekColumns;
-    showFrame?: boolean;
-  }): Promise<void> {
+  async function patchDisplay(patch: BinderDisplayPatchRequest): Promise<void> {
     setDisplay((currentDisplay) => ({
       peek: patch.peekColumns ?? currentDisplay.peek,
       frame: patch.showFrame ?? currentDisplay.frame,
+      section: patch.pageSection ?? currentDisplay.section,
     }));
     try {
       const saved = await binderApi.patchDisplay(binderId, patch);
@@ -873,6 +893,17 @@ export function BinderView({
         options={[
           { value: 'on', label: 'On' },
           { value: 'off', label: 'Off' },
+        ]}
+      />
+      <span className="binder-display-label">Page header shows</span>
+      <SegmentedControl<PageSection>
+        label="Page header shows"
+        value={pageSection}
+        onChange={(value) => void patchDisplay({ pageSection: value })}
+        options={[
+          { value: 'reserved', label: 'Reserved page' },
+          { value: 'bookmark', label: 'Bookmark' },
+          { value: 'none', label: 'Nothing' },
         ]}
       />
     </div>
@@ -1165,6 +1196,7 @@ export function BinderView({
         ) : version ? (
           <PageTrack
             pages={trackPages}
+            sectionFor={sectionFor}
             currentIndex={pageIndex}
             pageCount={pageCount}
             rows={rows}

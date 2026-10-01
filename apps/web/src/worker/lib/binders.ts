@@ -30,6 +30,7 @@ import {
   type BinderVersionSummary,
   binderVersionSummarySchema,
   type BinderView,
+  type PageSection,
   cardIdSchema,
   formatDexNumber,
   NATIONAL_POKEDEX,
@@ -116,6 +117,7 @@ interface BinderRow {
   latest_version_id: string | null;
   peek_columns: number;
   show_frame: number;
+  page_section: string;
 }
 
 interface VersionRow {
@@ -232,6 +234,10 @@ function toBinder(row: BinderRow): BinderView {
     latestVersionId: row.latest_version_id,
     peekColumns,
     showFrame: row.show_frame === 1,
+    pageSection:
+      row.page_section === 'bookmark' || row.page_section === 'none'
+        ? row.page_section
+        : 'reserved',
   };
 }
 
@@ -489,7 +495,7 @@ export async function createBinder(
 export async function listBinders(db: D1Database, ownerId: string): Promise<BinderView[]> {
   const result = await db
     .prepare(
-      `SELECT b.id, b.name, b.active_version_id, b.updated_at, b.peek_columns, b.show_frame,
+      `SELECT b.id, b.name, b.active_version_id, b.updated_at, b.peek_columns, b.show_frame, b.page_section,
         (SELECT v.id FROM binder_versions v WHERE v.binder_id = b.id
          ORDER BY v.version_number DESC LIMIT 1) AS latest_version_id
        FROM binders b WHERE b.owner_id = ?1 ORDER BY b.updated_at DESC`,
@@ -503,7 +509,7 @@ export async function patchBinderDisplay(
   db: D1Database,
   ownerId: string,
   binderId: string,
-  patch: { peekColumns?: 0 | 1 | 2; showFrame?: boolean },
+  patch: { peekColumns?: 0 | 1 | 2; showFrame?: boolean; pageSection?: PageSection },
 ): Promise<BinderView> {
   const sets: string[] = [];
   const values: unknown[] = [];
@@ -514,6 +520,10 @@ export async function patchBinderDisplay(
   if (patch.showFrame !== undefined) {
     sets.push(`show_frame = ?${values.length + 1}`);
     values.push(patch.showFrame ? 1 : 0);
+  }
+  if (patch.pageSection !== undefined) {
+    sets.push(`page_section = ?${values.length + 1}`);
+    values.push(patch.pageSection);
   }
   if (sets.length === 0) domainError('binder_display_patch_empty');
   // binders_epoch_after_update's second statement (OLD.owner_id <> NEW.owner_id)
@@ -536,7 +546,7 @@ export async function patchBinderDisplay(
     .run();
   const row = await db
     .prepare(
-      `SELECT b.id, b.name, b.active_version_id, b.updated_at, b.peek_columns, b.show_frame,
+      `SELECT b.id, b.name, b.active_version_id, b.updated_at, b.peek_columns, b.show_frame, b.page_section,
         (SELECT v.id FROM binder_versions v WHERE v.binder_id = b.id
          ORDER BY v.version_number DESC LIMIT 1) AS latest_version_id
        FROM binders b WHERE b.id = ?1 AND b.owner_id = ?2`,
