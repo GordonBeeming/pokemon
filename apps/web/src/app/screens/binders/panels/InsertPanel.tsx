@@ -9,13 +9,30 @@ import {
 import { useRef, useState, type ReactElement } from 'react';
 import { ApiError } from '../../../api/client';
 import { useInsertDestinations, type ResolvedCard } from '../../../api/queries/binders';
+import { useSets, type SetFacet } from '../../../api/queries/sets';
 import { SegmentedControl } from '../../../ui/SegmentedControl';
 import { binderErrorMessage, INSERT_SELECTION_CAP } from '../model';
 import { CardPicker, collectAllCards, type PickerQuery } from './CardPicker';
 import { Panel } from './Panel';
 
-type Kind = 'pokemon' | 'exact-card';
+type Kind = 'pokemon' | 'set' | 'exact-card';
 const POKEMON_PAGE_SIZE = 40;
+const SET_PAGE_SIZE = 40;
+// "2", "10", "TG05": numbers in card order, letters after.
+const cardNumberOrder = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+
+function setKey(set: SetFacet): string {
+  return `${set.language}:${set.setId}`;
+}
+
+export function filterSets(sets: readonly SetFacet[], query: string): SetFacet[] {
+  const lowered = query.trim().toLocaleLowerCase('en-AU');
+  return lowered
+    ? sets.filter((set) =>
+        `${set.setName} ${set.setId}`.toLocaleLowerCase('en-AU').includes(lowered),
+      )
+    : [...sets];
+}
 
 function pokemonEntry(pokemonNumber: number): BinderEntry {
   return { kind: 'pokemon', pokemonNumber, startsNewPage: false };
@@ -88,9 +105,12 @@ export function InsertPanel({
   const [working, setWorking] = useState(false);
   const [exactTotal, setExactTotal] = useState<{ total: number; query: PickerQuery } | null>(null);
   const [shiftBy, setShiftBy] = useState('1');
+  const sets = useSets();
+  const [chosenSet, setChosenSet] = useState<string | null>(null);
   const selectAllRequest = useRef<AbortController | null>(null);
 
   const pokemon = kind === 'pokemon' ? filterPokemon(query) : [];
+  const matchingSets = kind === 'set' ? filterSets(sets.data ?? [], query) : [];
   const destination = at ?? destinations.data?.appendAt ?? null;
   const busy = pending || working;
 
@@ -129,6 +149,40 @@ export function InsertPanel({
             ? binderErrorMessage(cause)
             : cause.message,
         );
+    } finally {
+      if (!controller.signal.aborted) setWorking(false);
+    }
+  }
+
+  /** Every card of a set becomes an exact-card target, in the set's own number order. */
+  async function selectSet(set: SetFacet): Promise<void> {
+    selectAllRequest.current?.abort();
+    const controller = new AbortController();
+    selectAllRequest.current = controller;
+    setWorking(true);
+    setMessage('');
+    setChosenSet(setKey(set));
+    try {
+      const cards = await collectAllCards(
+        { q: '', filters: { set: set.setId, language: set.language } },
+        INSERT_SELECTION_CAP,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      cards.sort((a, b) => cardNumberOrder.compare(a.number, b.number));
+      setSelected(new Map(cards.map((card) => [card.id, exactEntry(card.id)])));
+      setMessage(
+        `${cards.length.toLocaleString('en-AU')} ${cards.length === 1 ? 'card' : 'cards'} from ${set.setName} selected, in set order.`,
+      );
+    } catch (cause) {
+      if (controller.signal.aborted) return;
+      setChosenSet(null);
+      setSelected(new Map());
+      setMessage(
+        cause instanceof ApiError || !(cause instanceof Error)
+          ? binderErrorMessage(cause)
+          : cause.message,
+      );
     } finally {
       if (!controller.signal.aborted) setWorking(false);
     }
@@ -181,9 +235,11 @@ export function InsertPanel({
             setSelected(new Map());
             setMessage('');
             setExactTotal(null);
+            setChosenSet(null);
           }}
           options={[
             { value: 'pokemon', label: 'Pokémon targets' },
+            { value: 'set', label: 'Set' },
             { value: 'exact-card', label: 'Exact cards' },
           ]}
         />
@@ -255,6 +311,79 @@ export function InsertPanel({
                 onClick={() => setOffset(offset + POKEMON_PAGE_SIZE)}
               >
                 Next results
+              </button>
+            </nav>
+          </>
+        ) : kind === 'set' ? (
+          <>
+            <label className="panel-field">
+              <span>Search sets</span>
+              <input
+                type="search"
+                value={query}
+                placeholder="Set name or code"
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setOffset(0);
+                }}
+              />
+            </label>
+            <p className="panel-help">
+              Pick a set to target every card in it, in set order. Clear the selection to start
+              again.
+            </p>
+            {sets.isError ? (
+              <p role="alert" className="panel-error">
+                {binderErrorMessage(sets.error)}
+              </p>
+            ) : null}
+            <div className="species-grid" aria-label="Matching sets">
+              {matchingSets.slice(offset, offset + SET_PAGE_SIZE).map((set) => (
+                <button
+                  key={setKey(set)}
+                  type="button"
+                  className="species-option"
+                  aria-pressed={chosenSet === setKey(set)}
+                  disabled={busy}
+                  onClick={() => void selectSet(set)}
+                >
+                  <span>{set.setName}</span>
+                  <small>
+                    {set.total.toLocaleString('en-AU')} {set.total === 1 ? 'card' : 'cards'}
+                    {set.language === 'en' ? '' : ` · ${set.language.toUpperCase()}`}
+                  </small>
+                </button>
+              ))}
+            </div>
+            <nav className="panel-actions" aria-label="Search result pages">
+              <button
+                type="button"
+                disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - SET_PAGE_SIZE))}
+              >
+                Previous results
+              </button>
+              <span className="panel-help">
+                {sets.isLoading ? 'Loading sets…' : `${matchingSets.length} sets`}
+              </span>
+              <button
+                type="button"
+                disabled={offset + SET_PAGE_SIZE >= matchingSets.length}
+                onClick={() => setOffset(offset + SET_PAGE_SIZE)}
+              >
+                Next results
+              </button>
+              <button
+                type="button"
+                className="button-text"
+                disabled={busy || selected.size === 0}
+                onClick={() => {
+                  setSelected(new Map());
+                  setChosenSet(null);
+                  setMessage('');
+                }}
+              >
+                Clear selection
               </button>
             </nav>
           </>

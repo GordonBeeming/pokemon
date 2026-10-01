@@ -425,6 +425,10 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] keep · "Insert targets here" opens the Insert dialog anchored at the selected pocket · done
       when: choosing this from a pocket shows "Insert at page P, pocket R:C, shifting later targets"
       as the destination.
+- [ ] new · The Insert dialog has three target types: Pokémon targets, Set, and Exact cards. Set
+      lists the catalogue's sets (search by name or code); picking one selects every card in it as
+      an exact-card target, in set number order · done when: picking "30th Classic Collection"
+      selects its 30 cards and inserting them fills the pockets in card-number order.
 - [ ] keep · "Paste cards here" opens the Paste dialog anchored at the selected pocket, offered only
       when a clipboard exists · done when: with an empty clipboard, no pocket offers "Paste cards
       here."
