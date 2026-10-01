@@ -19,10 +19,11 @@ export function asPositiveInt(
 }
 
 export function escapedFtsQuery(query: string): string | null {
+  // Split the way the search index does, on anything that isn't a letter or digit. A
+  // token of punctuation alone ("&" in "Darkrai & Cresselia") indexes as nothing, and
+  // requiring it would match no card at all.
   const tokens = query
-    .trim()
-    .split(/\s+/u)
-    .map((token) => token.replaceAll('"', ''))
+    .split(/[^\p{L}\p{N}]+/u)
     .filter((token) => token.length > 0)
     .slice(0, 8);
   return tokens.length === 0 ? null : tokens.map((token) => `"${token}"*`).join(' AND ');

@@ -135,6 +135,11 @@ describe('catalogue cloud invariants', () => {
     expect(escapedFtsQuery('Pikachu V')).toBe('"Pikachu"* AND "V"*');
     expect(escapedFtsQuery('   ')).toBeNull();
     expect(escapedFtsQuery('" OR NEAR')).toBe('"OR"* AND "NEAR"*');
+    expect(escapedFtsQuery('Darkrai & Cresselia LEGEND')).toBe(
+      '"Darkrai"* AND "Cresselia"* AND "LEGEND"*',
+    );
+    expect(escapedFtsQuery('Ho-Oh')).toBe('"Ho"* AND "Oh"*');
+    expect(escapedFtsQuery('& -')).toBeNull();
   });
 
   it('uses a content-addressed private R2 key for each art variant', () => {
