@@ -966,6 +966,25 @@ export function BinderView({
           </div>
         )}
       </header>
+      {/* On a phone, finding a card and jumping to a bookmark are how you move around a
+          big binder, so they stay on screen rather than behind the Tools sheet. */}
+      {phone ? (
+        <div className="binder-phone-finders">
+          <SpaceSearch
+            key={versionId}
+            versionId={versionId}
+            query={search.q}
+            pending={pending}
+            onQueryChange={(q) => navigate({ ...search, q }, true)}
+            onJump={jumpToSpace}
+          />
+          <BookmarkJump
+            bookmarks={bookmarks.data ?? []}
+            pending={pending}
+            onJump={jumpToBookmark}
+          />
+        </div>
+      ) : null}
 
       {version?.status === 'archived' ? (
         <p className="binder-banner binder-banner-muted" role="status">
@@ -1092,25 +1111,6 @@ export function BinderView({
             className="binder-scope"
           >
             <div className="binder-sheet">
-              <SpaceSearch
-                key={versionId}
-                versionId={versionId}
-                query={search.q}
-                pending={pending}
-                onQueryChange={(q) => navigate({ ...search, q }, true)}
-                onJump={(match) => {
-                  closePhoneSheet();
-                  jumpToSpace(match);
-                }}
-              />
-              <BookmarkJump
-                bookmarks={bookmarks.data ?? []}
-                pending={pending}
-                onJump={(bookmark) => {
-                  closePhoneSheet();
-                  jumpToBookmark(bookmark);
-                }}
-              />
               <section className="binder-sheet-section" aria-labelledby="binder-sheet-page">
                 <h3 id="binder-sheet-page">Manage page {pageIndex + 1}</h3>
                 <PageActionList

@@ -324,13 +324,17 @@ test.describe('binder pages from anywhere', () => {
 });
 
 test.describe('basic controls', () => {
-  test('find in this binder: the list fits the field, and picking a result closes it first', async ({
+  test('find in this binder: always on screen, the list fits the field, and a pick clears it', async ({
     page,
   }) => {
     const binder = await createBinder(page.request, 2, species(1, 9));
     await openBinder(page, binder);
-    await page.locator('.binder-tools-trigger').tap();
+    // On a phone, find and jump-to-bookmark sit under the title, not in Tools.
     const field = page.getByRole('combobox', { name: 'Find in this binder' });
+    await expect(field).toBeVisible();
+    await expect(
+      page.getByRole('button', { name: /Jump to bookmark|No bookmarks yet/ }),
+    ).toBeVisible();
     await field.fill('Charmander');
     const list = page.getByRole('listbox');
     const match = list.getByRole('option', { name: /Charmander/ }).first();
@@ -343,7 +347,9 @@ test.describe('basic controls', () => {
 
     await match.tap();
     await expect(page.getByRole('listbox')).toHaveCount(0);
-    // One layer: the tools sheet has gone and the found pocket's own sheet is up.
+    await expect(field).toHaveValue('');
+    await expect.poll(() => new URL(page.url()).searchParams.get('q') ?? '').toBe('');
+    // One layer: just the found pocket's own sheet.
     await expect(page.getByRole('dialog')).toHaveCount(1);
     await expect(page.locator('.sheet[role="dialog"]')).toContainText('Charmander');
   });

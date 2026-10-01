@@ -57,8 +57,8 @@ function ReopenWhen({ signal }: { signal: number }): null {
 
 /** "Find in this binder": searches every page server-side. The query lives in the URL
  * (`q`), so it survives reload and is naturally empty in any other binder. The
- * results are a combo box list anchored to the field: picking one closes the list
- * first and then jumps, so a list and a pocket sheet are never open together. */
+ * results are a combo box list anchored to the field: picking one clears the search,
+ * closes the list and then jumps, so a list and a pocket sheet are never open together. */
 export function SpaceSearch({
   versionId,
   query,
@@ -133,7 +133,14 @@ export function SpaceSearch({
               setOffset(data.nextOffset);
           } else {
             const option = options.find((item) => item.id === key);
-            if (option?.match) onJump(option.match);
+            if (option?.match) {
+              // A pick is done with the search: clear the field and the query so the
+              // list and its type-ahead don't linger over the pocket it jumped to.
+              setDraft('');
+              setOffset(0);
+              onQueryChange('');
+              onJump(option.match);
+            }
           }
         }}
       >
