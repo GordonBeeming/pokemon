@@ -591,24 +591,29 @@ an action at the end */
 .binder-page-reserved {
   background: #e7e0f3;
 }
-.binder-page-reserved-label {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
+.binder-page-header {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
   margin: 0;
-  overflow: hidden;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  line-height: 1;
+  line-height: 1.2;
+  color: var(--ink-soft);
   white-space: nowrap;
+}
+.binder-page-header > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.binder-page-reserved-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-weight: 700;
+  text-align: center;
   color: #4c1d95;
-  /* Reads bottom to top, like a spine label. */
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
 }
 .binder-page-grid {
   display: grid;

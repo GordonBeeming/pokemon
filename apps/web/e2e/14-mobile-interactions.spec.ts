@@ -297,7 +297,7 @@ test.describe('binder pages from anywhere', () => {
     await expect(page).toHaveURL(/[?&]page=6(&|$)/u);
     const current = page.locator('.binder-page:not(.binder-page-peek)');
     await expect(current).toHaveClass(/binder-page-reserved/);
-    await expect(current).toContainText('Reserved page: Alola');
+    await expect(current).toContainText('Reserved: Alola');
   });
 
   test('any page, reserved included, moves straight to page N', async ({ page }) => {
@@ -318,7 +318,7 @@ test.describe('binder pages from anywhere', () => {
     await expectDoneAndClosed(page, 'Page 4 moved to page 2.');
     await expect(page).toHaveURL(/[?&]page=2(&|$)/u);
     await expect(page.locator('.binder-page:not(.binder-page-peek)')).toContainText(
-      'Reserved page: Art',
+      'Reserved: Art',
     );
   });
 });

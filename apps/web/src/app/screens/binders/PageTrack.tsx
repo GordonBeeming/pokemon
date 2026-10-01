@@ -84,6 +84,12 @@ interface DragState {
   pickupTimer: ReturnType<typeof setTimeout> | null;
 }
 
+/** Two pages share a sleeve, front then back, like a real binder: pages 1 and 2 are
+ * sleeve 1. */
+function sleeveText(index: number): string {
+  return `Sleeve ${Math.floor(index / 2) + 1} · ${index % 2 === 0 ? 'front' : 'back'}`;
+}
+
 export function PageTrack(props: PageTrackProps): ReactElement {
   const { currentIndex, columns, peek, showFrame } = props;
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -357,21 +363,17 @@ export function PageTrack(props: PageTrackProps): ReactElement {
                   gap: geometry.gap,
                 }}
               >
-                {/* Up the page's left margin, so a reserved page is no taller than its
-                    neighbours. A phone's margin is too thin to read in; there the
-                    header names the page and this stays for screen readers. */}
-                {reserved ? (
-                  <p
-                    className={
-                      geometry.pad >= 12
-                        ? 'binder-page-reserved-label'
-                        : 'binder-page-reserved-label sr-only'
-                    }
-                    style={{ width: geometry.pad }}
-                  >
-                    Reserved page{page.label ? `: ${page.label}` : ''}
-                  </p>
-                ) : null}
+                {/* Every page carries the same header row, so pages are always one
+                    height: its page and sleeve, and a reserved page's name between. */}
+                <p className="binder-page-header">
+                  <span>Page {index + 1}</span>
+                  {reserved ? (
+                    <span className="binder-page-reserved-label">
+                      Reserved{page.label ? `: ${page.label}` : ''}
+                    </span>
+                  ) : null}
+                  <span>{sleeveText(index)}</span>
+                </p>
                 <div
                   className="binder-page-grid"
                   style={{
