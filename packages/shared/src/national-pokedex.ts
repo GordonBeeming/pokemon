@@ -1067,3 +1067,40 @@ export function regionForDex(dex: number): Region | null {
   const entry = NATIONAL_POKEDEX[dex - 1];
   return entry && entry.number === dex ? entry.discoveryCategory : null;
 }
+
+function foldPokemonName(text: string): string {
+  return text.toLocaleLowerCase('en').replaceAll('’', "'");
+}
+
+// Longest names first, so "Porygon-Z" claims its letters before "Porygon" can.
+const NAMES_LONGEST_FIRST = [...NATIONAL_POKEDEX]
+  .map((entry) => ({ number: entry.number, name: foldPokemonName(entry.name) }))
+  .sort((a, b) => b.name.length - a.name.length);
+
+const WORD_CHARACTER = /[\p{L}\p{N}]/u;
+
+/**
+ * The Pokédex number a card's name points to, for cards whose source gives none.
+ * Matches whole names only ("Mew ex" is Mew, never Mewtwo) and looks past prefixes and
+ * suffixes ("Dark Tyranitar", "Erika's Jigglypuff", "Zacian V"). A card naming several
+ * Pokémon gets the lowest number, the same rule used when the source lists several.
+ */
+export function pokedexNumberFromCardName(cardName: string): number | null {
+  let remaining = foldPokemonName(cardName);
+  let lowest: number | null = null;
+  for (const { number, name } of NAMES_LONGEST_FIRST) {
+    let from = 0;
+    for (;;) {
+      const at = remaining.indexOf(name, from);
+      if (at === -1) break;
+      const before = at === 0 ? '' : (remaining[at - 1] ?? '');
+      const after = remaining[at + name.length] ?? '';
+      if (!WORD_CHARACTER.test(before) && !WORD_CHARACTER.test(after)) {
+        if (lowest === null || number < lowest) lowest = number;
+        remaining = `${remaining.slice(0, at)}${' '.repeat(name.length)}${remaining.slice(at + name.length)}`;
+      }
+      from = at + name.length;
+    }
+  }
+  return lowest;
+}

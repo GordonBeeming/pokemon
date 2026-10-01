@@ -5,6 +5,7 @@ import {
   languageSchema,
   NATIONAL_POKEDEX,
   NATIONAL_POKEDEX_SIZE,
+  pokedexNumberFromCardName,
   RARITY_KEY_RAW_VALUES,
   rarityKeyFor,
   type CatalogueBrief,
@@ -238,7 +239,13 @@ export async function transformTcgdexCard(
     card.category === 'Pokemon' ? 'pokemon' : card.category === 'Trainer' ? 'trainer' : 'energy';
   const sourceUpdated = card.updated ?? card.updatedAt;
   const sourceUpdatedAt = sourceUpdated ? Math.floor(Date.parse(sourceUpdated) / 1000) : 0;
-  const pokedexNumber = card.dexId?.length ? Math.min(...card.dexId) : null;
+  // Some sets arrive with no Pokédex ids at all; without one a card can't be found
+  // from its Pokémon, so the name stands in.
+  const pokedexNumber = card.dexId?.length
+    ? Math.min(...card.dexId)
+    : category === 'pokemon'
+      ? pokedexNumberFromCardName(card.name)
+      : null;
   const effectiveReleaseDate = releaseDate ?? card.set.releaseDate ?? null;
   const checksum = await sha256Text(
     JSON.stringify({ provider: 'tcgdex', language, card, releaseDate: effectiveReleaseDate }),
