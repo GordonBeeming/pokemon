@@ -11,6 +11,9 @@ export interface PageMenuActions {
   canRemove: boolean;
   onReservePage: () => void;
   onBookmarkPage: () => void;
+  /** Empty pockets on this page that "Reserve page for" would fill. */
+  emptyPockets: number;
+  onFillPage: () => void;
   onInsertPages: () => void;
   onMoveTo: () => void;
   onEarlier: () => void;
@@ -235,6 +238,16 @@ function pageActions(
             label: actions.bookmarkedPage ? 'Edit page bookmark' : 'Bookmark this page',
             disabled,
             run: actions.onBookmarkPage,
+          },
+        ]),
+    // A wholly reserved page holds no targets, so there's nothing on it to reserve for.
+    ...(actions.reservedPage
+      ? []
+      : [
+          {
+            label: 'Reserve page for…',
+            disabled: disabled || actions.emptyPockets === 0,
+            run: actions.onFillPage,
           },
         ]),
     { label: 'Add blank pages here…', disabled, run: actions.onInsertPages },

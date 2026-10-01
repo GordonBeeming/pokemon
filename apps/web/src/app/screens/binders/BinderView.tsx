@@ -68,6 +68,7 @@ import {
 } from './PageToolbar';
 import { ChangeTargetPanel } from './panels/ChangeTargetPanel';
 import { InsertPanel } from './panels/InsertPanel';
+import { PageFillPanel } from './panels/PageFillPanel';
 import { FindCardsPanelContainer, ManagePanelContainer } from './panels/containers';
 import { InsertPagesPanel, MovePagePanel, movedPageOrder } from './panels/PagePanels';
 import { PastePanel } from './panels/PastePanel';
@@ -102,6 +103,7 @@ type PanelKind =
   | 'reserve'
   | 'page-reserve'
   | 'page-bookmark'
+  | 'page-fill'
   | 'insert-pages'
   | 'move-page'
   | 'manage'
@@ -793,6 +795,9 @@ export function BinderView({
     currentPage.kind !== 'reserved' &&
     currentPage.slots.every((slot) => pocketState(slot) === 'empty' && !slot.startsNewPage);
 
+  const pageEmptyPockets =
+    currentPage?.slots.filter((slot) => pocketState(slot) === 'empty').length ?? 0;
+
   const actionItems: ActionBarItem[] =
     selectedSlot && selected && versionId
       ? pocketActionItems({
@@ -860,6 +865,8 @@ export function BinderView({
     canRemove: pageRemovable,
     onReservePage: () => setPanel('page-reserve'),
     onBookmarkPage: () => setPanel('page-bookmark'),
+    emptyPockets: pageEmptyPockets,
+    onFillPage: () => setPanel('page-fill'),
     onInsertPages: () => setPanel('insert-pages'),
     onMoveTo: () => setPanel('move-page'),
     onEarlier: () => reorder(-1),
@@ -1374,6 +1381,7 @@ export function BinderView({
           versionId={versionId}
           at={selected}
           reservedPage={reservedPage}
+          pageSize={version ? version.layout.rows * version.layout.columns : 9}
           palette={palette}
           pending={pending}
           error={writer.error}
@@ -1536,6 +1544,19 @@ export function BinderView({
                 void queryClient.invalidateQueries({
                   queryKey: queryKeys.binders.bookmarks(versionId),
                 }),
+            )
+          }
+          onClose={closePanel}
+        />
+      ) : null}
+      {panel === 'page-fill' && versionId ? (
+        <PageFillPanel
+          emptyPockets={pageEmptyPockets}
+          pending={pending}
+          error={writer.error}
+          onFill={(target, name) =>
+            void run(`Page reserved for any ${name}.`, (revision) =>
+              binderApi.fillPage(versionId, pageIndex, target, revision),
             )
           }
           onClose={closePanel}

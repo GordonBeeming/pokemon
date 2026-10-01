@@ -27,6 +27,7 @@ import {
   activeBinderShortages,
   searchBinderSpaces,
   previewBinderPaste,
+  fillBinderPage,
   pasteBinderCards,
 } from '../../lib/binders';
 import { getTcgdexPreviewArtResponse } from '../../lib/art';
@@ -63,6 +64,7 @@ import {
   binderRevisionRequestSchema,
   binderSlotSetRequestSchema,
   binderSlotSwapRequestSchema,
+  binderFillPageRequestSchema,
   binderInsertRequestSchema,
   binderCompactRemoveRequestSchema,
   binderOffsetMoveRequestSchema,
@@ -1155,6 +1157,25 @@ browserApiRoutes.post('/binders/versions/:id/entries/insert', async (c) => {
         c.req.param('id'),
         parsed.data.at,
         parsed.data.entries,
+        parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.post('/binders/versions/:id/pages/fill', async (c) => {
+  try {
+    const parsed = binderFillPageRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      binder: await fillBinderPage(
+        c.env.DB,
+        sessionOwner(c),
+        c.req.param('id'),
+        parsed.data.page,
+        { ...parsed.data.target, startsNewPage: false },
         parsed.data.expectedRevision,
       ),
     });

@@ -9,6 +9,7 @@ import {
   frameCardFrom,
   pocketAriaLabel,
   pocketState,
+  setTargetName,
   type CardLookup,
 } from './model';
 
@@ -103,6 +104,14 @@ function PocketContent({
       </span>
     );
   }
+  if (slot.entryKind === 'set')
+    return (
+      <span className="pocket-any">
+        <span className="pocket-any-number">{slot.setCode ?? slot.setId}</span>
+        <span>{setTargetName(slot)}</span>
+        <span className="pocket-any-pill">Any</span>
+      </span>
+    );
   if (state === 'reserved')
     return (
       <span className="pocket-words pocket-words-reserved">

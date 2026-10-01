@@ -15,6 +15,8 @@ export function sameTypeFilters(
   slot: BinderSlotView,
   cards: CardLookup,
 ): Record<string, string> | null {
+  if (slot.entryKind === 'set' && slot.setId && slot.setLanguage)
+    return { set: slot.setId, language: slot.setLanguage };
   const original = slot.cardId ? cards.get(slot.cardId) : undefined;
   const species = slot.pokemonNumber ?? original?.pokedexNumber;
   if (species) return { pokedexNumber: String(species) };

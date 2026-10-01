@@ -326,6 +326,26 @@ describe('backup restore', () => {
     ).toEqual({ entry_kind: 'empty', is_manual_gap: 1 });
   });
 
+  it('round-trips a set target through backup and restore', async () => {
+    const { database, db, art } = setup();
+    await seedReferencedArt(art);
+    database.exec(
+      "INSERT INTO binder_slots (binder_page_id,row_index,column_index,entry_kind,set_id,set_language) VALUES ('page-1',0,1,'reserved','30th','en')",
+    );
+    await createBackup(db, art, 'owner', { backupId: 'backup_set_target' });
+    database.exec(
+      "UPDATE binder_slots SET set_id=NULL,set_language=NULL WHERE binder_page_id='page-1' AND row_index=0 AND column_index=1",
+    );
+    await restoreBackup(db, art, 'owner', 'backup_set_target');
+    expect(
+      database
+        .prepare(
+          "SELECT entry_kind,set_id,set_language FROM binder_slots WHERE binder_page_id='page-1' AND row_index=0 AND column_index=1",
+        )
+        .get(),
+    ).toEqual({ entry_kind: 'reserved', set_id: '30th', set_language: 'en' });
+  });
+
   it('round-trips pocket bookmarks through backup and restore', async () => {
     const { database, db, art } = setup();
     await seedReferencedArt(art);

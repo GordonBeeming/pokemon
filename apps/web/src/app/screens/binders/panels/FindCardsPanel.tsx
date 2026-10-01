@@ -66,8 +66,8 @@ function AddAndPlaceTile({
  * Find cards fills this pocket and never changes what the binder wants in it (that's
  * Change target). Spare owned copies that fit come first and place with one tap; then
  * every printing that fits (every active printing of the species for an any-printing
- * target, or the one card for an exact target), each with one-tap "Add a copy and
- * place".
+ * target, every card of the set for a set target, or the one card for an exact target),
+ * each with one-tap "Add a copy and place".
  */
 export function FindCardsPanel({
   slot,
@@ -202,6 +202,17 @@ export function FindCardsPanel({
             autoSearch
             searchLabel="Narrow by set, number or name"
             placeholder="Set, number or name"
+            hideIds={spareIds}
+            renderItem={tile}
+          />
+        ) : slot.entryKind === 'set' && slot.setId && slot.setLanguage ? (
+          <CardPicker
+            query={{ q: '', filters: { set: slot.setId, language: slot.setLanguage } }}
+            palette={palette}
+            pending={pending}
+            autoSearch
+            searchLabel="Narrow by name or number"
+            placeholder="Name or number"
             hideIds={spareIds}
             renderItem={tile}
           />

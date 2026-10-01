@@ -73,7 +73,9 @@ export function pocketState(slot: BinderSlotView): PocketState {
 }
 
 export function isTarget(slot: BinderSlotView | null | undefined): boolean {
-  return slot?.entryKind === 'exact-card' || slot?.entryKind === 'pokemon';
+  return (
+    slot?.entryKind === 'exact-card' || slot?.entryKind === 'pokemon' || slot?.entryKind === 'set'
+  );
 }
 
 export function placeText(at: BinderSlotLocation): string {
@@ -81,6 +83,11 @@ export function placeText(at: BinderSlotLocation): string {
 }
 
 export type CardLookup = ReadonlyMap<string, ResolvedCard>;
+
+/** The set a set target takes cards from, by name. */
+export function setTargetName(slot: BinderSlotView): string {
+  return slot.setName ?? slot.setId ?? 'set';
+}
 
 /** "#0025 Pikachu", the exact card's name, the reservation label, or "Empty pocket". */
 export function pocketTitle(slot: BinderSlotView, cards: CardLookup): string {
@@ -97,6 +104,7 @@ export function pocketTitle(slot: BinderSlotView, cards: CardLookup): string {
       ? `${formatDexNumber(pokemon.number)} ${pokemon.name}`
       : `Pokémon #${slot.pokemonNumber}`;
   }
+  if (slot.entryKind === 'set') return `Any card · ${setTargetName(slot)}`;
   if (slot.entryKind === 'exact-card' && slot.cardId) {
     const card = cards.get(slot.cardId);
     if (!card) return 'Exact card target';
@@ -107,6 +115,7 @@ export function pocketTitle(slot: BinderSlotView, cards: CardLookup): string {
 
 export function pocketKindLabel(slot: BinderSlotView): string {
   if (slot.entryKind === 'pokemon') return 'Any printing of this Pokémon';
+  if (slot.entryKind === 'set') return 'Any card from this set';
   if (slot.entryKind === 'exact-card') return 'Exact card target';
   if (slot.entryKind === 'reserved') return 'Reserved sleeve';
   return 'Empty pocket';
@@ -126,6 +135,7 @@ export function bookmarkDefaultName(slot: BinderSlotView, cards: CardLookup): st
   if (slot.entryKind === 'pokemon' && slot.pokemonNumber)
     return NATIONAL_POKEDEX[slot.pokemonNumber - 1]?.name ?? 'Pokémon';
   if (slot.entryKind === 'exact-card' && slot.cardId) return cards.get(slot.cardId)?.name ?? 'Card';
+  if (slot.entryKind === 'set') return setTargetName(slot);
   if (slot.entryKind === 'reserved') return slot.label ?? 'Reserved sleeve';
   return 'Empty';
 }
@@ -256,7 +266,15 @@ export function changedPockets(
 ): Array<{ row: number; column: number }> {
   if (!before || !after) return [];
   const key = (slot: BinderSlotView) =>
-    [slot.entryKind, slot.cardId, slot.pokemonNumber, slot.assignedCardId, slot.label].join('|');
+    [
+      slot.entryKind,
+      slot.cardId,
+      slot.pokemonNumber,
+      slot.setLanguage,
+      slot.setId,
+      slot.assignedCardId,
+      slot.label,
+    ].join('|');
   const previous = new Map(before.slots.map((slot) => [`${slot.row}:${slot.column}`, key(slot)]));
   return after.slots
     .filter((slot) => previous.get(`${slot.row}:${slot.column}`) !== key(slot))
@@ -279,6 +297,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   binder_assignment_quantity_exceeded:
     'All owned copies of this card are already placed. Use Find cards to add a copy and place it.',
   binder_assignment_incompatible: 'That copy does not fit this target.',
+  binder_set_not_found: 'That set is no longer in the catalogue. Choose another set.',
+  binder_page_no_empty_pockets: 'This page has no empty pockets left to reserve.',
   binder_version_not_draft: 'Only a draft can be discarded. The active binder was not changed.',
   binder_version_not_found:
     'That version of the binder no longer exists. Open the binder again from the library.',

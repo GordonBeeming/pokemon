@@ -173,6 +173,12 @@ const routeCases: RouteCase[] = [
     body: { at: { page: 0, row: 0, column: 0 }, entries: [{ kind: 'empty' }], expectedRevision: 1 },
   },
   {
+    name: 'fill page',
+    method: 'POST',
+    browserPath: `/binders/versions/${VERSION_A}/pages/fill`,
+    body: { page: 0, target: { kind: 'pokemon', pokemonNumber: 25 }, expectedRevision: 1 },
+  },
+  {
     name: 'remove entry',
     method: 'POST',
     browserPath: `/binders/versions/${VERSION_A}/entries/remove`,

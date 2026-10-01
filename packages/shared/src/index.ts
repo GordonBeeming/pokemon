@@ -203,9 +203,14 @@ export const binderSlotSchema = z
     row: z.number().int().nonnegative(),
     column: z.number().int().nonnegative(),
     cardId: cardIdSchema.nullable(),
-    entryKind: z.enum(['empty', 'reserved', 'exact-card', 'pokemon']).optional(),
+    entryKind: z.enum(['empty', 'reserved', 'exact-card', 'pokemon', 'set']).optional(),
     label: z.string().trim().min(1).max(120).nullable().optional(),
     pokemonNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE).nullable().optional(),
+    // A set target: any card from this set fits. The name and code are for display.
+    setId: z.string().trim().min(1).max(128).nullable().optional(),
+    setLanguage: languageSchema.nullable().optional(),
+    setName: z.string().trim().min(1).max(200).nullable().optional(),
+    setCode: z.string().trim().min(1).max(32).nullable().optional(),
     assignedCardId: cardIdSchema.nullable().optional(),
     startsNewPage: z.boolean().optional(),
   })
@@ -445,6 +450,15 @@ export const binderEntrySchema = z.discriminatedUnion('kind', [
       startsNewPage: z.boolean().default(false),
     })
     .strict(),
+  // Any card from one set, the way a Pokémon target is any printing of one Pokémon.
+  z
+    .object({
+      kind: z.literal('set'),
+      setId: z.string().trim().min(1).max(128),
+      setLanguage: languageSchema,
+      startsNewPage: z.boolean().default(false),
+    })
+    .strict(),
 ]);
 export type BinderEntry = z.infer<typeof binderEntrySchema>;
 
@@ -452,6 +466,26 @@ export const binderInsertRequestSchema = binderRevisionRequestSchema
   .extend({
     at: binderSlotLocationSchema,
     entries: z.array(binderEntrySchema).min(1).max(NATIONAL_POKEDEX_SIZE),
+  })
+  .strict();
+export const binderFillPageRequestSchema = binderRevisionRequestSchema
+  .extend({
+    page: z.number().int().nonnegative(),
+    target: z.discriminatedUnion('kind', [
+      z
+        .object({
+          kind: z.literal('pokemon'),
+          pokemonNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE),
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal('set'),
+          setId: z.string().trim().min(1).max(128),
+          setLanguage: languageSchema,
+        })
+        .strict(),
+    ]),
   })
   .strict();
 export const binderCompactRemoveRequestSchema = binderRevisionRequestSchema
@@ -701,6 +735,7 @@ export const binderCardMatchesSchema = z
     name: z.string().trim().min(1).max(120),
     exactTargets: z.array(slotRefSchema),
     pokemonTargets: z.array(slotRefSchema),
+    setTargets: z.array(slotRefSchema).default([]),
     placed: z.array(slotRefSchema),
     nextTarget: slotRefSchema.nullable(),
     endDestination: slotRefSchema.nullable(),

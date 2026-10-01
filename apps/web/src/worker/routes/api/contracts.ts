@@ -6,6 +6,7 @@ import {
   binderSlotSwapRequestSchema,
   binderSlotLocationSchema,
   binderInsertRequestSchema,
+  binderFillPageRequestSchema,
   binderCompactRemoveRequestSchema,
   binderOffsetMoveRequestSchema,
   binderAssignRequestSchema,
@@ -56,6 +57,7 @@ export const binderFullPokedexPreviewSchema = z
 export {
   binderBookmarkSetRequestSchema,
   binderInsertRequestSchema,
+  binderFillPageRequestSchema,
   binderCompactRemoveRequestSchema,
   binderOffsetMoveRequestSchema,
   binderAssignRequestSchema,

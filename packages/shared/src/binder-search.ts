@@ -9,7 +9,7 @@ export const binderSearchMatchSchema = z.object({
   row: z.number().int().nonnegative().nullable(),
   column: z.number().int().nonnegative().nullable(),
   label: z.string(),
-  kind: z.enum(['empty', 'reserved', 'pokemon', 'exact-card', 'reserved-page']),
+  kind: z.enum(['empty', 'reserved', 'pokemon', 'exact-card', 'set', 'reserved-page']),
   placed: z.boolean(),
 });
 export const binderSearchResultSchema = z.object({

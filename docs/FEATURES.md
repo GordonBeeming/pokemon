@@ -426,9 +426,23 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       when: choosing this from a pocket shows "Insert at page P, pocket R:C, shifting later targets"
       as the destination.
 - [ ] new · The Insert dialog has three target types: Pokémon targets, Set, and Exact cards. Set
-      lists the catalogue's sets (search by name or code); picking one selects every card in it as
-      an exact-card target, in set number order · done when: picking "30th Classic Collection"
-      selects its 30 cards and inserting them fills the pockets in card-number order.
+      lists the catalogue's sets (search by name or code) and offers two ways to use one. "Any card
+      from the set" inserts a chosen number of set targets (default one page's worth); "Every card,
+      in order" selects every card in the set as an exact-card target, in set number order · done
+      when: with "Every card, in order", picking "30th Classic Collection" selects its 30 cards and
+      inserting them fills the pockets in card-number order; with "Any card from the set" and 4
+      pockets, four set targets are inserted.
+- [ ] new · A set target is a pocket that takes any card from one set. It shows the set's code and
+      name with an "Any" pill, counts as a target, is found by its set name in "Find in this
+      binder", and keeps its pocket when targets are arranged. Find cards lists spare copies from
+      that set, then every card of the set with "Add a copy and place"; a card from another set is
+      refused. Change target turns it into an ordinary exact-card target · done when: placing a
+      copy in a set target leaves the pocket a set target, and removing the copy leaves it wanting
+      any card from the set again.
+- [ ] new · Manage page has "Reserve page for…": choose a set or a Pokémon and every empty pocket on
+      that page becomes that any-card target. Pockets that already hold something are kept and no
+      other page changes; it's disabled when the page has no empty pockets · done when: on an empty
+      3 × 3 page, choosing a set gives nine set targets and the neighbouring pages are unchanged.
 - [ ] keep · "Paste cards here" opens the Paste dialog anchored at the selected pocket, offered only
       when a clipboard exists · done when: with an empty clipboard, no pocket offers "Paste cards
       here."

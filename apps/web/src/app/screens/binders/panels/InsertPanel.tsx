@@ -3,6 +3,7 @@ import {
   type BinderSlotLocation,
   cardIdSchema,
   formatDexNumber,
+  languageSchema,
   type FrameType,
   NATIONAL_POKEDEX,
 } from '@pokedex/shared';
@@ -16,6 +17,9 @@ import { CardPicker, collectAllCards, type PickerQuery } from './CardPicker';
 import { Panel } from './Panel';
 
 type Kind = 'pokemon' | 'set' | 'exact-card';
+/** A set is inserted as pockets that take any of its cards, or as one target per card. */
+type SetMode = 'any' | 'every';
+const MAX_ANY_POCKETS = 400;
 const POKEMON_PAGE_SIZE = 40;
 const SET_PAGE_SIZE = 40;
 // "2", "10", "TG05": numbers in card order, letters after.
@@ -78,6 +82,7 @@ export function InsertPanel({
   versionId,
   at,
   reservedPage,
+  pageSize,
   palette,
   pending,
   error,
@@ -88,6 +93,8 @@ export function InsertPanel({
   versionId: string;
   at: BinderSlotLocation | null;
   reservedPage: boolean;
+  /** Pockets on one page face: the starting count for "any card from a set". */
+  pageSize: number;
   palette: Record<FrameType, string>;
   pending: boolean;
   error: string | null;
@@ -107,6 +114,9 @@ export function InsertPanel({
   const [shiftBy, setShiftBy] = useState('1');
   const sets = useSets();
   const [chosenSet, setChosenSet] = useState<string | null>(null);
+  const [setMode, setSetMode] = useState<SetMode>('any');
+  const [anyCount, setAnyCount] = useState(String(pageSize));
+  const [anySet, setAnySet] = useState<SetFacet | null>(null);
   const selectAllRequest = useRef<AbortController | null>(null);
 
   const pokemon = kind === 'pokemon' ? filterPokemon(query) : [];
@@ -152,6 +162,42 @@ export function InsertPanel({
     } finally {
       if (!controller.signal.aborted) setWorking(false);
     }
+  }
+
+  /** `count` pockets that each take any card from the set. */
+  function selectAnyFromSet(set: SetFacet, countText: string): void {
+    selectAllRequest.current?.abort();
+    setWorking(false);
+    setAnySet(set);
+    setChosenSet(setKey(set));
+    const language = languageSchema.safeParse(set.language);
+    const count = Number(countText);
+    if (!language.success || !Number.isInteger(count) || count < 1 || count > MAX_ANY_POCKETS) {
+      setSelected(new Map());
+      setMessage(`Enter how many pockets, from 1 to ${MAX_ANY_POCKETS}.`);
+      return;
+    }
+    const entry: BinderEntry = {
+      kind: 'set',
+      setId: set.setId,
+      setLanguage: language.data,
+      startsNewPage: false,
+    };
+    setSelected(
+      new Map(Array.from({ length: count }, (_unused, index) => [`any:${index}`, entry])),
+    );
+    setMessage(
+      `${count.toLocaleString('en-AU')} ${count === 1 ? 'pocket' : 'pockets'} for any card from ${set.setName}.`,
+    );
+  }
+
+  function clearSetChoice(): void {
+    selectAllRequest.current?.abort();
+    setWorking(false);
+    setSelected(new Map());
+    setChosenSet(null);
+    setAnySet(null);
+    setMessage('');
   }
 
   /** Every card of a set becomes an exact-card target, in the set's own number order. */
@@ -236,6 +282,7 @@ export function InsertPanel({
             setMessage('');
             setExactTotal(null);
             setChosenSet(null);
+            setAnySet(null);
           }}
           options={[
             { value: 'pokemon', label: 'Pokémon targets' },
@@ -328,10 +375,41 @@ export function InsertPanel({
                 }}
               />
             </label>
-            <p className="panel-help">
-              Pick a set to target every card in it, in set order. Clear the selection to start
-              again.
-            </p>
+            <SegmentedControl<SetMode>
+              label="Pockets take"
+              value={setMode}
+              onChange={(value) => {
+                setSetMode(value);
+                clearSetChoice();
+              }}
+              options={[
+                { value: 'any', label: 'Any card from the set' },
+                { value: 'every', label: 'Every card, in order' },
+              ]}
+            />
+            {setMode === 'any' ? (
+              <label className="panel-field">
+                <span>How many pockets</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  max={MAX_ANY_POCKETS}
+                  step="1"
+                  value={anyCount}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setAnyCount(event.target.value);
+                    if (anySet) selectAnyFromSet(anySet, event.target.value);
+                  }}
+                />
+              </label>
+            ) : (
+              <p className="panel-help">
+                Pick a set to target every card in it, in set order. Clear the selection to start
+                again.
+              </p>
+            )}
             {sets.isError ? (
               <p role="alert" className="panel-error">
                 {binderErrorMessage(sets.error)}
@@ -345,7 +423,9 @@ export function InsertPanel({
                   className="species-option"
                   aria-pressed={chosenSet === setKey(set)}
                   disabled={busy}
-                  onClick={() => void selectSet(set)}
+                  onClick={() =>
+                    setMode === 'any' ? selectAnyFromSet(set, anyCount) : void selectSet(set)
+                  }
                 >
                   <span>{set.setName}</span>
                   <small>
@@ -377,11 +457,7 @@ export function InsertPanel({
                 type="button"
                 className="button-text"
                 disabled={busy || selected.size === 0}
-                onClick={() => {
-                  setSelected(new Map());
-                  setChosenSet(null);
-                  setMessage('');
-                }}
+                onClick={clearSetChoice}
               >
                 Clear selection
               </button>

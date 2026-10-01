@@ -84,6 +84,7 @@ test('Insert targets can take a whole set, in set order', async ({ page }, testI
   await press(page, phone, page.getByRole('button', { name: 'Insert targets here' }));
   const panel = page.getByRole('dialog', { name: /^Insert/ });
   await chooseSegment(panel, 'Set');
+  await chooseSegment(panel, 'Every card, in order');
   await panel.getByLabel('Search sets').fill(set.setName);
   await press(
     page,

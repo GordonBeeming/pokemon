@@ -455,6 +455,14 @@ export const binderApi = {
     entries: BinderEntry[],
     expectedRevision: number,
   ) => mutate(versionId, '/entries/insert', 'POST', { at, entries, expectedRevision }),
+  fillPage: (
+    versionId: string,
+    page: number,
+    target:
+      | { kind: 'pokemon'; pokemonNumber: number }
+      | { kind: 'set'; setId: string; setLanguage: string },
+    expectedRevision: number,
+  ) => mutate(versionId, '/pages/fill', 'POST', { page, target, expectedRevision }),
   compactRemove: (versionId: string, at: BinderSlotLocation, expectedRevision: number) =>
     mutate(versionId, '/entries/remove', 'POST', { at, expectedRevision }),
   shift: (versionId: string, from: BinderSlotLocation, offset: number, expectedRevision: number) =>

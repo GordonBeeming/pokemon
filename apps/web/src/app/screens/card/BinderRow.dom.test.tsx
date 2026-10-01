@@ -126,7 +126,7 @@ function renderRow(props: {
   return step(() => root.render(<RouterProvider router={router} />));
 }
 
-const NO_TARGETS = { exactTargets: [], pokemonTargets: [], placed: [] };
+const NO_TARGETS = { exactTargets: [], pokemonTargets: [], setTargets: [], placed: [] };
 
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -213,6 +213,7 @@ describe('BinderRow', () => {
         name: 'National Pokedex',
         exactTargets: [],
         pokemonTargets: [slot(2, 0, 0)],
+        setTargets: [],
         placed: [],
         nextTarget: slot(2, 0, 0),
         endDestination: slot(5, 0, 0),
@@ -239,6 +240,7 @@ describe('BinderRow', () => {
         name: 'National Pokedex',
         exactTargets: [],
         pokemonTargets: [slot(4, 0, 0)],
+        setTargets: [],
         placed: [slot(1, 0, 0)],
         nextTarget: slot(4, 0, 0),
         endDestination: slot(6, 0, 0),
@@ -264,6 +266,7 @@ describe('BinderRow', () => {
         name: 'National Pokedex',
         exactTargets: [],
         pokemonTargets: [slot(4, 0, 0)],
+        setTargets: [],
         placed: [slot(1, 0, 0)],
         nextTarget: slot(4, 0, 0),
         endDestination: slot(6, 0, 0),
