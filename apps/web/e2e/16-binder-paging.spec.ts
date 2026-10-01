@@ -160,6 +160,44 @@ test.describe('desktop', () => {
     await expect(page.locator('.binder-page-indicator')).toHaveText(`Page 3 / ${binder.pageCount}`);
   });
 
+  test('a long jump with neighbouring pages showing draws the page it names', async ({ page }) => {
+    // Focusing the landed-on pocket while the track was still sliding used to scroll
+    // the clipped viewport sideways, so "Page 38" drew page 39 or 40.
+    const binder = await pagedBinder(page.request, 'National Pokedex');
+    test.skip(binder.pageCount < 20, 'needs a long binder with bookmarks');
+    const before = (await api.listBinders(page.request)).find((item) => item.id === binder.id);
+    for (const peek of [1, 2]) {
+      const patched = await page.request.patch(`/api/binders/${binder.id}`, {
+        data: { peekColumns: peek },
+      });
+      expect(patched.ok()).toBe(true);
+      await openAt(page, binder, 2);
+      // A bookmark jump is one of the jumps that focuses the landed-on pocket.
+      await page.getByRole('button', { name: /Jump to bookmark/ }).click();
+      const last = page.getByRole('option').last();
+      const label = (await last.textContent()) ?? '';
+      const target = Number(/page (\d+)/u.exec(label)?.[1]);
+      expect(target, label).toBeGreaterThan(10);
+      await last.click();
+      await expect(page).toHaveURL(new RegExp(`[?&]page=${target}(&|$)`, 'u'));
+      await expect(page.locator(`[data-pocket="${target - 1}:0:0"]`)).toBeFocused();
+      await page.waitForTimeout(600);
+      const drawn = await page.evaluate(() => {
+        const viewport = document.querySelector('.page-track-viewport');
+        if (!viewport) return null;
+        const box = viewport.getBoundingClientRect();
+        const section = document
+          .elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+          ?.closest('.binder-page');
+        return { scrollLeft: viewport.scrollLeft, label: section?.getAttribute('aria-label') };
+      });
+      expect(drawn, `peek ${peek}`).toEqual({ scrollLeft: 0, label: `Page ${target}` });
+    }
+    await page.request.patch(`/api/binders/${binder.id}`, {
+      data: { peekColumns: before?.peekColumns ?? 1 },
+    });
+  });
+
   test('a selected pocket gets a one-row action bar with Close beside the actions', async ({
     page,
   }) => {

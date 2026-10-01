@@ -484,6 +484,10 @@ an action at the end */
   position: relative;
   max-width: 100%;
   overflow: hidden;
+  /* clip, not just hidden: a hidden box is still a scroll container, so focusing a
+     pocket on a page that is still sliding in scrolled it sideways and left the wrong
+     page in view (page 38 drawing page 40). A clipped box can't be scrolled at all. */
+  overflow: clip;
   touch-action: pan-y;
 }
 
