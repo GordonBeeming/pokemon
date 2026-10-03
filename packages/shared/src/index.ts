@@ -1,10 +1,12 @@
 import { z } from 'zod';
 export * from './binder-search';
+import { BASIC_ENERGY_TYPES } from './energy';
 import { NATIONAL_POKEDEX_SIZE } from './national-pokedex';
 import { FRAME_TYPES, RARITY_KEYS } from './frame';
 
 export * from './artists';
 export * from './trainers';
+export * from './energy';
 export * from './national-pokedex';
 export * from './frame';
 export * from './people';
@@ -198,6 +200,8 @@ export const collectionMutationResultSchema = z
   .strict();
 export type CollectionMutationResult = z.infer<typeof collectionMutationResultSchema>;
 
+export const energyGroupSchema = z.enum(['all', 'special', ...BASIC_ENERGY_TYPES]);
+
 export const binderSlotSchema = z
   .object({
     pageId: z.string().trim().min(1).max(128),
@@ -205,7 +209,16 @@ export const binderSlotSchema = z
     column: z.number().int().nonnegative(),
     cardId: cardIdSchema.nullable(),
     entryKind: z
-      .enum(['empty', 'reserved', 'exact-card', 'pokemon', 'set', 'illustrator', 'trainer'])
+      .enum([
+        'empty',
+        'reserved',
+        'exact-card',
+        'pokemon',
+        'set',
+        'illustrator',
+        'trainer',
+        'energy',
+      ])
       .optional(),
     label: z.string().trim().min(1).max(120).nullable().optional(),
     pokemonNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE).nullable().optional(),
@@ -214,7 +227,8 @@ export const binderSlotSchema = z
     setLanguage: languageSchema.nullable().optional(),
     setName: z.string().trim().min(1).max(200).nullable().optional(),
     setCode: z.string().trim().min(1).max(32).nullable().optional(),
-    // An illustrator or trainer target: any card in that group fits. The name is for display.
+    // An illustrator, trainer or energy target: any card in that group fits. The name is
+    // for display.
     groupKey: z.string().trim().min(1).max(200).nullable().optional(),
     groupName: z.string().trim().min(1).max(200).nullable().optional(),
     assignedCardId: cardIdSchema.nullable().optional(),
@@ -480,6 +494,14 @@ export const binderEntrySchema = z.discriminatedUnion('kind', [
       startsNewPage: z.boolean().default(false),
     })
     .strict(),
+  // Any energy card, any special energy, or any energy of one basic type.
+  z
+    .object({
+      kind: z.literal('energy'),
+      key: energyGroupSchema,
+      startsNewPage: z.boolean().default(false),
+    })
+    .strict(),
 ]);
 export type BinderEntry = z.infer<typeof binderEntrySchema>;
 
@@ -510,6 +532,7 @@ export const binderFillPageRequestSchema = binderRevisionRequestSchema
         .strict(),
       z.object({ kind: z.literal('illustrator'), key: z.string().trim().min(1).max(200) }).strict(),
       z.object({ kind: z.literal('trainer'), key: z.string().trim().min(1).max(200) }).strict(),
+      z.object({ kind: z.literal('energy'), key: energyGroupSchema }).strict(),
     ]),
   })
   .strict();

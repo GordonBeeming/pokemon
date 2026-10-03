@@ -135,6 +135,7 @@ export function catalogueFilters(
     species: pokedexNumber === undefined ? query.species : undefined,
     artist: query.artist,
     trainer: query.trainer?.trim() ? query.trainer.trim().slice(0, 200) : undefined,
+    energy: query.energy?.trim() ? query.energy.trim().slice(0, 32) : undefined,
     cardNumber: query.number?.trim() ? query.number.trim().slice(0, 32) : undefined,
     pokedexNumber,
     region: region?.success ? region.data : undefined,

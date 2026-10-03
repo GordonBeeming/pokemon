@@ -108,6 +108,7 @@ export function applyAllMigrations(database: DatabaseSync): void {
     '026_binder_page_section.sql',
     '027_binder_set_targets.sql',
     '028_card_groups.sql',
+    '029_energy_groups.sql',
   ])
     database.exec(readFileSync(new URL(name, directory), 'utf8'));
 }

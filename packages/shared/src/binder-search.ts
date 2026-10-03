@@ -17,6 +17,7 @@ export const binderSearchMatchSchema = z.object({
     'set',
     'illustrator',
     'trainer',
+    'energy',
     'reserved-page',
   ]),
   placed: z.boolean(),

@@ -89,7 +89,11 @@ export type CardLookup = ReadonlyMap<string, ResolvedCard>;
 
 /** A pocket that takes any card by one illustrator or of one trainer's Pokémon. */
 export function isGroupTarget(slot: BinderSlotView | null | undefined): boolean {
-  return slot?.entryKind === 'illustrator' || slot?.entryKind === 'trainer';
+  return (
+    slot?.entryKind === 'illustrator' ||
+    slot?.entryKind === 'trainer' ||
+    slot?.entryKind === 'energy'
+  );
 }
 
 /** The illustrator or trainer a group target takes cards from, by name. */
@@ -132,6 +136,7 @@ export function pocketKindLabel(slot: BinderSlotView): string {
   if (slot.entryKind === 'set') return 'Any card from this set';
   if (slot.entryKind === 'illustrator') return 'Any card by this illustrator';
   if (slot.entryKind === 'trainer') return 'Any of this trainer’s Pokémon';
+  if (slot.entryKind === 'energy') return 'Any card from this energy group';
   if (slot.entryKind === 'exact-card') return 'Exact card target';
   if (slot.entryKind === 'reserved') return 'Reserved sleeve';
   return 'Empty pocket';

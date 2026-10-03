@@ -345,7 +345,8 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 ## Trainers
 
 - [ ] new · A Trainers page (rail item on desktop; a link from Sets on a phone) lists every trainer
-      whose Pokémon have cards, each with one of their cards, owned / total and a star; favourites
+      whose Pokémon have cards (plus "Dark" and "Mega" Pokémon as their own groups), each with one
+      of their cards, owned / total and a star; favourites
       come first, search narrows by name, sort is A–Z or most cards · done when: Lillie shows her
       card count and starring her moves her into Favourites.
 - [ ] new · Opening a trainer shows their cards in the catalogue with their name as the heading and
@@ -465,6 +466,12 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       pocket count; the pocket shows the name with an "Any" pill, stays put on Arrange, is found by
       name in "Find in this binder", and Find cards lists that group's cards. A card outside the
       group is refused · done when: a Lillie page takes Lillie's Comfey and refuses Rocket's Zapdos.
+- [ ] new · Energy targets: a pocket that takes any energy card, any special energy, or any energy
+      of one basic type (Grass … Colorless). Insert targets offers Energy as any card of it (with a
+      pocket count) or every card in release order (oldest set first, then card number);
+      "Reserve page for…" offers Energy too · done when: a Fire Energy pocket takes Basic Fire
+      Energy and refuses Water Energy, and "every card, release order" for Fire Energy fills the
+      pockets in the catalogue's release order.
 - [ ] keep · "Paste cards here" opens the Paste dialog anchored at the selected pocket, offered only
       when a clipboard exists · done when: with an empty clipboard, no pocket offers "Paste cards
       here."

@@ -12,7 +12,7 @@ import {
   searchBinderSpaces,
   setBinderEntryAssignment,
 } from './binders';
-import { cardGroupKeys, listSetFacets } from './catalogue';
+import { cardGroupKeys, listSetFacets, searchCards } from './catalogue';
 import { setCollectionState } from './collection';
 import { applyAllMigrations, sqliteD1 } from './d1-test-helper';
 import { getFavorites, setFavorite, setFavoriteKey } from './settings';
@@ -214,5 +214,139 @@ describe('trainers list and favourites', () => {
     sets = await listSetFacets(db, 'owner');
     expect(sets.find((set) => set.setId === 'sv9')?.favorite).toBe(false);
     expect(await getFavorites(db, 'owner', 'sets')).toEqual(new Set());
+  });
+});
+
+function setupEnergy(): D1Database {
+  const raw = new DatabaseSync(':memory:');
+  databases.push(raw);
+  applyAllMigrations(raw);
+  raw.exec(`
+    INSERT INTO users(id,label,created_at) VALUES('owner','Owner',1);
+    INSERT INTO catalogue_sets(set_id,language,set_name,release_date,updated_at) VALUES
+      ('old','en','Old Set','1999-01-09',1), ('new','en','New Set','2025-09-26',1)
+    ON CONFLICT(set_id,language) DO UPDATE SET release_date=excluded.release_date;
+  `);
+  const insert = raw.prepare(
+    `INSERT INTO catalogue_cards
+      (id,name,language,category,set_id,set_name,number,number_sort,energy_key,is_active,created_at,updated_at)
+     VALUES (?,?,'en','energy',?,?,?,?,?,1,1,1)`,
+  );
+  for (const [id, name, set, number] of [
+    ['fire-new', 'Basic Fire Energy', 'new', '2'],
+    ['fire-old', 'Fire Energy', 'old', '98'],
+    ['water-old', 'Water Energy', 'old', '102'],
+    ['dce-old', 'Double Colorless Energy', 'old', '96'],
+  ] as const) {
+    const keys = cardGroupKeys({ name, category: 'energy' });
+    insert.run(id, name, set, set, number, Number(number), keys.energyKey);
+  }
+  raw.exec(`
+    INSERT INTO catalogue_cards
+      (id,name,language,category,set_id,set_name,number,pokedex_number,is_active,created_at,updated_at)
+    VALUES ('charmander','Charmander','en','pokemon','old','old','46',4,1,1,1);
+  `);
+  return sqliteD1(raw);
+}
+
+describe('energy targets', () => {
+  it('a Fire Energy pocket takes Fire Energy only; an any-energy pocket takes any energy', async () => {
+    const db = setupEnergy();
+    const created = await createBinder(db, 'owner', 'E', { kind: '2x2', rows: 2, columns: 2 });
+    const inserted = await insertBinderEntries(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 0 },
+      [
+        { kind: 'energy', key: 'fire', startsNewPage: false },
+        { kind: 'energy', key: 'all', startsNewPage: false },
+      ],
+      created.version.revision,
+    );
+    for (const id of ['fire-old', 'water-old', 'charmander']) await own(db, id);
+    const page = await slots(db, created.version.id);
+    expect(page[0]).toMatchObject({
+      entryKind: 'energy',
+      groupKey: 'fire',
+      groupName: 'Fire Energy',
+    });
+    expect(page[1]).toMatchObject({
+      entryKind: 'energy',
+      groupKey: 'all',
+      groupName: 'Any energy',
+    });
+
+    const fire = await getBinderAssignmentCandidates(db, 'owner', created.version.id, {
+      page: 0,
+      row: 0,
+      column: 0,
+    });
+    expect(fire.candidates.map((candidate) => candidate.cardId)).toEqual(['fire-old']);
+    await expect(
+      setBinderEntryAssignment(
+        db,
+        'owner',
+        created.version.id,
+        { page: 0, row: 0, column: 0 },
+        'water-old',
+        inserted.version.revision,
+      ),
+    ).rejects.toMatchObject({ code: 'binder_assignment_incompatible' });
+    await expect(
+      setBinderEntryAssignment(
+        db,
+        'owner',
+        created.version.id,
+        { page: 0, row: 0, column: 1 },
+        'charmander',
+        inserted.version.revision,
+      ),
+    ).rejects.toMatchObject({ code: 'binder_assignment_incompatible' });
+    await setBinderEntryAssignment(
+      db,
+      'owner',
+      created.version.id,
+      { page: 0, row: 0, column: 1 },
+      'water-old',
+      inserted.version.revision,
+    );
+    expect((await slots(db, created.version.id))[1]).toMatchObject({
+      entryKind: 'energy',
+      assignedCardId: 'water-old',
+    });
+    const matches = await getCardBinderMatches(db, 'owner', 'fire-new');
+    expect(matches[0]?.groupTargets).toEqual([expect.objectContaining({ row: 0, col: 0 })]);
+    const found = await searchBinderSpaces(db, 'owner', created.version.id, { q: 'fire' });
+    expect(found.matches[0]).toMatchObject({ kind: 'energy', label: 'Any card · Fire Energy' });
+  });
+
+  it('lists one energy type in release order for "every card, in order"', async () => {
+    const db = setupEnergy();
+    const fire = await searchCards(db, 'owner', {
+      energy: 'fire',
+      sort: 'release',
+      limit: 50,
+      offset: 0,
+    });
+    expect(fire.cards.map((card) => card.id)).toEqual(['fire-old', 'fire-new']);
+    const all = await searchCards(db, 'owner', {
+      energy: 'all',
+      sort: 'release',
+      limit: 50,
+      offset: 0,
+    });
+    expect(all.cards.map((card) => card.id)).toEqual([
+      'dce-old',
+      'fire-old',
+      'water-old',
+      'fire-new',
+    ]);
+    const special = await searchCards(db, 'owner', {
+      energy: 'special',
+      limit: 50,
+      offset: 0,
+    });
+    expect(special.cards.map((card) => card.id)).toEqual(['dce-old']);
   });
 });

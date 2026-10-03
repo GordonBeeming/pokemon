@@ -35,6 +35,8 @@ import {
   languageSchema,
   formatDexNumber,
   NATIONAL_POKEDEX,
+  energyGroupName,
+  energyGroupSchema,
   trainerOf,
 } from '@pokedex/shared';
 import { decodeSlotId, encodeSlotId, newId, nowSeconds } from './db';
@@ -162,9 +164,10 @@ interface SlotRow {
   set_language?: string | null;
   group_kind?: 'illustrator' | 'trainer' | null;
   group_key?: string | null;
+  energy_group?: string | null;
 }
 
-type GroupKind = 'set' | 'illustrator' | 'trainer';
+type GroupKind = 'set' | 'illustrator' | 'trainer' | 'energy';
 
 /** Pockets that ask for a card: one card, any printing of a Pokémon, or any of a group. */
 function isTargetKind(kind: string | undefined): boolean {
@@ -173,7 +176,8 @@ function isTargetKind(kind: string | undefined): boolean {
     kind === 'pokemon' ||
     kind === 'set' ||
     kind === 'illustrator' ||
-    kind === 'trainer'
+    kind === 'trainer' ||
+    kind === 'energy'
   );
 }
 
@@ -183,7 +187,8 @@ function holdsItsPocket(entry: BinderEntry): boolean {
     entry.kind === 'reserved' ||
     entry.kind === 'set' ||
     entry.kind === 'illustrator' ||
-    entry.kind === 'trainer'
+    entry.kind === 'trainer' ||
+    entry.kind === 'energy'
   );
 }
 
@@ -194,6 +199,11 @@ function groupSampleSql(alias: string): string {
     WHEN 'illustrator' THEN (SELECT MIN(g.artist) FROM catalogue_cards g WHERE g.artist_key = ${alias}.group_key)
     WHEN 'trainer' THEN (SELECT MIN(g.name) FROM catalogue_cards g WHERE g.trainer_key = ${alias}.group_key)
     END`;
+}
+
+function energyName(group: string): string {
+  const parsed = energyGroupSchema.safeParse(group);
+  return parsed.success ? energyGroupName(parsed.data) : group;
 }
 
 function groupDisplayName(
@@ -207,7 +217,7 @@ function groupDisplayName(
 
 /** SQL for "this pocket asks for a card", over the stored columns. */
 const ASSIGNABLE_SQL =
-  "(entry_kind IN ('exact-card', 'pokemon') OR (entry_kind = 'reserved' AND (set_id IS NOT NULL OR group_kind IS NOT NULL)))";
+  "(entry_kind IN ('exact-card', 'pokemon') OR (entry_kind = 'reserved' AND (set_id IS NOT NULL OR group_kind IS NOT NULL OR energy_group IS NOT NULL)))";
 
 /**
  * A set target is stored as a 'reserved' pocket that names a set (the table's CHECK
@@ -218,6 +228,7 @@ const ASSIGNABLE_SQL =
 function slotKindSql(alias: string): string {
   return `CASE WHEN ${alias}.entry_kind = 'reserved' AND ${alias}.set_id IS NOT NULL THEN 'set'
     WHEN ${alias}.entry_kind = 'reserved' AND ${alias}.group_kind IS NOT NULL THEN ${alias}.group_kind
+    WHEN ${alias}.entry_kind = 'reserved' AND ${alias}.energy_group IS NOT NULL THEN 'energy'
     ELSE ${alias}.entry_kind END`;
 }
 
@@ -435,7 +446,8 @@ async function readPages(
         slot.assigned_card_id, slot.starts_new_page, slot.set_id, slot.set_language,
         target_set.set_name AS set_name,
         COALESCE(target_set.abbreviation, upper(slot.set_id)) AS set_code,
-        slot.group_kind, slot.group_key, ${groupSampleSql('slot')} AS group_sample
+        slot.group_kind, slot.group_key, ${groupSampleSql('slot')} AS group_sample,
+        slot.energy_group
        FROM binder_slots slot
        LEFT JOIN catalogue_sets target_set
          ON target_set.set_id = slot.set_id AND target_set.language = slot.set_language
@@ -481,6 +493,9 @@ async function readPages(
               groupKey: slot.group_key,
               groupName: groupDisplayName(slot.group_kind, slot.group_sample, slot.group_key),
             }
+          : {}),
+        ...(slot.entry_kind === 'energy' && slot.energy_group
+          ? { groupKey: slot.energy_group, groupName: energyName(slot.energy_group) }
           : {}),
       })),
     }),
@@ -976,7 +991,7 @@ export async function searchBinderSpaces(
         ELSE '' END AS label,
       CASE WHEN placed.id IS NOT NULL THEN placed.name || ' · ' || placed.set_name || ' · ' || placed.number
         END AS placed_label,
-      s.group_kind, s.group_key, ${groupSampleSql('s')} AS group_sample
+      s.group_kind, s.group_key, ${groupSampleSql('s')} AS group_sample, s.energy_group
     FROM binder_slots s JOIN binder_pages p ON p.id=s.binder_page_id
     LEFT JOIN catalogue_cards c ON c.id=s.card_id
     LEFT JOIN catalogue_sets target_set
@@ -993,14 +1008,16 @@ export async function searchBinderSpaces(
         OR (s.set_id IS NOT NULL AND instr(${foldText("'set ' || COALESCE(target_set.set_name,'') || ' ' || s.set_id")},?2)>0)
         OR (s.group_kind='illustrator' AND instr(${foldText(`'illustrator ' || COALESCE(${groupSampleSql('s')},'')`)},?2)>0)
         OR (s.group_kind='trainer' AND (instr(s.group_key,?9)>0 OR instr('trainer',?2)>0))
-        OR (s.entry_kind='reserved' AND s.set_id IS NULL AND s.group_kind IS NULL AND instr(${foldText("'reserved ' || COALESCE(s.label,'sleeve')")},?2)>0)
+        OR (s.energy_group IS NOT NULL AND (instr('energy',?2)>0 OR instr(?2, s.energy_group)>0))
+        OR (s.entry_kind='reserved' AND s.set_id IS NULL AND s.group_kind IS NULL AND s.energy_group IS NULL AND instr(${foldText("'reserved ' || COALESCE(s.label,'sleeve')")},?2)>0)
         OR (s.entry_kind='empty' AND instr('empty pocket',?2)>0)
         OR (s.entry_kind='exact-card' AND instr(${foldText("COALESCE(c.name,'') || ' ' || COALESCE(c.set_name,'') || ' ' || COALESCE(c.number,'')")},?2)>0))
     UNION ALL
     SELECT position AS page,NULL AS row,NULL AS column,'reserved-page' AS kind,NULL AS pokemon_number,NULL AS assigned_card_id,
       CASE WHEN kind='reserved' THEN 'Reserved page: ' || COALESCE(label,'Unlabelled')
         ELSE 'Page: ' || label END AS label,
-      NULL AS placed_label, NULL AS group_kind, NULL AS group_key, NULL AS group_sample
+      NULL AS placed_label, NULL AS group_kind, NULL AS group_key, NULL AS group_sample,
+      NULL AS energy_group
     FROM binder_pages WHERE binder_version_id=?1 AND (kind='reserved' OR label IS NOT NULL)
       AND instr(${foldText("CASE WHEN kind='reserved' THEN 'reserved page ' ELSE 'page ' END || COALESCE(label,'')")},?2)>0
       AND json_valid(?8)
@@ -1031,6 +1048,7 @@ export async function searchBinderSpaces(
       group_kind: string | null;
       group_key: string | null;
       group_sample: string | null;
+      energy_group: string | null;
     }>();
   return binderSearchResultSchema.parse({
     matches: result.results.slice(0, 50).map((row) => {
@@ -1048,7 +1066,9 @@ export async function searchBinderSpaces(
             ? `${formatDexNumber(species.number)} ${species.name} · ${species.discoveryCategory}`
             : row.group_key
               ? `Any card · ${groupDisplayName(row.group_kind, row.group_sample, row.group_key)}`
-              : row.label),
+              : row.energy_group
+                ? `Any card · ${energyName(row.energy_group)}`
+                : row.label),
       };
     }),
     nextOffset: result.results.length > 50 ? offset + 50 : null,
@@ -1218,7 +1238,7 @@ export async function getBinderAssignmentCandidates(
       `SELECT slot.binder_page_id, slot.row_index, slot.column_index, slot.card_id,
         ${slotKindSql('slot')} AS entry_kind, slot.label, slot.pokemon_number, slot.assigned_card_id,
         slot.starts_new_page, slot.is_manual_gap, slot.set_id, slot.set_language,
-        slot.group_kind, slot.group_key,
+        slot.group_kind, slot.group_key, slot.energy_group,
         page.position AS page_position, page.kind AS page_kind
        FROM binder_pages page JOIN binder_slots slot ON slot.binder_page_id = page.id
        WHERE page.binder_version_id = ?1 AND page.position = ?2
@@ -1254,7 +1274,9 @@ export async function getBinderAssignmentCandidates(
           OR (?5 = 'pokemon' AND card.category = 'pokemon' AND card.pokedex_number = ?7)
           OR (?5 = 'set' AND card.set_id = ?8 AND card.language = ?9)
           OR (?5 = 'illustrator' AND card.artist_key = ?10)
-          OR (?5 = 'trainer' AND card.trainer_key = ?10))
+          OR (?5 = 'trainer' AND card.trainer_key = ?10)
+          OR (?5 = 'energy' AND card.category = 'energy'
+            AND (?11 = 'all' OR card.energy_key = ?11)))
        ORDER BY available DESC, card.set_name, card.number, card.name, card.id LIMIT 500`,
     )
     .bind(
@@ -1268,6 +1290,7 @@ export async function getBinderAssignmentCandidates(
       target.set_id ?? null,
       target.set_language ?? null,
       target.group_key ?? null,
+      target.energy_group ?? null,
     )
     .all<{
       id: string;
@@ -1698,7 +1721,7 @@ export async function setBinderSlot(
           `UPDATE binder_slots SET card_id = ?1,
           is_manual_gap = CASE WHEN ?1 IS NULL THEN 1 ELSE 0 END,
           entry_kind = CASE WHEN ?1 IS NULL THEN 'empty' ELSE 'exact-card' END,
-          label = NULL, pokemon_number = NULL, set_id = NULL, set_language = NULL, group_kind = NULL, group_key = NULL,
+          label = NULL, pokemon_number = NULL, set_id = NULL, set_language = NULL, group_kind = NULL, group_key = NULL, energy_group = NULL,
           assigned_card_id = CASE WHEN ?5 = 1 THEN ?1 WHEN ?6 = 1 THEN NULL
             WHEN assigned_card_id = ?1 THEN assigned_card_id ELSE NULL END, starts_new_page = CASE WHEN ?1 IS NULL THEN 0 ELSE starts_new_page END
          WHERE binder_page_id = ?2 AND row_index = ?3 AND column_index = ?4`,
@@ -1789,7 +1812,7 @@ export async function setBinderSlots(
            WHERE page_id = binder_slots.binder_page_id
              AND row_index = binder_slots.row_index
              AND column_index = binder_slots.column_index
-         ), entry_kind = 'exact-card', label = NULL, pokemon_number = NULL, set_id = NULL, set_language = NULL, group_kind = NULL, group_key = NULL,
+         ), entry_kind = 'exact-card', label = NULL, pokemon_number = NULL, set_id = NULL, set_language = NULL, group_kind = NULL, group_key = NULL, energy_group = NULL,
            assigned_card_id = NULL, starts_new_page = 0, is_manual_gap = 0
          WHERE EXISTS (
            SELECT 1 FROM assignments
@@ -1964,7 +1987,7 @@ export async function addCardsToBinderVersion(
            WHERE page_id = binder_slots.binder_page_id
              AND row_index = binder_slots.row_index
              AND column_index = binder_slots.column_index
-         ), entry_kind = 'exact-card', label = NULL, pokemon_number = NULL, set_id = NULL, set_language = NULL, group_kind = NULL, group_key = NULL,
+         ), entry_kind = 'exact-card', label = NULL, pokemon_number = NULL, set_id = NULL, set_language = NULL, group_kind = NULL, group_key = NULL, energy_group = NULL,
            assigned_card_id = NULL, starts_new_page = 0, is_manual_gap = 0
          WHERE EXISTS (
            SELECT 1 FROM assignments
@@ -2038,11 +2061,11 @@ export async function cloneBinderVersion(
          )
          INSERT INTO binder_slots (binder_page_id, row_index, column_index, card_id,
            entry_kind, label, pokemon_number, assigned_card_id, starts_new_page, is_manual_gap,
-           set_id, set_language, group_kind, group_key)
+           set_id, set_language, group_kind, group_key, energy_group)
          SELECT mapping.new_id, slots.row_index, slots.column_index, slots.card_id,
            slots.entry_kind, slots.label, slots.pokemon_number, slots.assigned_card_id,
            slots.starts_new_page, slots.is_manual_gap, slots.set_id, slots.set_language,
-           slots.group_kind, slots.group_key
+           slots.group_kind, slots.group_key, slots.energy_group
          FROM mapping JOIN binder_slots slots ON slots.binder_page_id = mapping.source_id`,
       )
       .bind(mappingJson),
@@ -2196,6 +2219,11 @@ function slotEntry(slot: MaterializedSlot): BinderEntry | null {
       startsNewPage: slot.starts_new_page === 1,
     };
   }
+  if (kind === 'energy') {
+    const group = energyGroupSchema.safeParse(slot.energy_group);
+    if (!group.success) domainError('binder_slot_not_found');
+    return { kind, key: group.data, startsNewPage: slot.starts_new_page === 1 };
+  }
   if (kind === 'illustrator' || kind === 'trainer') {
     if (!slot.group_key) domainError('binder_slot_not_found');
     return { kind, key: slot.group_key, startsNewPage: slot.starts_new_page === 1 };
@@ -2218,7 +2246,7 @@ async function materializedSlots(db: D1Database, versionId: string): Promise<Mat
       `SELECT slot.binder_page_id, slot.row_index, slot.column_index, slot.card_id,
         ${slotKindSql('slot')} AS entry_kind, slot.label, slot.pokemon_number, slot.assigned_card_id,
         slot.starts_new_page, slot.is_manual_gap, slot.set_id, slot.set_language,
-        slot.group_kind, slot.group_key,
+        slot.group_kind, slot.group_key, slot.energy_group,
         page.position AS page_position, page.kind AS page_kind
        FROM binder_slots slot JOIN binder_pages page ON page.id = slot.binder_page_id
        WHERE page.binder_version_id = ?1
@@ -2495,6 +2523,7 @@ function planSectionLayout(
       set_language: encoded.setLanguage,
       group_kind: encoded.groupKind,
       group_key: encoded.groupKey,
+      energy_group: encoded.energyGroup,
       assigned_card_id: encoded.assignedCardId,
       starts_new_page: encoded.startsNewPage ? 1 : 0,
       is_manual_gap: encoded.isManualGap,
@@ -2556,6 +2585,7 @@ function encodedSlot(
     setLanguage: entry?.kind === 'set' ? entry.setLanguage : null,
     groupKind: entry?.kind === 'illustrator' || entry?.kind === 'trainer' ? entry.kind : null,
     groupKey: entry?.kind === 'illustrator' || entry?.kind === 'trainer' ? entry.key : null,
+    energyGroup: entry?.kind === 'energy' ? entry.key : null,
     startsNewPage: entry && 'startsNewPage' in entry ? entry.startsNewPage : false,
     assignedCardId: item?.assignedCardId ?? null,
   };
@@ -2603,7 +2633,7 @@ function rewriteSlotsStatements(
         SELECT json_extract(value, '$.pageId') AS page_id,
           CAST(json_extract(value, '$.row') AS INTEGER) AS row_index,
           CAST(json_extract(value, '$.column') AS INTEGER) AS column_index,
-          CASE WHEN json_extract(value, '$.kind') IN ('set', 'illustrator', 'trainer')
+          CASE WHEN json_extract(value, '$.kind') IN ('set', 'illustrator', 'trainer', 'energy')
             THEN 'reserved' ELSE json_extract(value, '$.kind') END AS entry_kind,
           json_extract(value, '$.label') AS label,
           json_extract(value, '$.cardId') AS card_id,
@@ -2612,6 +2642,7 @@ function rewriteSlotsStatements(
           json_extract(value, '$.setLanguage') AS set_language,
           json_extract(value, '$.groupKind') AS group_kind,
           json_extract(value, '$.groupKey') AS group_key,
+          json_extract(value, '$.energyGroup') AS energy_group,
           CAST(json_extract(value, '$.startsNewPage') AS INTEGER) AS starts_new_page,
           CAST(json_extract(value, '$.isManualGap') AS INTEGER) AS is_manual_gap
           ,json_extract(value, '$.assignedCardId') AS assigned_card_id
@@ -2622,6 +2653,7 @@ function rewriteSlotsStatements(
          pokemon_number = replacement.pokemon_number,
          set_id = replacement.set_id, set_language = replacement.set_language,
          group_kind = replacement.group_kind, group_key = replacement.group_key,
+         energy_group = replacement.energy_group,
          assigned_card_id = replacement.assigned_card_id,
          starts_new_page = replacement.starts_new_page, is_manual_gap = replacement.is_manual_gap
        FROM replacement
@@ -3462,7 +3494,7 @@ export async function getCardBinderMatches(
 ): Promise<BinderCardMatches[]> {
   const card = await db
     .prepare(
-      'SELECT category, pokedex_number, set_id, language, artist_key, trainer_key FROM catalogue_cards WHERE id = ?1 AND (owner_id IS NULL OR owner_id = ?2)',
+      'SELECT category, pokedex_number, set_id, language, artist_key, trainer_key, energy_key FROM catalogue_cards WHERE id = ?1 AND (owner_id IS NULL OR owner_id = ?2)',
     )
     .bind(cardId, ownerId)
     .first<{
@@ -3472,6 +3504,7 @@ export async function getCardBinderMatches(
       language: string | null;
       artist_key: string | null;
       trainer_key: string | null;
+      energy_key: string | null;
     }>();
   if (!card) domainError('card_not_found');
   const binders = await db
@@ -3513,7 +3546,9 @@ export async function getCardBinderMatches(
            OR (slot.entry_kind = 'pokemon' AND slot.pokemon_number = ?3)
            OR (slot.entry_kind = 'reserved' AND slot.set_id = ?4 AND slot.set_language = ?5)
            OR (slot.entry_kind = 'reserved' AND slot.group_kind = 'illustrator' AND slot.group_key = ?6)
-           OR (slot.entry_kind = 'reserved' AND slot.group_kind = 'trainer' AND slot.group_key = ?7))
+           OR (slot.entry_kind = 'reserved' AND slot.group_kind = 'trainer' AND slot.group_key = ?7)
+           OR (slot.entry_kind = 'reserved' AND ?8 = 'energy'
+             AND (slot.energy_group = 'all' OR slot.energy_group = ?9)))
        ORDER BY binder.id, page.position, slot.row_index, slot.column_index`,
     )
     .bind(
@@ -3524,6 +3559,8 @@ export async function getCardBinderMatches(
       card.language,
       card.artist_key,
       card.trainer_key,
+      card.category,
+      card.energy_key,
     )
     .all<BinderMatchSlotRow>();
   for (const row of slots.results) {

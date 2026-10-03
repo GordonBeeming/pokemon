@@ -1,16 +1,22 @@
-import { formatDexNumber, languageSchema } from '@pokedex/shared';
+import {
+  energyGroupName,
+  formatDexNumber,
+  languageSchema,
+  type EnergyGroup,
+} from '@pokedex/shared';
 import { useState, type ReactElement } from 'react';
 import { useSets } from '../../../api/queries/sets';
 import { SegmentedControl } from '../../../ui/SegmentedControl';
 import { binderErrorMessage } from '../model';
-import { GroupPicker } from './GroupPicker';
+import { EnergyPicker, GroupPicker } from './GroupPicker';
 import { filterPokemon, filterSets } from './InsertPanel';
 import { Panel } from './Panel';
 
 export type PageFillTarget =
   | { kind: 'pokemon'; pokemonNumber: number }
   | { kind: 'set'; setId: string; setLanguage: ReturnType<typeof languageSchema.parse> }
-  | { kind: 'illustrator' | 'trainer'; key: string };
+  | { kind: 'illustrator' | 'trainer'; key: string }
+  | { kind: 'energy'; key: EnergyGroup };
 
 type Kind = PageFillTarget['kind'];
 const PAGE_SIZE = 40;
@@ -83,9 +89,22 @@ export function PageFillPanel({
             { value: 'pokemon', label: 'A Pokémon' },
             { value: 'illustrator', label: 'An illustrator' },
             { value: 'trainer', label: 'A trainer' },
+            { value: 'energy', label: 'Energy' },
           ]}
         />
-        {kind === 'illustrator' || kind === 'trainer' ? (
+        {kind === 'energy' ? (
+          <EnergyPicker
+            selected={chosen?.target.kind === 'energy' ? chosen.target.key : null}
+            pending={pending}
+            onSelect={(group) =>
+              setChosen({
+                key: group,
+                target: { kind: 'energy', key: group },
+                name: energyGroupName(group),
+              })
+            }
+          />
+        ) : kind === 'illustrator' || kind === 'trainer' ? (
           <GroupPicker
             kind={kind}
             selectedKey={chosen?.key ?? null}

@@ -16,6 +16,7 @@ export function sameTypeFilters(
   cards: CardLookup,
 ): Record<string, string> | null {
   if (slot.entryKind === 'trainer' && slot.groupKey) return { trainer: slot.groupKey };
+  if (slot.entryKind === 'energy' && slot.groupKey) return { energy: slot.groupKey };
   if (slot.entryKind === 'illustrator' && slot.groupKey)
     return { artist: slot.groupName ?? slot.groupKey };
   if (slot.entryKind === 'set' && slot.setId && slot.setLanguage)

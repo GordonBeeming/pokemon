@@ -205,14 +205,19 @@ export function FindCardsPanel({
             hideIds={spareIds}
             renderItem={tile}
           />
-        ) : (slot.entryKind === 'illustrator' || slot.entryKind === 'trainer') && slot.groupKey ? (
+        ) : (slot.entryKind === 'illustrator' ||
+            slot.entryKind === 'trainer' ||
+            slot.entryKind === 'energy') &&
+          slot.groupKey ? (
           <CardPicker
             query={{
               q: '',
               filters:
                 slot.entryKind === 'trainer'
                   ? { trainer: slot.groupKey }
-                  : { artist: slot.groupName ?? slot.groupKey },
+                  : slot.entryKind === 'energy'
+                    ? { energy: slot.groupKey }
+                    : { artist: slot.groupName ?? slot.groupKey },
             }}
             palette={palette}
             pending={pending}

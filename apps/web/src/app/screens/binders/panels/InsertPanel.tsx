@@ -2,7 +2,9 @@ import {
   type BinderEntry,
   type BinderSlotLocation,
   cardIdSchema,
+  energyGroupName,
   formatDexNumber,
+  type EnergyGroup,
   languageSchema,
   type FrameType,
   NATIONAL_POKEDEX,
@@ -14,10 +16,10 @@ import { useSets, type SetFacet } from '../../../api/queries/sets';
 import { SegmentedControl } from '../../../ui/SegmentedControl';
 import { binderErrorMessage, INSERT_SELECTION_CAP } from '../model';
 import { CardPicker, collectAllCards, type PickerQuery } from './CardPicker';
-import { GroupPicker, type GroupChoice } from './GroupPicker';
+import { EnergyPicker, GroupPicker, type GroupChoice } from './GroupPicker';
 import { Panel } from './Panel';
 
-type Kind = 'pokemon' | 'set' | 'illustrator' | 'trainer' | 'exact-card';
+type Kind = 'pokemon' | 'set' | 'illustrator' | 'trainer' | 'energy' | 'exact-card';
 /** A set is inserted as pockets that take any of its cards, or as one target per card. */
 type SetMode = 'any' | 'every';
 const MAX_ANY_POCKETS = 400;
@@ -124,6 +126,7 @@ export function InsertPanel({
   const [anyCount, setAnyCount] = useState(String(pageSize));
   const [anySet, setAnySet] = useState<SetFacet | null>(null);
   const [anyGroup, setAnyGroup] = useState<GroupChoice | null>(null);
+  const [energy, setEnergy] = useState<EnergyGroup | null>(null);
   const selectAllRequest = useRef<AbortController | null>(null);
 
   const pokemon = kind === 'pokemon' ? filterPokemon(query) : [];
@@ -229,6 +232,60 @@ export function InsertPanel({
     setMessage('');
   }
 
+  /** `count` pockets that each take any card from an energy group. */
+  function selectAnyEnergy(group: EnergyGroup, countText: string): void {
+    selectAllRequest.current?.abort();
+    setWorking(false);
+    setEnergy(group);
+    const count = Number(countText);
+    if (!Number.isInteger(count) || count < 1 || count > MAX_ANY_POCKETS) {
+      setSelected(new Map());
+      setMessage(`Enter how many pockets, from 1 to ${MAX_ANY_POCKETS}.`);
+      return;
+    }
+    const entry: BinderEntry = { kind: 'energy', key: group, startsNewPage: false };
+    setSelected(
+      new Map(Array.from({ length: count }, (_unused, index) => [`any:${index}`, entry])),
+    );
+    setMessage(
+      `${count.toLocaleString('en-AU')} ${count === 1 ? 'pocket' : 'pockets'} for ${energyGroupName(group).toLocaleLowerCase('en-AU')}.`,
+    );
+  }
+
+  /** Every card in an energy group becomes an exact target, oldest set first. */
+  async function selectEveryEnergy(group: EnergyGroup): Promise<void> {
+    selectAllRequest.current?.abort();
+    const controller = new AbortController();
+    selectAllRequest.current = controller;
+    setWorking(true);
+    setMessage('');
+    setEnergy(group);
+    try {
+      // The catalogue's release sort: set release date, then card number.
+      const cards = await collectAllCards(
+        { q: '', filters: { energy: group, sort: 'release' } },
+        INSERT_SELECTION_CAP,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      setSelected(new Map(cards.map((card) => [card.id, exactEntry(card.id)])));
+      setMessage(
+        `${cards.length.toLocaleString('en-AU')} ${energyGroupName(group).toLocaleLowerCase('en-AU')} ${cards.length === 1 ? 'card' : 'cards'} selected, in release order.`,
+      );
+    } catch (cause) {
+      if (controller.signal.aborted) return;
+      setEnergy(null);
+      setSelected(new Map());
+      setMessage(
+        cause instanceof ApiError || !(cause instanceof Error)
+          ? binderErrorMessage(cause)
+          : cause.message,
+      );
+    } finally {
+      if (!controller.signal.aborted) setWorking(false);
+    }
+  }
+
   /** Every card of a set becomes an exact-card target, in the set's own number order. */
   async function selectSet(set: SetFacet): Promise<void> {
     selectAllRequest.current?.abort();
@@ -313,12 +370,14 @@ export function InsertPanel({
             setChosenSet(null);
             setAnySet(null);
             setAnyGroup(null);
+            setEnergy(null);
           }}
           options={[
             { value: 'pokemon', label: 'Pokémon' },
             { value: 'set', label: 'Set' },
             { value: 'illustrator', label: 'Illustrator' },
             { value: 'trainer', label: 'Trainer' },
+            { value: 'energy', label: 'Energy' },
             { value: 'exact-card', label: 'Exact cards' },
           ]}
         />
@@ -392,6 +451,50 @@ export function InsertPanel({
                 Next results
               </button>
             </nav>
+          </>
+        ) : kind === 'energy' ? (
+          <>
+            <SegmentedControl<SetMode>
+              label="Pockets take"
+              value={setMode}
+              onChange={(value) => {
+                setSetMode(value);
+                selectAllRequest.current?.abort();
+                setWorking(false);
+                setSelected(new Map());
+                setEnergy(null);
+                setMessage('');
+              }}
+              options={[
+                { value: 'any', label: 'Any card of it' },
+                { value: 'every', label: 'Every card, release order' },
+              ]}
+            />
+            {setMode === 'any' ? (
+              <label className="panel-field">
+                <span>How many pockets</span>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  min="1"
+                  max={MAX_ANY_POCKETS}
+                  step="1"
+                  value={anyCount}
+                  disabled={busy}
+                  onChange={(event) => {
+                    setAnyCount(event.target.value);
+                    if (energy) selectAnyEnergy(energy, event.target.value);
+                  }}
+                />
+              </label>
+            ) : null}
+            <EnergyPicker
+              selected={energy}
+              pending={busy}
+              onSelect={(group) =>
+                setMode === 'any' ? selectAnyEnergy(group, anyCount) : void selectEveryEnergy(group)
+              }
+            />
           </>
         ) : kind === 'illustrator' || kind === 'trainer' ? (
           <>

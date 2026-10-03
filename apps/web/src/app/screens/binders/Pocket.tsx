@@ -112,8 +112,20 @@ function PocketContent({
       <span className="pocket-any">
         <span className="pocket-any-number">
           <Icon
-            name={slot.entryKind === 'illustrator' ? 'illustrator' : 'people'}
-            title={slot.entryKind === 'illustrator' ? 'Illustrator' : 'Trainer'}
+            name={
+              slot.entryKind === 'illustrator'
+                ? 'illustrator'
+                : slot.entryKind === 'trainer'
+                  ? 'people'
+                  : 'card'
+            }
+            title={
+              slot.entryKind === 'illustrator'
+                ? 'Illustrator'
+                : slot.entryKind === 'trainer'
+                  ? 'Trainer'
+                  : 'Energy'
+            }
           />
         </span>
         <span>{groupTargetName(slot)}</span>

@@ -117,6 +117,7 @@ const slotRow = z
     set_language: z.string().min(2).max(16).nullable().optional(),
     group_kind: z.enum(['illustrator', 'trainer']).nullable().optional(),
     group_key: z.string().min(1).max(200).nullable().optional(),
+    energy_group: z.string().min(1).max(32).nullable().optional(),
     label: z.string().nullable().optional(),
     pokemon_number: z.number().int().min(1).max(1025).nullable().optional(),
     assigned_card_id: z.string().nullable().optional(),
@@ -347,7 +348,7 @@ const backupQueries: readonly BackupQuery[] = [
     kind: 'slots',
     sql: `SELECT s.rowid AS backup_cursor, s.binder_page_id, s.row_index, s.column_index, s.card_id,
       s.entry_kind, s.label, s.pokemon_number, s.assigned_card_id, s.starts_new_page, s.is_manual_gap,
-      s.set_id, s.set_language, s.group_kind, s.group_key
+      s.set_id, s.set_language, s.group_kind, s.group_key, s.energy_group
      FROM binder_slots s JOIN binder_pages p ON p.id = s.binder_page_id
      JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
      WHERE b.owner_id = ?1 AND s.rowid > ?2 ORDER BY s.rowid LIMIT ?3`,
@@ -1115,8 +1116,8 @@ export async function restoreBackup(
           .bind(restoreRunId, ownerId),
         db
           .prepare(
-            `INSERT INTO binder_slots (binder_page_id,row_index,column_index,card_id,entry_kind,label,pokemon_number,assigned_card_id,starts_new_page,is_manual_gap,set_id,set_language,group_kind,group_key)
-           SELECT json_extract(j.value,'$.binder_page_id'),json_extract(j.value,'$.row_index'),json_extract(j.value,'$.column_index'),json_extract(j.value,'$.card_id'),COALESCE(json_extract(j.value,'$.entry_kind'),CASE WHEN json_extract(j.value,'$.card_id') IS NULL THEN 'empty' ELSE 'exact-card' END),json_extract(j.value,'$.label'),json_extract(j.value,'$.pokemon_number'),json_extract(j.value,'$.assigned_card_id'),COALESCE(json_extract(j.value,'$.starts_new_page'),0),json_extract(j.value,'$.is_manual_gap'),json_extract(j.value,'$.set_id'),json_extract(j.value,'$.set_language'),json_extract(j.value,'$.group_kind'),json_extract(j.value,'$.group_key') FROM ${jsonRows} AND c.kind='slots'`,
+            `INSERT INTO binder_slots (binder_page_id,row_index,column_index,card_id,entry_kind,label,pokemon_number,assigned_card_id,starts_new_page,is_manual_gap,set_id,set_language,group_kind,group_key,energy_group)
+           SELECT json_extract(j.value,'$.binder_page_id'),json_extract(j.value,'$.row_index'),json_extract(j.value,'$.column_index'),json_extract(j.value,'$.card_id'),COALESCE(json_extract(j.value,'$.entry_kind'),CASE WHEN json_extract(j.value,'$.card_id') IS NULL THEN 'empty' ELSE 'exact-card' END),json_extract(j.value,'$.label'),json_extract(j.value,'$.pokemon_number'),json_extract(j.value,'$.assigned_card_id'),COALESCE(json_extract(j.value,'$.starts_new_page'),0),json_extract(j.value,'$.is_manual_gap'),json_extract(j.value,'$.set_id'),json_extract(j.value,'$.set_language'),json_extract(j.value,'$.group_kind'),json_extract(j.value,'$.group_key'),json_extract(j.value,'$.energy_group') FROM ${jsonRows} AND c.kind='slots'`,
           )
           .bind(restoreRunId, ownerId),
         db

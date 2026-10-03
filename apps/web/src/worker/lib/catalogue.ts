@@ -6,6 +6,7 @@ import {
   NATIONAL_POKEDEX,
   NATIONAL_POKEDEX_SIZE,
   artistKey,
+  energyOf,
   pokedexNumberFromCardName,
   trainerOf,
   RARITY_KEY_RAW_VALUES,
@@ -87,6 +88,8 @@ export interface CatalogueFilters {
   artist?: string;
   /** A trainer's Pokémon, by trainer key (see trainerOf). */
   trainer?: string;
+  /** Energy cards: 'all', 'special' or a basic type (see energyOf). */
+  energy?: string;
   /** The printed card number, matched like a numeric search (leading zeros and any
    * set total ignored), so it narrows a name search to one printing. */
   cardNumber?: string;
@@ -175,17 +178,21 @@ export interface ImportedCard {
   /** The illustrator and trainer groups the card belongs to (see artistKey, trainerOf). */
   artistKey?: string | null;
   trainerKey?: string | null;
+  /** The energy group an energy card belongs to (see energyOf). */
+  energyKey?: string | null;
 }
 
 /** The group keys a card is matched on, from its illustrator and name. */
 export function cardGroupKeys(card: { artist?: string | null; name: string; category: string }): {
   artistKey: string | null;
   trainerKey: string | null;
+  energyKey: string | null;
 } {
   const artist = card.artist?.trim() ? artistKey(card.artist) : '';
   return {
     artistKey: artist || null,
     trainerKey: card.category === 'pokemon' ? (trainerOf(card.name)?.key ?? null) : null,
+    energyKey: energyOf(card.name, card.category),
   };
 }
 
@@ -573,7 +580,7 @@ export async function stageCatalogueCards(
           `INSERT INTO catalogue_stage_cards
           (run_id, source_id, card_id, checksum, source_updated_at, name, language, category,
            set_id, set_name, number, number_sort, supertype, subtype, species, rarity, artist,
-           release_date, pokedex_number, types, artist_key, trainer_key)
+           release_date, pokedex_number, types, artist_key, trainer_key, energy_key)
          SELECT ?1,
            json_extract(value, '$.sourceId'),
            COALESCE(
@@ -591,7 +598,8 @@ export async function stageCatalogueCards(
            json_extract(value, '$.rarity'), json_extract(value, '$.artist'),
            json_extract(value, '$.releaseDate'), json_extract(value, '$.pokedexNumber'),
            json_extract(value, '$.types'),
-           json_extract(value, '$.artistKey'), json_extract(value, '$.trainerKey')
+           json_extract(value, '$.artistKey'), json_extract(value, '$.trainerKey'),
+           json_extract(value, '$.energyKey')
          FROM json_each(?2) WHERE true
          ON CONFLICT(run_id, source_id) DO UPDATE SET
            card_id = excluded.card_id, checksum = excluded.checksum,
@@ -602,7 +610,8 @@ export async function stageCatalogueCards(
            subtype = excluded.subtype, species = excluded.species, rarity = excluded.rarity,
            artist = excluded.artist, release_date = excluded.release_date,
            pokedex_number = excluded.pokedex_number, types = excluded.types,
-           artist_key = excluded.artist_key, trainer_key = excluded.trainer_key`,
+           artist_key = excluded.artist_key, trainer_key = excluded.trainer_key,
+           energy_key = excluded.energy_key`,
         )
         .bind(runId, JSON.stringify(chunk))
         .run();
@@ -722,10 +731,10 @@ export async function applyStagedCatalogueRun(
           `INSERT INTO catalogue_cards
             (id, name, language, category, set_id, set_name, number, number_sort, supertype,
              subtype, species, rarity, artist, pokedex_number, types, artist_key, trainer_key,
-             created_at, updated_at)
+             energy_key, created_at, updated_at)
            SELECT card_id, name, language, category, set_id, set_name, number, number_sort,
              supertype, subtype, species, rarity, artist, pokedex_number, types, artist_key,
-             trainer_key, ?1, ?1
+             trainer_key, energy_key, ?1, ?1
            FROM catalogue_stage_cards
            WHERE run_id = ?2
              AND EXISTS (SELECT 1 FROM sync_run_claims WHERE run_id = ?2 AND claim_token = ?3)
@@ -737,6 +746,7 @@ export async function applyStagedCatalogueRun(
              pokedex_number = excluded.pokedex_number,
              types = COALESCE(excluded.types, catalogue_cards.types),
              artist_key = excluded.artist_key, trainer_key = excluded.trainer_key,
+             energy_key = excluded.energy_key,
              is_active = 1, updated_at = excluded.updated_at
            WHERE catalogue_cards.is_custom = 0`,
         )
@@ -1393,6 +1403,11 @@ export async function searchCards(
     where.push(`c.trainer_key = ?${values.length + 1}`);
     values.push(filters.trainer);
   }
+  if (filters.energy === 'all') where.push("c.category = 'energy'");
+  else if (filters.energy) {
+    where.push(`c.energy_key = ?${values.length + 1}`);
+    values.push(filters.energy);
+  }
   if (filters.artist) {
     const spellings = await artistSpellings(db, filters.artist);
     const placeholders = spellings.map((_, index) => `?${values.length + index + 1}`);
@@ -1445,6 +1460,7 @@ export async function searchCards(
     species: filters.species ?? null,
     artist: filters.artist ?? null,
     trainer: filters.trainer ?? null,
+    energy: filters.energy ?? null,
     numberFilter: cardNumberFilter || null,
     pokedexNumber: filters.pokedexNumber ?? null,
     region: filters.region ?? null,
@@ -1761,8 +1777,8 @@ export async function createCustomCard(
         `INSERT INTO catalogue_cards
           (id, name, language, category, set_id, set_name, number, number_sort, supertype,
            subtype, species, rarity, artist, is_custom, owner_id, created_at, updated_at,
-           artist_key, trainer_key)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?15, ?15, ?16, ?17)`,
+           artist_key, trainer_key, energy_key)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?15, ?15, ?16, ?17, ?18)`,
       )
       .bind(
         id,
@@ -1782,6 +1798,7 @@ export async function createCustomCard(
         now,
         cardGroupKeys(input).artistKey,
         cardGroupKeys(input).trainerKey,
+        cardGroupKeys(input).energyKey,
       ),
     db
       .prepare(

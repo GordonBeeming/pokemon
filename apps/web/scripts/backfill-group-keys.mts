@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { z } from 'zod';
 import { artistKey } from '../../../packages/shared/src/artists.ts';
+import { energyOf } from '../../../packages/shared/src/energy.ts';
 import { trainerOf } from '../../../packages/shared/src/trainers.ts';
 
 const [target, out] = process.argv.slice(2);
@@ -46,12 +47,14 @@ const text = execFileSync(
     'wrangler.jsonc',
     '--json',
     '--command',
-    // Only rows that could still need a key: an unkeyed artist, or an unkeyed Pokémon
-    // whose name could name a trainer.
+    // Only rows that could still need a key: an unkeyed artist, an unkeyed Pokémon whose
+    // name could name a trainer (an owner, Dark or Mega), or an unkeyed energy card.
     `SELECT id, name, artist, category FROM catalogue_cards
      WHERE (artist_key IS NULL AND trim(COALESCE(artist, '')) <> '')
         OR (trainer_key IS NULL AND category = 'pokemon'
-          AND (name LIKE '%''s %' OR name LIKE '%’s %' OR name LIKE 'Dark %'))`,
+          AND (name LIKE '%''s %' OR name LIKE '%’s %' OR name LIKE 'Dark %'
+            OR name LIKE 'Mega %' OR name LIKE 'M %'))
+        OR (energy_key IS NULL AND category = 'energy')`,
   ],
   { encoding: 'utf8', maxBuffer: 512 * 1024 * 1024, stdio: ['ignore', 'pipe', 'inherit'] },
 );
@@ -61,11 +64,14 @@ const rows = first.results;
 
 const artists: Array<{ id: string; k: string }> = [];
 const trainers: Array<{ id: string; k: string }> = [];
+const energies: Array<{ id: string; k: string }> = [];
 for (const row of rows) {
   const artist = row.artist?.trim() ? artistKey(row.artist) : '';
   if (artist) artists.push({ id: row.id, k: artist });
   const trainer = row.category === 'pokemon' ? trainerOf(row.name)?.key : undefined;
   if (trainer) trainers.push({ id: row.id, k: trainer });
+  const energy = energyOf(row.name, row.category);
+  if (energy) energies.push({ id: row.id, k: energy });
 }
 
 const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
@@ -75,6 +81,7 @@ const statements: string[] = [];
 for (const [column, list] of [
   ['artist_key', artists],
   ['trainer_key', trainers],
+  ['energy_key', energies],
 ] as const)
   for (let index = 0; index < list.length; index += CHUNK)
     statements.push(
@@ -84,5 +91,5 @@ for (const [column, list] of [
     );
 writeFileSync(out, `${statements.join('\n')}\n`);
 process.stdout.write(
-  `rows read: ${rows.length}, artist keys: ${artists.length}, trainer keys: ${trainers.length}, statements: ${statements.length}\n`,
+  `rows read: ${rows.length}, artist keys: ${artists.length}, trainer keys: ${trainers.length}, energy keys: ${energies.length}, statements: ${statements.length}\n`,
 );

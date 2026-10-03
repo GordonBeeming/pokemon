@@ -1,3 +1,4 @@
+import { ENERGY_GROUPS, energyGroupName, type EnergyGroup } from '@pokedex/shared';
 import { useState, type ReactElement } from 'react';
 import { useIllustrators } from '../../../api/queries/illustrators';
 import { useTrainers } from '../../../api/queries/trainers';
@@ -115,5 +116,33 @@ export function GroupPicker({
         </button>
       </nav>
     </>
+  );
+}
+
+/** Picks an energy group: any energy, one basic type, or special energy. */
+export function EnergyPicker({
+  selected,
+  pending,
+  onSelect,
+}: {
+  selected: EnergyGroup | null;
+  pending: boolean;
+  onSelect: (group: EnergyGroup) => void;
+}): ReactElement {
+  return (
+    <div className="species-grid" aria-label="Energy">
+      {ENERGY_GROUPS.map((group) => (
+        <button
+          key={group}
+          type="button"
+          className="species-option"
+          aria-pressed={selected === group}
+          disabled={pending}
+          onClick={() => onSelect(group)}
+        >
+          <span>{energyGroupName(group)}</span>
+        </button>
+      ))}
+    </div>
   );
 }

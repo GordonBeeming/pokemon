@@ -461,7 +461,7 @@ export const binderApi = {
     target:
       | { kind: 'pokemon'; pokemonNumber: number }
       | { kind: 'set'; setId: string; setLanguage: string }
-      | { kind: 'illustrator' | 'trainer'; key: string },
+      | { kind: 'illustrator' | 'trainer' | 'energy'; key: string },
     pages: number,
     expectedRevision: number,
   ) => mutate(versionId, '/pages/fill', 'POST', { page, pages, target, expectedRevision }),

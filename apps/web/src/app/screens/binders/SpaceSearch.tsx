@@ -34,7 +34,8 @@ function matchDetail(match: BinderSearchMatch): string {
     match.kind === 'exact-card' ||
     match.kind === 'set' ||
     match.kind === 'illustrator' ||
-    match.kind === 'trainer'
+    match.kind === 'trainer' ||
+    match.kind === 'energy'
       ? match.placed
         ? 'Placed'
         : 'Unfilled'
