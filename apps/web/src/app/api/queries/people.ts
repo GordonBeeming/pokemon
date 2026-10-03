@@ -69,7 +69,13 @@ export function usePeopleMutations() {
     ]);
 
   const patchPerson = useMutation({
-    mutationFn: ({ id, patch }: { id: string; patch: { role?: UserRole; disabled?: boolean } }) =>
+    mutationFn: ({
+      id,
+      patch,
+    }: {
+      id: string;
+      patch: { role?: UserRole; disabled?: boolean; showPrices?: boolean };
+    }) =>
       apiFetch(`/api/people/${encodeURIComponent(id)}`, personEnvelope, {
         method: 'PATCH',
         body: patch,

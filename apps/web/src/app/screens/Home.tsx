@@ -11,6 +11,7 @@ import { useToast } from '../ui/Toast';
 import { ActiveShortagesPanel } from './home/ActiveShortagesPanel';
 import type { HomeSearch } from './home/search';
 import './home/home.css';
+import { useShowPrices } from '../cards/PriceVisibility';
 
 function formatMoney(amountAud: number): string {
   return `A$${new Intl.NumberFormat('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amountAud)}`;
@@ -36,6 +37,7 @@ export function Home({
   onOpenCard: (cardId: string) => void;
   onCloseCard: () => void;
 }): ReactElement {
+  const showPrices = useShowPrices();
   const dashboard = useDashboard();
   const navigate = useNavigate();
   const isDesktop = useIsDesktop();
@@ -104,10 +106,12 @@ export function Home({
           <p>Copies</p>
           <strong>{data.collection.totalQuantity}</strong>
         </article>
-        <article className="metric">
-          <p>Estimated value</p>
-          <strong>{formatMoney(data.pricing.estimateAud)}</strong>
-        </article>
+        {showPrices ? (
+          <article className="metric">
+            <p>Estimated value</p>
+            <strong>{formatMoney(data.pricing.estimateAud)}</strong>
+          </article>
+        ) : null}
       </section>
 
       <div className="home-body">
@@ -135,6 +139,7 @@ export function Home({
                     rarityKey: card.rarityKey ?? null,
                     pokedexNumber: card.pokedexNumber ?? null,
                     imageUrl: card.imageLowUrl,
+                    priceAud: card.price.amountAud,
                   }}
                   state="owned"
                   onView={() => openCard(card.id)}

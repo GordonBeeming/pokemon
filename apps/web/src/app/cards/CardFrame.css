@@ -109,6 +109,8 @@
   align-items: center;
   gap: 0.3rem;
   min-width: 0;
+  /* Beside a price the code gives way first; it never pushes the frame wider. */
+  overflow: hidden;
   font-family: var(--font-mono);
   font-size: clamp(0.5rem, 7cqi, 0.8125rem);
   font-weight: 600;
@@ -145,4 +147,13 @@
   font-family: var(--font-display);
   font-size: 0.75rem;
   letter-spacing: -0.06em;
+}
+
+/* The market estimate, bottom right: same type as the code beside it. */
+.card-frame-price {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: clamp(0.5rem, 7cqi, 0.8125rem);
+  font-weight: 600;
+  white-space: nowrap;
 }

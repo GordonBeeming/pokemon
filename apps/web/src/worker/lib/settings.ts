@@ -3,6 +3,8 @@ import { nowSeconds } from './db';
 
 const FRAME_PALETTE_KEY = 'frame-palette';
 const FAVORITE_ILLUSTRATORS_KEY = 'favorite-illustrators';
+// Stored only when prices are hidden for someone; no row means they show.
+export const SHOW_PRICES_KEY = 'show-prices';
 
 interface SettingRow {
   value_json: string;
@@ -148,4 +150,21 @@ export function setIllustratorFavorite(
 /** How a set is named in the favourites list: one set id can exist per language. */
 export function setFavoriteKey(setId: string, language: string): string {
   return `${language}:${setId}`;
+}
+
+/** Shows or hides prices for one person: their own setting, which only an admin sets. */
+export async function setShowPrices(
+  db: D1Database,
+  ownerId: string,
+  showPrices: boolean,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO user_settings (owner_id, key, value_json, updated_at)
+       VALUES (?1, ?2, ?3, ?4)
+       ON CONFLICT(owner_id, key) DO UPDATE SET value_json = excluded.value_json,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(ownerId, SHOW_PRICES_KEY, JSON.stringify(showPrices), nowSeconds())
+    .run();
 }

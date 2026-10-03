@@ -1,4 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
+import { PriceVisibilityProvider } from '../cards/PriceVisibility';
 import { Link, Outlet, useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, type ReactElement } from 'react';
 import { queryKeys } from '../api/keys';
@@ -107,7 +108,9 @@ export function AppShell(): ReactElement {
         <Nav variant="rail" />
       </nav>
       <main className="app-content">
-        <Outlet />
+        <PriceVisibilityProvider>
+          <Outlet />
+        </PriceVisibilityProvider>
       </main>
       <nav aria-label="Primary" className="app-tabbar">
         <Nav variant="tabbar" />

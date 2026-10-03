@@ -180,6 +180,7 @@ export function frameCardFrom(card: ResolvedCard): CardFrameCard {
     rarityKey: card.rarityKey ?? null,
     pokedexNumber: card.pokedexNumber ?? null,
     imageUrl: card.imageLowUrl,
+    priceAud: card.price.amountAud,
   };
 }
 

@@ -8,6 +8,7 @@ import {
 } from '@pokedex/shared';
 import { useState, type CSSProperties, type ReactElement } from 'react';
 import { bestTextColor, contrastWithDark, contrastWithWhite, mix } from './color';
+import { useShowPrices } from './PriceVisibility';
 import { RARITY_VISUALS, rarityToneColour } from './rarity-visuals';
 import './CardFrame.css';
 
@@ -30,6 +31,17 @@ export interface CardFrameCard {
   rarityKey: RarityKey | null;
   pokedexNumber: number | null;
   imageUrl: string | null;
+  /** The market estimate in A$, shown bottom right; absent or null shows nothing. */
+  priceAud?: number | null;
+}
+
+/** "~A$12", or "~A$0.40" under a dollar where rounding would say nothing. */
+export function formatFramePrice(amountAud: number): string {
+  const digits = amountAud < 1 ? 2 : 0;
+  return `~A$${new Intl.NumberFormat('en-AU', {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  }).format(amountAud)}`;
 }
 
 export type CardFrameState = 'owned' | 'placed' | 'unowned';
@@ -145,6 +157,7 @@ export function CardFrame({
     </div>
   );
 
+  const showPrices = useShowPrices();
   const content = !frame ? (
     art
   ) : (
@@ -175,6 +188,14 @@ export function CardFrame({
             </span>
           )}
         </span>
+        {showPrices &&
+        variant === 'card' &&
+        card.priceAud !== undefined &&
+        card.priceAud !== null ? (
+          <span className="card-frame-price" title="Market estimate">
+            {formatFramePrice(card.priceAud)}
+          </span>
+        ) : null}
       </span>
     </>
   );

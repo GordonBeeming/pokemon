@@ -20,6 +20,7 @@ import { useToast } from '../../ui/Toast';
 import { BinderRow } from './BinderRow';
 import { WhereFromDialog } from './WhereFromDialog';
 import './card-inspector.css';
+import { useShowPrices } from '../../cards/PriceVisibility';
 
 const NOTES_MAX = 2000;
 const AUTOSAVE_DEBOUNCE_MS = 650;
@@ -61,6 +62,7 @@ export function CardInspector({
   context,
   onDirtyChange,
 }: CardInspectorProps): ReactElement {
+  const showPrices = useShowPrices();
   const detail = useCardDetail(cardId);
   const binderMatches = useCardBinderMatches(cardId);
   const increment = useIncrementCollection(cardId);
@@ -166,6 +168,7 @@ export function CardInspector({
               rarityKey: card.rarityKey ?? null,
               pokedexNumber,
               imageUrl: card.imageHighUrl ?? card.imageLowUrl,
+              priceAud: card.price.amountAud,
             }}
             state={quantity > 0 ? 'owned' : 'unowned'}
             forceSolid
@@ -209,9 +212,11 @@ export function CardInspector({
             {quantity > 0 ? `Owned ×${quantity}` : 'Not owned'}
           </span>
           {/* "~" carries "estimate" on screen; the words stay in the hover title. */}
-          <p title={card.price.amountAud === null ? 'No market price yet' : 'Market estimate'}>
-            ~{card.price.amountAud === null ? 'A$ –' : formatMoney(card.price.amountAud)}
-          </p>
+          {showPrices ? (
+            <p title={card.price.amountAud === null ? 'No market price yet' : 'Market estimate'}>
+              ~{card.price.amountAud === null ? 'A$ –' : formatMoney(card.price.amountAud)}
+            </p>
+          ) : null}
           {pokedexNumber ? (
             <button
               type="button"

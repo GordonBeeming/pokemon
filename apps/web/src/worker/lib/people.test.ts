@@ -65,6 +65,23 @@ describe('listing and patching people', () => {
     expect(await getPerson(db, 'missing')).toBeNull();
   });
 
+  it('shows prices by default and lets an admin hide them for one person only', async () => {
+    const db = setup();
+    const admin = await createUser(db, 'Gordon', 'admin');
+    const child = await createUser(db, 'Kid', 'member');
+    expect((await getPerson(db, child.id))?.showPrices).toBe(true);
+
+    const hidden = await patchPerson(db, child.id, { showPrices: false });
+    expect(hidden).toMatchObject({ showPrices: false, role: 'member', disabledAt: null });
+    expect((await listPeople(db)).map((person) => [person.label, person.showPrices])).toEqual([
+      ['Gordon', true],
+      ['Kid', false],
+    ]);
+
+    expect((await patchPerson(db, child.id, { showPrices: true })).showPrices).toBe(true);
+    expect((await getPerson(db, admin.id))?.showPrices).toBe(true);
+  });
+
   it('refuses to demote or disable the last active admin, including yourself', async () => {
     const db = setup();
     const admin = await createUser(db, 'Gordon', 'admin');

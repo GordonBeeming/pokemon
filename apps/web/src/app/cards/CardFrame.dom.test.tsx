@@ -2,7 +2,8 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CardFrame, type CardFrameCard } from './CardFrame';
+import { CardFrame, formatFramePrice, type CardFrameCard } from './CardFrame';
+import { PriceVisibilityContextForTests } from './PriceVisibility';
 
 let container: HTMLDivElement, root: Root;
 beforeEach(() => {
@@ -32,6 +33,38 @@ function frameEl(): HTMLElement | null {
 }
 
 describe('CardFrame', () => {
+  it('shows the market estimate bottom right, and nothing without one', async () => {
+    await step(() =>
+      root.render(<CardFrame card={{ ...pikachu, priceAud: 12.4 }} state="owned" />),
+    );
+    expect(container.querySelector('.card-frame-price')?.textContent).toBe('~A$12');
+    await step(() =>
+      root.render(<CardFrame card={{ ...pikachu, priceAud: null }} state="owned" />),
+    );
+    expect(container.querySelector('.card-frame-price')).toBeNull();
+    await step(() =>
+      root.render(<CardFrame card={{ ...pikachu, priceAud: 3 }} state="owned" variant="any" />),
+    );
+    expect(container.querySelector('.card-frame-price')).toBeNull();
+  });
+
+  it('shows no price when prices are hidden for this person', async () => {
+    await step(() =>
+      root.render(
+        <PriceVisibilityContextForTests value={false}>
+          <CardFrame card={{ ...pikachu, priceAud: 12.4 }} state="owned" />
+        </PriceVisibilityContextForTests>,
+      ),
+    );
+    expect(container.querySelector('.card-frame-price')).toBeNull();
+  });
+
+  it('rounds to dollars, keeping cents under a dollar', () => {
+    expect(formatFramePrice(0.4)).toBe('~A$0.40');
+    expect(formatFramePrice(12.5)).toBe('~A$13');
+    expect(formatFramePrice(1234.2)).toBe('~A$1,234');
+  });
+
   it('renders a solid frame for owned and placed, dashed for unowned', async () => {
     await step(() => root.render(<CardFrame card={pikachu} state="owned" onView={vi.fn()} />));
     expect(frameEl()?.style.borderStyle).toBe('solid');

@@ -35,12 +35,14 @@ function PersonRow({
   isMe,
   busy,
   onRole,
+  onPrices,
   onToggle,
 }: {
   person: PersonView;
   isMe: boolean;
   busy: boolean;
   onRole: (role: UserRole) => void;
+  onPrices: (showPrices: boolean) => void;
   onToggle: () => void;
 }): ReactElement {
   const disabled = person.disabledAt !== null;
@@ -86,6 +88,26 @@ function PersonRow({
           </button>
         ))}
       </div>
+      <div className="segmented-control" role="group" aria-label={`Prices for ${person.label}`}>
+        {([true, false] as const).map((show) => (
+          <button
+            key={String(show)}
+            type="button"
+            aria-pressed={person.showPrices === show}
+            className={
+              person.showPrices === show
+                ? 'segmented-control-option segmented-control-option-active'
+                : 'segmented-control-option'
+            }
+            disabled={busy}
+            onClick={() => {
+              if (person.showPrices !== show) onPrices(show);
+            }}
+          >
+            {show ? 'Prices shown' : 'Prices hidden'}
+          </button>
+        ))}
+      </div>
       <button
         type="button"
         className={disabled ? undefined : 'button-danger'}
@@ -113,7 +135,7 @@ export function PeopleTab({ meId }: { meId: string | null }): ReactElement {
 
   function patch(
     person: PersonView,
-    change: { role?: UserRole; disabled?: boolean },
+    change: { role?: UserRole; disabled?: boolean; showPrices?: boolean },
     done: string,
   ) {
     setError(null);
@@ -168,6 +190,15 @@ export function PeopleTab({ meId }: { meId: string | null }): ReactElement {
                 person,
                 { role: next },
                 `${person.label} is now ${next === 'admin' ? 'an admin' : 'a member'}.`,
+              )
+            }
+            onPrices={(show) =>
+              patch(
+                person,
+                { showPrices: show },
+                show
+                  ? `${person.label} sees prices again.`
+                  : `Prices are hidden for ${person.label}, everywhere in the app.`,
               )
             }
             onToggle={() =>

@@ -21,6 +21,8 @@ export const personSchema = z
     createdAt: z.string(),
     passkeyCount: z.number().int().nonnegative(),
     lastUsedAt: z.string().nullable(),
+    /** Whether prices show for this person; an admin decides (a child's account, say). */
+    showPrices: z.boolean(),
   })
   .strict();
 export type Person = z.infer<typeof personSchema>;
@@ -32,11 +34,16 @@ export const patchPersonRequestSchema = z
   .object({
     role: userRoleSchema.optional(),
     disabled: z.boolean().optional(),
+    showPrices: z.boolean().optional(),
   })
   .strict()
-  .refine((value) => value.role !== undefined || value.disabled !== undefined, {
-    message: 'patch_person_empty',
-  });
+  .refine(
+    (value) =>
+      value.role !== undefined || value.disabled !== undefined || value.showPrices !== undefined,
+    {
+      message: 'patch_person_empty',
+    },
+  );
 export type PatchPersonRequest = z.infer<typeof patchPersonRequestSchema>;
 
 export const createInviteRequestSchema = z

@@ -628,6 +628,13 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] new · A scheduled, infrastructure-level backup runs automatically with no user-facing control ·
       done when: a new backup run exists roughly every 36 hours with no one having opened a backup
       screen — because there isn't one.
+- [ ] new · Card frames show the market estimate bottom right ("~A$12"; "~A$0.40" under a dollar;
+      nothing when there's no price) wherever a frame shows · done when: a priced card in the
+      catalogue shows its estimate in the frame's bottom row without widening the frame.
+- [ ] new · People → "Prices shown / Prices hidden" per person (admins only, default shown). Hidden
+      removes every price for that person: card frames, the card panel's estimate and Home's
+      estimated value · done when: hiding prices for a person leaves no "A$" anywhere they look,
+      and showing them again brings the prices back.
 
 ## Phone
 

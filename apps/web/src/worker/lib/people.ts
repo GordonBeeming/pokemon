@@ -2,6 +2,7 @@ import type { InviteSummary, Person, UserRole } from '@pokedex/shared';
 import { getUserById } from './auth';
 import { isoFromSeconds, newId, nowSeconds } from './db';
 import { ApplicationError } from './log';
+import { SHOW_PRICES_KEY, setShowPrices } from './settings';
 import type { PasskeyInsert, UserRow } from './types';
 
 const INVITE_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -23,6 +24,7 @@ interface PersonRow {
   created_at: number;
   passkey_count: number;
   last_used_at: number | null;
+  show_prices: number;
 }
 
 function personView(row: PersonRow): Person {
@@ -34,12 +36,17 @@ function personView(row: PersonRow): Person {
     createdAt: isoFromSeconds(row.created_at),
     passkeyCount: row.passkey_count,
     lastUsedAt: row.last_used_at === null ? null : isoFromSeconds(row.last_used_at),
+    showPrices: row.show_prices !== 0,
   };
 }
 
 const PERSON_SELECT = `
   SELECT u.id, u.label, u.role, u.disabled_at, u.created_at,
-    COUNT(p.id) AS passkey_count, MAX(p.last_used_at) AS last_used_at
+    COUNT(p.id) AS passkey_count, MAX(p.last_used_at) AS last_used_at,
+    COALESCE((
+      SELECT CASE WHEN s.value_json = 'false' THEN 0 ELSE 1 END
+      FROM user_settings s WHERE s.owner_id = u.id AND s.key = '${SHOW_PRICES_KEY}'
+    ), 1) AS show_prices
   FROM users u LEFT JOIN passkeys p ON p.user_id = u.id`;
 
 export async function listPeople(db: D1Database): Promise<Person[]> {
@@ -60,6 +67,7 @@ export async function getPerson(db: D1Database, id: string): Promise<Person | nu
 export interface PatchPersonInput {
   role?: UserRole;
   disabled?: boolean;
+  showPrices?: boolean;
 }
 
 export async function patchPerson(
@@ -69,6 +77,13 @@ export async function patchPerson(
 ): Promise<Person> {
   const target = await getUserById(db, targetId);
   if (!target) throw new ApplicationError('person_not_found', 404);
+  if (patch.showPrices !== undefined) await setShowPrices(db, targetId, patch.showPrices);
+  // Prices alone touch no account state, so the role/disabled guards below don't apply.
+  if (patch.role === undefined && patch.disabled === undefined) {
+    const updated = await getPerson(db, targetId);
+    if (!updated) throw new ApplicationError('person_not_found', 404);
+    return updated;
+  }
   const wasActiveAdmin = target.role === 'admin' && target.disabled_at === null;
   const nextRole = patch.role ?? target.role;
   const nextDisabled = patch.disabled ?? target.disabled_at !== null;
