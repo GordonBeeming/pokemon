@@ -86,6 +86,34 @@ function useReturnFocus(open: boolean): void {
   }, [open]);
 }
 
+const TYPING_FIELD =
+  'textarea:not([disabled]), input:not([disabled]):not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="button"]):not([type="submit"])';
+
+/**
+ * A dialog or sheet opened to type into starts with the cursor in its field, so a
+ * search is one press away instead of two. A search box wins over any field above it
+ * (Insert's shift count, say). Side panels are left alone: the card panel's first
+ * field is its notes, which nobody opens the card to write.
+ */
+function useFocusFirstField(surface: HTMLElement | null): void {
+  useEffect(() => {
+    if (!surface) return undefined;
+    // After React Aria has moved focus to the dialog itself on open.
+    const frame = requestAnimationFrame(() => {
+      // A field that focused itself (an autoFocus editor) keeps it.
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && surface.contains(active) && active.matches(TYPING_FIELD))
+        return;
+      const body = surface.querySelector<HTMLElement>('.overlay-body');
+      const field =
+        body?.querySelector<HTMLElement>('input[type="search"]:not([disabled])') ??
+        body?.querySelector<HTMLElement>(TYPING_FIELD);
+      field?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [surface]);
+}
+
 const VARIANT_CLASS: Record<OverlayVariant, { backdrop: string; surface: string }> = {
   dialog: { backdrop: 'dialog-backdrop', surface: 'dialog' },
   sheet: { backdrop: 'sheet-backdrop', surface: 'sheet' },
@@ -143,6 +171,7 @@ export function Overlay({
     if (!open) setError(null);
   }, [open]);
   useReturnFocus(open);
+  useFocusFirstField(variant === 'side' ? null : surfaceElement);
 
   // While a sheet is up nothing behind it may take a pull: React Aria stops the page
   // scrolling, and this stops an overscroll at either end reaching the browser's

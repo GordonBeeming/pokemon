@@ -114,6 +114,8 @@ test('Insert targets can add pockets that take any card from a set', async ({ pa
   await press(page, phone, pocket);
   await press(page, phone, page.getByRole('button', { name: 'Find cards' }));
   const find = page.getByRole('dialog', { name: /^Find cards/ });
+  // The panel opens ready to type into.
+  await expect(find.getByRole('searchbox')).toBeFocused();
   const first = find
     .locator('.find-cards-item')
     .filter({ hasText: 'Add a copy and place' })
