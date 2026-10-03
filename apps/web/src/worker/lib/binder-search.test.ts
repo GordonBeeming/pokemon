@@ -109,4 +109,45 @@ describe('binder space search', () => {
       database.close();
     }
   });
+
+  it('finds a pocket by the card placed in it, and names it by that card', async () => {
+    const database = new DatabaseSync(':memory:');
+    try {
+      applyAllMigrations(database);
+      database.exec(`
+        INSERT INTO users(id,label,created_at) VALUES('owner','Owner',1);
+        INSERT INTO catalogue_cards
+          (id,name,language,category,set_id,set_name,number,pokedex_number,artist,created_at,updated_at)
+        VALUES ('celebration','Pikachu','en','pokemon','30th','30th Celebration','014',25,'Mitsuhiro Arita',1,1);
+        INSERT INTO catalogue_sets(set_id,language,set_name,abbreviation,updated_at)
+        VALUES ('30th','en','30th Celebration','30C',1)
+        ON CONFLICT(set_id,language) DO UPDATE SET abbreviation='30C';
+      `);
+      const db = sqliteD1(database);
+      const { version } = await createBinder(
+        db,
+        'owner',
+        'Placed',
+        { kind: '2x2', rows: 2, columns: 2 },
+        4,
+      );
+      database
+        .prepare(
+          "UPDATE binder_slots SET entry_kind='pokemon',pokemon_number=25,assigned_card_id='celebration' WHERE binder_page_id=(SELECT id FROM binder_pages WHERE binder_version_id=? AND position=0) AND row_index=0 AND column_index=1",
+        )
+        .run(version.id);
+      for (const q of ['celebration', '30c', 'arita', '014'])
+        expect((await searchBinderSpaces(db, 'owner', version.id, { q })).matches).toEqual([
+          expect.objectContaining({
+            row: 0,
+            column: 1,
+            kind: 'pokemon',
+            placed: true,
+            label: 'Pikachu · 30th Celebration · 014',
+          }),
+        ]);
+    } finally {
+      database.close();
+    }
+  });
 });

@@ -919,14 +919,22 @@ export async function searchBinderSpaces(
         WHEN s.entry_kind = 'reserved' THEN 'Reserved: ' || COALESCE(s.label, 'sleeve')
         WHEN s.entry_kind = 'empty' THEN 'Empty pocket'
         WHEN s.entry_kind = 'exact-card' THEN COALESCE(c.name, 'Exact card target') || ' · ' || COALESCE(c.set_name, '') || ' · ' || COALESCE(c.number, '')
-        ELSE '' END AS label
+        ELSE '' END AS label,
+      CASE WHEN placed.id IS NOT NULL THEN placed.name || ' · ' || placed.set_name || ' · ' || placed.number
+        END AS placed_label
     FROM binder_slots s JOIN binder_pages p ON p.id=s.binder_page_id
     LEFT JOIN catalogue_cards c ON c.id=s.card_id
     LEFT JOIN catalogue_sets target_set
       ON target_set.set_id=s.set_id AND target_set.language=s.set_language
+    LEFT JOIN catalogue_cards placed ON placed.id=s.assigned_card_id
+    LEFT JOIN catalogue_sets placed_set
+      ON placed_set.set_id=placed.set_id AND placed_set.language=placed.language
     WHERE p.binder_version_id=?1
       AND p.position*?4+s.row_index*?5+s.column_index < ?6
-      AND ((s.entry_kind='pokemon' AND s.pokemon_number IN (SELECT value FROM json_each(?3)))
+      -- A pocket is also found by the copy placed in it, not only by what it asks for:
+      -- an "any Pikachu" pocket holding a 30th Celebration card answers "celebration".
+      AND ((placed.id IS NOT NULL AND instr(${foldText("placed.name || ' ' || placed.set_name || ' ' || COALESCE(placed_set.abbreviation,'') || ' ' || placed.number || ' ' || COALESCE(placed.artist,'') || ' ' || COALESCE(placed.rarity,'')")},?2)>0)
+        OR (s.entry_kind='pokemon' AND s.pokemon_number IN (SELECT value FROM json_each(?3)))
         OR (s.set_id IS NOT NULL AND instr(${foldText("'set ' || COALESCE(target_set.set_name,'') || ' ' || s.set_id")},?2)>0)
         OR (s.entry_kind='reserved' AND s.set_id IS NULL AND instr(${foldText("'reserved ' || COALESCE(s.label,'sleeve')")},?2)>0)
         OR (s.entry_kind='empty' AND instr('empty pocket',?2)>0)
@@ -934,7 +942,8 @@ export async function searchBinderSpaces(
     UNION ALL
     SELECT position AS page,NULL AS row,NULL AS column,'reserved-page' AS kind,NULL AS pokemon_number,NULL AS assigned_card_id,
       CASE WHEN kind='reserved' THEN 'Reserved page: ' || COALESCE(label,'Unlabelled')
-        ELSE 'Page: ' || label END AS label
+        ELSE 'Page: ' || label END AS label,
+      NULL AS placed_label
     FROM binder_pages WHERE binder_version_id=?1 AND (kind='reserved' OR label IS NOT NULL)
       AND instr(${foldText("CASE WHEN kind='reserved' THEN 'reserved page ' ELSE 'page ' END || COALESCE(label,'')")},?2)>0
       AND json_valid(?8)
@@ -959,6 +968,7 @@ export async function searchBinderSpaces(
       pokemon_number: number | null;
       assigned_card_id: string | null;
       label: string;
+      placed_label: string | null;
     }>();
   return binderSearchResultSchema.parse({
     matches: result.results.slice(0, 50).map((row) => {
@@ -969,9 +979,12 @@ export async function searchBinderSpaces(
         column: row.column,
         kind: row.kind,
         placed: row.assigned_card_id !== null,
-        label: species
-          ? `${formatDexNumber(species.number)} ${species.name} · ${species.discoveryCategory}`
-          : row.label,
+        // A filled pocket is named by the card in it; an open one by what it wants.
+        label:
+          row.placed_label ??
+          (species
+            ? `${formatDexNumber(species.number)} ${species.name} · ${species.discoveryCategory}`
+            : row.label),
       };
     }),
     nextOffset: result.results.length > 50 ? offset + 50 : null,
