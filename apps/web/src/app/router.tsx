@@ -5,6 +5,7 @@ import { binderDetailRoute, bindersRoute } from './routes/binders';
 import { cardRoute } from './routes/card';
 import { catalogueRoute } from './routes/catalogue';
 import { illustratorsRoute } from './routes/illustrators';
+import { trainersRoute } from './routes/trainers';
 import { indexRoute } from './routes/index';
 import { inviteRoute } from './routes/invite';
 import { pokedexRoute } from './routes/pokedex';
@@ -19,6 +20,7 @@ const authedTree = authedRoute.addChildren([
   pokedexRoute,
   setsRoute,
   illustratorsRoute,
+  trainersRoute,
   bindersRoute,
   binderDetailRoute,
   settingsRoute,

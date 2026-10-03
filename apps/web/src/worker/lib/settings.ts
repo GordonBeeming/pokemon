@@ -59,14 +59,24 @@ export function frameColour(
   return palette[type] ?? DEFAULT_FRAME_PALETTE[type];
 }
 
-/** The illustrator names this owner starred, as stored; an unreadable value counts as none. */
-export async function getFavoriteIllustrators(
+export type FavoriteKind = 'illustrators' | 'sets' | 'trainers';
+
+// Illustrator favourites predate the others; their key stays so nothing moves.
+const FAVORITE_KEYS: Record<FavoriteKind, string> = {
+  illustrators: FAVORITE_ILLUSTRATORS_KEY,
+  sets: 'favorite-sets',
+  trainers: 'favorite-trainers',
+};
+
+/** What this owner starred of one kind, as stored; an unreadable value counts as none. */
+export async function getFavorites(
   db: D1Database,
   ownerId: string,
+  kind: FavoriteKind,
 ): Promise<Set<string>> {
   const row = await db
     .prepare('SELECT value_json FROM user_settings WHERE owner_id = ?1 AND key = ?2')
-    .bind(ownerId, FAVORITE_ILLUSTRATORS_KEY)
+    .bind(ownerId, FAVORITE_KEYS[kind])
     .first<SettingRow>();
   if (!row) return new Set();
   try {
@@ -82,14 +92,15 @@ export async function getFavoriteIllustrators(
 }
 
 /**
- * Stars or unstars one illustrator. Each change is a single statement that edits the
- * stored list in place, so two quick taps on different tiles can't overwrite each
- * other the way a read-then-write of the whole list could.
+ * Stars or unstars one entry. Each change is a single statement that edits the stored
+ * list in place, so two quick taps on different tiles can't overwrite each other the
+ * way a read-then-write of the whole list could.
  */
-export async function setIllustratorFavorite(
+export async function setFavorite(
   db: D1Database,
   ownerId: string,
-  name: string,
+  kind: FavoriteKind,
+  value: string,
   favorite: boolean,
 ): Promise<void> {
   if (favorite) {
@@ -105,7 +116,7 @@ export async function setIllustratorFavorite(
            END,
            updated_at = ?4`,
       )
-      .bind(ownerId, FAVORITE_ILLUSTRATORS_KEY, name, nowSeconds())
+      .bind(ownerId, FAVORITE_KEYS[kind], value, nowSeconds())
       .run();
     return;
   }
@@ -117,6 +128,24 @@ export async function setIllustratorFavorite(
          updated_at = ?4
        WHERE owner_id = ?1 AND key = ?2`,
     )
-    .bind(ownerId, FAVORITE_ILLUSTRATORS_KEY, name, nowSeconds())
+    .bind(ownerId, FAVORITE_KEYS[kind], value, nowSeconds())
     .run();
+}
+
+export function getFavoriteIllustrators(db: D1Database, ownerId: string): Promise<Set<string>> {
+  return getFavorites(db, ownerId, 'illustrators');
+}
+
+export function setIllustratorFavorite(
+  db: D1Database,
+  ownerId: string,
+  name: string,
+  favorite: boolean,
+): Promise<void> {
+  return setFavorite(db, ownerId, 'illustrators', name, favorite);
+}
+
+/** How a set is named in the favourites list: one set id can exist per language. */
+export function setFavoriteKey(setId: string, language: string): string {
+  return `${language}:${setId}`;
 }

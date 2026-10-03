@@ -15,6 +15,9 @@ export function sameTypeFilters(
   slot: BinderSlotView,
   cards: CardLookup,
 ): Record<string, string> | null {
+  if (slot.entryKind === 'trainer' && slot.groupKey) return { trainer: slot.groupKey };
+  if (slot.entryKind === 'illustrator' && slot.groupKey)
+    return { artist: slot.groupName ?? slot.groupKey };
   if (slot.entryKind === 'set' && slot.setId && slot.setLanguage)
     return { set: slot.setId, language: slot.setLanguage };
   const original = slot.cardId ? cards.get(slot.cardId) : undefined;

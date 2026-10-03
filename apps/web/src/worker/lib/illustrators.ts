@@ -138,6 +138,7 @@ function illustratorFrom(rows: readonly IllustratorRow[], favorites: Set<string>
   if (!row) throw new Error('an illustrator group always has at least one row');
   return {
     name,
+    key: artistKey(name),
     cardCount: rows.reduce((sum, entry) => sum + entry.total_cards, 0),
     ownedCount: rows.reduce((sum, entry) => sum + entry.owned_cards, 0),
     favorite: rows.some((entry) => favorites.has(entry.artist)) || favorites.has(name),

@@ -18,12 +18,16 @@ export const queryKeys = {
   },
   sets: {
     list: () => ['sets', 'list'] as const,
+    previews: () => ['sets', 'previews'] as const,
     // Contract B's admin-facing set list (code/codeSource/clashes), separate from the
     // facets list above that Catalogue's set filter reads.
     codes: () => ['sets', 'codes'] as const,
   },
   illustrators: {
     list: () => ['illustrators', 'list'] as const,
+  },
+  trainers: {
+    list: () => ['trainers', 'list'] as const,
   },
   binders: {
     list: () => ['binders', 'list'] as const,

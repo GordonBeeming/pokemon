@@ -342,6 +342,21 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       "Favourites" group above everyone else, per user, and survive a reload · done when: starring an
       illustrator moves it into Favourites at the top, and unstarring puts it back.
 
+## Trainers
+
+- [ ] new · A Trainers page (rail item on desktop; a link from Sets on a phone) lists every trainer
+      whose Pokémon have cards, each with one of their cards, owned / total and a star; favourites
+      come first, search narrows by name, sort is A–Z or most cards · done when: Lillie shows her
+      card count and starring her moves her into Favourites.
+- [ ] new · Opening a trainer shows their cards in the catalogue with their name as the heading and
+      a star · done when: /catalogue?trainer=lillie lists only Lillie's Pokémon under "Lillie".
+
+## Sets favourites
+
+- [ ] new · Each set row has a star and a small preview card; starred sets sit at the top of Sets
+      and first in every set picker (Insert targets, Reserve page for) · done when: starring the
+      last set moves it to the top with a highlighted border.
+
 ## Binders library
 
 - [ ] keep · "New binder" toggles the create form in place · done when: clicking it shows the create
@@ -439,10 +454,17 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       refused. Change target turns it into an ordinary exact-card target · done when: placing a
       copy in a set target leaves the pocket a set target, and removing the copy leaves it wanting
       any card from the set again.
-- [ ] new · Manage page has "Reserve page for…": choose a set or a Pokémon and every empty pocket on
-      that page becomes that any-card target. Pockets that already hold something are kept and no
-      other page changes; it's disabled when the page has no empty pockets · done when: on an empty
-      3 × 3 page, choosing a set gives nine set targets and the neighbouring pages are unchanged.
+- [ ] new · Manage page has "Reserve page for…": choose a set, a Pokémon, an illustrator or a
+      trainer, and how many pages (default 1), and every empty pocket on those pages becomes that
+      any-card target. Pockets that already hold something are kept, wholly reserved pages in the
+      run are skipped and no other page changes · done when: on an empty 3 × 3 page, choosing a set
+      gives nine set targets and the neighbouring pages are unchanged.
+- [ ] new · Illustrator and trainer targets: a pocket that takes any card by one illustrator, or any
+      of one trainer's Pokémon ("Lillie's Comfey"; "Rocket's" counts as Team Rocket; "Dark …"
+      Pokémon are their own trainer, "Dark"). Insert targets offers Illustrator and Trainer with a
+      pocket count; the pocket shows the name with an "Any" pill, stays put on Arrange, is found by
+      name in "Find in this binder", and Find cards lists that group's cards. A card outside the
+      group is refused · done when: a Lillie page takes Lillie's Comfey and refuses Rocket's Zapdos.
 - [ ] keep · "Paste cards here" opens the Paste dialog anchored at the selected pocket, offered only
       when a clipboard exists · done when: with an empty clipboard, no pocket offers "Paste cards
       here."

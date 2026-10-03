@@ -4,10 +4,13 @@ import { NATIONAL_POKEDEX } from '@pokedex/shared';
 import type { KeyboardEvent, PointerEvent, ReactElement } from 'react';
 import type { BinderSlotView } from '../../api/queries/binders';
 import { CardFrame, type CardFrameCard } from '../../cards/CardFrame';
+import { Icon } from '../../ui/icons';
 import {
   anyFrameCard,
   frameCardFrom,
   pocketAriaLabel,
+  groupTargetName,
+  isGroupTarget,
   pocketState,
   setTargetName,
   type CardLookup,
@@ -104,6 +107,19 @@ function PocketContent({
       </span>
     );
   }
+  if (isGroupTarget(slot))
+    return (
+      <span className="pocket-any">
+        <span className="pocket-any-number">
+          <Icon
+            name={slot.entryKind === 'illustrator' ? 'illustrator' : 'people'}
+            title={slot.entryKind === 'illustrator' ? 'Illustrator' : 'Trainer'}
+          />
+        </span>
+        <span>{groupTargetName(slot)}</span>
+        <span className="pocket-any-pill">Any</span>
+      </span>
+    );
   if (slot.entryKind === 'set')
     return (
       <span className="pocket-any">

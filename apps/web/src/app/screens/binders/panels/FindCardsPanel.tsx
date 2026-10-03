@@ -205,6 +205,23 @@ export function FindCardsPanel({
             hideIds={spareIds}
             renderItem={tile}
           />
+        ) : (slot.entryKind === 'illustrator' || slot.entryKind === 'trainer') && slot.groupKey ? (
+          <CardPicker
+            query={{
+              q: '',
+              filters:
+                slot.entryKind === 'trainer'
+                  ? { trainer: slot.groupKey }
+                  : { artist: slot.groupName ?? slot.groupKey },
+            }}
+            palette={palette}
+            pending={pending}
+            autoSearch
+            searchLabel="Narrow by name, set or number"
+            placeholder="Name, set or number"
+            hideIds={spareIds}
+            renderItem={tile}
+          />
         ) : slot.entryKind === 'set' && slot.setId && slot.setLanguage ? (
           <CardPicker
             query={{ q: '', filters: { set: slot.setId, language: slot.setLanguage } }}

@@ -24,6 +24,7 @@ const binderStatuses = {
   binder_arrangement_card_missing: 400,
   binder_set_not_found: 404,
   binder_page_no_empty_pockets: 409,
+  binder_group_not_found: 404,
   binder_capacity_exceeded: 409,
   binder_capacity_invalid: 400,
   binder_shrink_occupied: 409,

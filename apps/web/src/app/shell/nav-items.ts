@@ -16,5 +16,6 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/binders', label: 'Binders', icon: 'binder' },
   { to: '/sets', label: 'Sets', icon: 'sets' },
   { to: '/illustrators', label: 'Illustrators', icon: 'illustrator', railOnly: true },
+  { to: '/trainers', label: 'Trainers', icon: 'people', railOnly: true },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ];

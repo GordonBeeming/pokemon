@@ -4,6 +4,7 @@ import { NATIONAL_POKEDEX_SIZE } from './national-pokedex';
 import { FRAME_TYPES, RARITY_KEYS } from './frame';
 
 export * from './artists';
+export * from './trainers';
 export * from './national-pokedex';
 export * from './frame';
 export * from './people';
@@ -203,7 +204,9 @@ export const binderSlotSchema = z
     row: z.number().int().nonnegative(),
     column: z.number().int().nonnegative(),
     cardId: cardIdSchema.nullable(),
-    entryKind: z.enum(['empty', 'reserved', 'exact-card', 'pokemon', 'set']).optional(),
+    entryKind: z
+      .enum(['empty', 'reserved', 'exact-card', 'pokemon', 'set', 'illustrator', 'trainer'])
+      .optional(),
     label: z.string().trim().min(1).max(120).nullable().optional(),
     pokemonNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE).nullable().optional(),
     // A set target: any card from this set fits. The name and code are for display.
@@ -211,6 +214,9 @@ export const binderSlotSchema = z
     setLanguage: languageSchema.nullable().optional(),
     setName: z.string().trim().min(1).max(200).nullable().optional(),
     setCode: z.string().trim().min(1).max(32).nullable().optional(),
+    // An illustrator or trainer target: any card in that group fits. The name is for display.
+    groupKey: z.string().trim().min(1).max(200).nullable().optional(),
+    groupName: z.string().trim().min(1).max(200).nullable().optional(),
     assignedCardId: cardIdSchema.nullable().optional(),
     startsNewPage: z.boolean().optional(),
   })
@@ -459,6 +465,21 @@ export const binderEntrySchema = z.discriminatedUnion('kind', [
       startsNewPage: z.boolean().default(false),
     })
     .strict(),
+  // Any card by one illustrator, or any of one trainer's Pokémon, by the group's key.
+  z
+    .object({
+      kind: z.literal('illustrator'),
+      key: z.string().trim().min(1).max(200),
+      startsNewPage: z.boolean().default(false),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('trainer'),
+      key: z.string().trim().min(1).max(200),
+      startsNewPage: z.boolean().default(false),
+    })
+    .strict(),
 ]);
 export type BinderEntry = z.infer<typeof binderEntrySchema>;
 
@@ -487,6 +508,8 @@ export const binderFillPageRequestSchema = binderRevisionRequestSchema
           setLanguage: languageSchema,
         })
         .strict(),
+      z.object({ kind: z.literal('illustrator'), key: z.string().trim().min(1).max(200) }).strict(),
+      z.object({ kind: z.literal('trainer'), key: z.string().trim().min(1).max(200) }).strict(),
     ]),
   })
   .strict();
@@ -738,6 +761,7 @@ export const binderCardMatchesSchema = z
     exactTargets: z.array(slotRefSchema),
     pokemonTargets: z.array(slotRefSchema),
     setTargets: z.array(slotRefSchema).default([]),
+    groupTargets: z.array(slotRefSchema).default([]),
     placed: z.array(slotRefSchema),
     nextTarget: slotRefSchema.nullable(),
     endDestination: slotRefSchema.nullable(),
@@ -822,6 +846,7 @@ export type IllustratorRepresentative = z.infer<typeof illustratorRepresentative
 export const illustratorSchema = z
   .object({
     name: z.string().trim().min(1).max(200),
+    key: z.string().trim().min(1).max(200),
     cardCount: z.number().int().positive(),
     ownedCount: z.number().int().nonnegative(),
     favorite: z.boolean(),
@@ -839,6 +864,30 @@ export const illustratorsResponseSchema = z
   .object({ illustrators: z.array(illustratorSchema) })
   .strict();
 export type IllustratorsResponse = z.infer<typeof illustratorsResponseSchema>;
+
+// Same tile as an illustrator: a trainer's Pokémon, how many are owned, and a card to show.
+export const trainerSchema = z
+  .object({
+    key: z.string().trim().min(1).max(200),
+    name: z.string().trim().min(1).max(200),
+    cardCount: z.number().int().positive(),
+    ownedCount: z.number().int().nonnegative(),
+    favorite: z.boolean(),
+    representative: illustratorRepresentativeSchema,
+  })
+  .strict();
+export type Trainer = z.infer<typeof trainerSchema>;
+export const trainersResponseSchema = z.object({ trainers: z.array(trainerSchema) }).strict();
+export const trainerFavoriteRequestSchema = z
+  .object({ key: z.string().trim().min(1).max(200), favorite: z.boolean() })
+  .strict();
+export const setFavoriteRequestSchema = z
+  .object({
+    setId: z.string().trim().min(1).max(128),
+    language: languageSchema,
+    favorite: z.boolean(),
+  })
+  .strict();
 
 export const setCodePatchRequestSchema = z
   .object({

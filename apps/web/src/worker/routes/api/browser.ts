@@ -11,6 +11,8 @@ import {
   formatDexNumber,
   framePalettePutRequestSchema,
   illustratorFavoriteRequestSchema,
+  setFavoriteRequestSchema,
+  trainerFavoriteRequestSchema,
   languageSchema,
   NATIONAL_POKEDEX,
   setCodePatchRequestSchema,
@@ -19,6 +21,8 @@ import {
   getFramePalette,
   resetFramePalette,
   setFramePalette,
+  setFavorite,
+  setFavoriteKey,
   setIllustratorFavorite,
 } from '../../lib/settings';
 import { dashboardBinderProgress, dashboardStillToFind } from '../../lib/dashboard';
@@ -45,6 +49,7 @@ import {
   importCatalogueLanguage,
 } from '../../lib/catalogue';
 import { listIllustrators } from '../../lib/illustrators';
+import { listTrainers } from '../../lib/trainers';
 import { cachedTcgdexSpeciesPreviews, discoverTcgdexSpecies } from '../../lib/tcgdex-discovery';
 import { collectionSummary } from '../../lib/collection';
 import { asPositiveInt } from '../../lib/db';
@@ -155,6 +160,7 @@ browserApiRoutes.use('/art*', requireSession);
 // guard is inline on the PATCH route below rather than on this wildcard.
 browserApiRoutes.use('/sets*', requireSession);
 browserApiRoutes.use('/illustrators*', requireSession);
+browserApiRoutes.use('/trainers*', requireSession);
 browserApiRoutes.use('/prices*', requireSession);
 
 browserApiRoutes.get('/dashboard', async (c) => {
@@ -585,6 +591,42 @@ browserApiRoutes.put('/illustrators/favorites', async (c) => {
   }
 });
 
+browserApiRoutes.get('/trainers', async (c) => {
+  try {
+    return c.json({ ok: true, trainers: await listTrainers(c.env.DB, sessionOwner(c)) });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.put('/trainers/favorites', async (c) => {
+  try {
+    const parsed = trainerFavoriteRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    await setFavorite(c.env.DB, sessionOwner(c), 'trainers', parsed.data.key, parsed.data.favorite);
+    return c.json({ ok: true });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.put('/sets/favorites', async (c) => {
+  try {
+    const parsed = setFavoriteRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    await setFavorite(
+      c.env.DB,
+      sessionOwner(c),
+      'sets',
+      setFavoriteKey(parsed.data.setId, parsed.data.language),
+      parsed.data.favorite,
+    );
+    return c.json({ ok: true });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
 browserApiRoutes.get('/catalogue/facets/sets', async (c) => {
   const parsed = c.req.query('language')
     ? languageSchema.safeParse(c.req.query('language'))
@@ -597,6 +639,7 @@ browserApiRoutes.get('/catalogue/facets/sets', async (c) => {
         c.env.DB,
         sessionOwner(c),
         parsed?.success ? parsed.data : undefined,
+        c.req.query('preview') === 'true',
       ),
     });
   } catch (error) {

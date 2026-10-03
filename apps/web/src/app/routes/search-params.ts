@@ -81,6 +81,8 @@ const catalogueSearchSchema = z.object({
   rarity: csv(z.string()).default([]),
   set: csv(z.string()).default([]),
   artist: z.string().trim().min(1).max(200).optional(),
+  // A trainer's Pokémon, by trainer key ("lillie", "teamrocket").
+  trainer: z.string().trim().min(1).max(200).optional(),
   // Preserved from Sets & codes: a Japanese-language set stays scoped to Japanese
   // printings after the jump into Catalogue (worker's catalogueFilters already
   // accepts this as `language`).
@@ -127,6 +129,13 @@ const illustratorsSearchSchema = z.object({
 export const illustratorsSearch = defineSearchParams(illustratorsSearchSchema);
 export type IllustratorsSearch = z.infer<typeof illustratorsSearchSchema>;
 export type IllustratorSortOrder = (typeof illustratorSortOrders)[number];
+
+const trainersSearchSchema = z.object({
+  q: text().default(''),
+  sort: z.enum(illustratorSortOrders).default('name'),
+});
+export const trainersSearch = defineSearchParams(trainersSearchSchema);
+export type TrainersSearch = z.infer<typeof trainersSearchSchema>;
 
 export const binderModes = ['move', 'paste', 'insert'] as const;
 

@@ -3,9 +3,14 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useMemo, useState, type ReactElement } from 'react';
 import { Button, Disclosure, DisclosurePanel, Heading } from 'react-aria-components';
 import { useSession } from '../api/queries/session';
-import { useSetCodes, useSets } from '../api/queries/sets';
+import { useSetCodes, useSets, useSetSetFavorite } from '../api/queries/sets';
 import { RARITY_VISUALS, rarityToneColour } from '../cards/rarity-visuals';
-import { catalogueSearch, illustratorsSearch, type SetsSearch } from '../routes/search-params';
+import {
+  catalogueSearch,
+  illustratorsSearch,
+  trainersSearch,
+  type SetsSearch,
+} from '../routes/search-params';
 import { EmptyState } from '../ui/EmptyState';
 import { Icon } from '../ui/icons';
 import { useIsDesktop } from './catalogue/useIsDesktop';
@@ -60,7 +65,8 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
   // Contract B's own list (code/codeSource/releaseDate/cardCount) doesn't carry
   // owned counts; the pre-existing facets endpoint does — joined here by
   // setId+language rather than asking ws-data-2 to widen their contract for one row.
-  const facets = useSets();
+  const facets = useSets({ preview: true });
+  const setFavorite = useSetSetFavorite();
   const [query, setQuery] = useState('');
   const legendBeside = useMediaQuery(LEGEND_BESIDE_QUERY);
   const isDesktop = useIsDesktop();
@@ -78,12 +84,17 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
   }, [setCodes.data]);
 
   const needle = query.trim().toLocaleLowerCase('en-AU');
-  const filtered = (setCodes.data?.sets ?? []).filter(
+  const matching = (setCodes.data?.sets ?? []).filter(
     (set) =>
       !needle ||
       set.setName.toLocaleLowerCase('en-AU').includes(needle) ||
       (set.code ?? set.setId).toLocaleLowerCase('en-AU').includes(needle),
   );
+  const isFavorite = (set: { setId: string; language: string }): boolean =>
+    facetByKey.get(`${set.setId}:${set.language}`)?.favorite === true;
+  // Starred sets first, the rest in release order as before.
+  const favorites = matching.filter(isFavorite);
+  const filtered = [...favorites, ...matching.filter((set) => !isFavorite(set))];
 
   // A set opened from here scrolls back into view on return, matching the same
   // "survives leaving and returning" treatment Pokédex gives its focused tile.
@@ -111,14 +122,24 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
           {/* Desktop reaches Illustrators from the rail; the phone tab bar has no
               room for a 7th icon, so this is its only route in. */}
           {isDesktop ? null : (
-            <Link
-              className="sets-illustrators-link"
-              to="/illustrators"
-              search={illustratorsSearch.parse({})}
-            >
-              <Icon name="illustrator" />
-              Illustrators
-            </Link>
+            <div className="sets-group-links">
+              <Link
+                className="sets-illustrators-link"
+                to="/illustrators"
+                search={illustratorsSearch.parse({})}
+              >
+                <Icon name="illustrator" />
+                Illustrators
+              </Link>
+              <Link
+                className="sets-illustrators-link"
+                to="/trainers"
+                search={trainersSearch.parse({})}
+              >
+                <Icon name="people" />
+                Trainers
+              </Link>
+            </div>
           )}
         </header>
         <label className="sr-only" htmlFor="sets-find">
@@ -163,12 +184,27 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
               const total = facet?.total ?? set.cardCount;
               const owned = facet?.owned ?? 0;
               const clash = clashedIds.has(set.setId);
+              const favorite = facet?.favorite === true;
+              const preview = facet?.representative?.imageLowUrl ?? null;
               return (
                 <li
                   key={`${set.setId}:${set.language}`}
                   id={`set-row-${set.setId}`}
-                  className="set-card"
+                  className={favorite ? 'set-card set-card-favorite' : 'set-card'}
                 >
+                  <span className="set-preview" aria-hidden="true">
+                    {preview ? (
+                      <img
+                        key={preview}
+                        src={preview}
+                        alt=""
+                        loading="lazy"
+                        onError={(event) => {
+                          event.currentTarget.hidden = true;
+                        }}
+                      />
+                    ) : null}
+                  </span>
                   {set.code ? (
                     <span className={clash ? 'set-code set-code-clash' : 'set-code'}>
                       {set.code}
@@ -194,6 +230,24 @@ export function Sets({ search }: { search: SetsSearch }): ReactElement {
                     </span>
                   </button>
                   {isAdmin ? <SetCodeEditor set={set} clash={clash} /> : null}
+                  <button
+                    type="button"
+                    className="set-favorite"
+                    aria-pressed={favorite}
+                    aria-label={
+                      favorite ? `Unfavourite ${set.setName}` : `Favourite ${set.setName}`
+                    }
+                    title={favorite ? 'Unfavourite' : 'Favourite'}
+                    onClick={() =>
+                      setFavorite.mutate({
+                        setId: set.setId,
+                        language: set.language,
+                        favorite: !favorite,
+                      })
+                    }
+                  >
+                    <Icon name="star" />
+                  </button>
                   {clash ? (
                     <span className="set-clash-note">Shares this code with another set.</span>
                   ) : null}

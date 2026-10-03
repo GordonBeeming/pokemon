@@ -32,7 +32,10 @@
 .set-card {
   display: grid;
   /* A fixed code column, so every card's name starts at the same place. */
-  grid-template-columns: 4.5rem minmax(0, 1fr) auto;
+  /* The preview card down the left; code over name in the middle; the admin edit
+     button over the star on the right; the progress bar across the bottom. Cards in
+     the grid are narrow, so nothing sits beside the name to squeeze it. */
+  grid-template-columns: 2.75rem minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.5rem 0.75rem;
   min-width: 0;
@@ -251,4 +254,74 @@
 }
 .set-code-form p {
   margin: 0;
+}
+
+/* A starred set floats to the top and shows it. */
+.set-card-favorite {
+  border-color: #f59e0b;
+}
+.set-preview {
+  display: block;
+  width: 2.75rem;
+  aspect-ratio: 245 / 337;
+  overflow: hidden;
+  background: var(--line);
+  border-radius: var(--radius-sm);
+}
+.set-preview img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.set-favorite {
+  display: grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  font-size: 1.15rem;
+  color: var(--muted);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
+}
+.set-favorite[aria-pressed='true'] {
+  color: #b45309;
+}
+.set-favorite[aria-pressed='true'] svg {
+  fill: currentColor;
+}
+.set-favorite:focus-visible {
+  outline: 3px solid var(--accent-deep);
+  outline-offset: 2px;
+}
+
+/* Phone: the groups the tab bar has no room for, side by side. */
+.sets-group-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.set-card .set-preview {
+  grid-row: 1 / span 2;
+  grid-column: 1;
+  align-self: start;
+}
+.set-card .set-code {
+  grid-row: 1;
+  grid-column: 2;
+}
+.set-card .set-row-link {
+  grid-row: 2;
+  grid-column: 2;
+}
+.set-card .set-code-edit-button {
+  grid-row: 1;
+  grid-column: 3;
+}
+.set-card .set-favorite {
+  grid-row: 2;
+  grid-column: 3;
 }

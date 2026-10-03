@@ -9,11 +9,13 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { useCatalogueSearch } from '../api/queries/catalogue';
 import { useIllustrators, useSetIllustratorFavorite } from '../api/queries/illustrators';
+import { useSetTrainerFavorite, useTrainers } from '../api/queries/trainers';
 import { recentlyDiscoveredSpecies, useDiscoverSpecies } from '../api/queries/pokedex';
 import { useSets } from '../api/queries/sets';
 import {
   catalogueSearch,
   illustratorsSearch,
+  trainersSearch,
   pokedexSearch,
   type CatalogueOwnedFilter,
   type CatalogueSearch,
@@ -41,6 +43,7 @@ import './catalogue/catalogue.css';
 const BLANK_SEARCH = catalogueSearch.parse({});
 const BLANK_POKEDEX_SEARCH = pokedexSearch.parse({});
 const BLANK_ILLUSTRATORS_SEARCH = illustratorsSearch.parse({});
+const BLANK_TRAINERS_SEARCH = trainersSearch.parse({});
 
 const PAGE_SIZE = 50;
 
@@ -103,7 +106,16 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
   const galleryArtist = artistGallery
     ? illustrators.data?.find((entry) => artistKey(entry.name) === artistKey(search.artist ?? ''))
     : undefined;
-  const contextual = Boolean(speciesEntry) || search.set.length === 1 || artistGallery;
+  // A trainer's Pokémon, the same way: their name as the title and their star.
+  const trainerGallery =
+    Boolean(search.trainer) && !speciesEntry && search.set.length === 0 && !search.artist;
+  const trainers = useTrainers({ enabled: Boolean(search.trainer) });
+  const setTrainerFavorite = useSetTrainerFavorite();
+  const galleryTrainer = search.trainer
+    ? trainers.data?.find((entry) => entry.key === search.trainer)
+    : undefined;
+  const contextual =
+    Boolean(speciesEntry) || search.set.length === 1 || artistGallery || trainerGallery;
   const contextSetName = search.set.length === 1 ? cards[0]?.setName : undefined;
 
   function moveToPage(nextPage: number): void {
@@ -211,20 +223,31 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
     ...(search.artist
       ? [{ key: 'artist', label: search.artist, icon: 'illustrator' as const }]
       : []),
+    ...(search.trainer
+      ? [
+          {
+            key: 'trainer',
+            label: galleryTrainer?.name ?? search.trainer,
+            icon: 'people' as const,
+          },
+        ]
+      : []),
   ];
   const activeFilterCount =
     search.type.length +
     search.rarity.length +
     search.set.length +
     (search.region ? 1 : 0) +
-    (search.artist ? 1 : 0);
+    (search.artist ? 1 : 0) +
+    (search.trainer ? 1 : 0);
   // The illustrator is named, not counted: arriving from their tile, the name is the
   // only sign on a phone of whose cards these are.
-  const countedFilters = activeFilterCount - (search.artist ? 1 : 0);
+  const countedFilters = activeFilterCount - (search.artist ? 1 : 0) - (search.trainer ? 1 : 0);
   const phoneSummary = [
     search.q ? `“${search.q}”` : search.artist || search.number ? null : 'Search cards',
     search.number ? `No. ${search.number}` : null,
     search.artist ?? null,
+    search.trainer ? (galleryTrainer?.name ?? search.trainer) : null,
     search.owned === 'owned' ? 'Owned' : search.owned === 'missing' ? 'Missing' : null,
     countedFilters > 0 ? `${countedFilters} filter${countedFilters === 1 ? '' : 's'}` : null,
   ]
@@ -234,6 +257,7 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
   function removeChip(key: string): void {
     if (key === 'region') return updateSearch({ region: undefined });
     if (key === 'artist') return updateSearch({ artist: undefined });
+    if (key === 'trainer') return updateSearch({ trainer: undefined });
     const [kind, value] = key.split(':');
     if (kind === 'type') updateSearch({ type: search.type.filter((item) => item !== value) });
     else if (kind === 'rarity')
@@ -263,13 +287,44 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
             >
               Back to Illustrators
             </Link>
+          ) : trainerGallery ? (
+            <Link className="text-button back-link" to="/trainers" search={BLANK_TRAINERS_SEARCH}>
+              Back to Trainers
+            </Link>
           ) : null}
           {contextual ? (
             <Link className="text-button back-link" to="/catalogue" search={BLANK_SEARCH}>
               Show full catalogue
             </Link>
           ) : null}
-          {artistGallery && search.artist ? (
+          {trainerGallery && search.trainer ? (
+            <div className="artist-heading">
+              <h1>
+                <Icon name="people" title="Trainer" /> {galleryTrainer?.name ?? search.trainer}
+              </h1>
+              {galleryTrainer ? (
+                <button
+                  type="button"
+                  className="artist-favorite"
+                  aria-pressed={galleryTrainer.favorite}
+                  aria-label={
+                    galleryTrainer.favorite
+                      ? `Unfavourite ${galleryTrainer.name}`
+                      : `Favourite ${galleryTrainer.name}`
+                  }
+                  title={galleryTrainer.favorite ? 'Unfavourite' : 'Favourite'}
+                  onClick={() =>
+                    setTrainerFavorite.mutate({
+                      key: galleryTrainer.key,
+                      favorite: !galleryTrainer.favorite,
+                    })
+                  }
+                >
+                  <Icon name="star" />
+                </button>
+              ) : null}
+            </div>
+          ) : artistGallery && search.artist ? (
             <div className="artist-heading">
               <h1>
                 <Icon name="illustrator" title="Illustrator" />{' '}
@@ -437,6 +492,7 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
                     set: [],
                     region: undefined,
                     artist: undefined,
+                    trainer: undefined,
                   })
                 }
               >

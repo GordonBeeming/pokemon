@@ -14,9 +14,10 @@ import { useSets, type SetFacet } from '../../../api/queries/sets';
 import { SegmentedControl } from '../../../ui/SegmentedControl';
 import { binderErrorMessage, INSERT_SELECTION_CAP } from '../model';
 import { CardPicker, collectAllCards, type PickerQuery } from './CardPicker';
+import { GroupPicker, type GroupChoice } from './GroupPicker';
 import { Panel } from './Panel';
 
-type Kind = 'pokemon' | 'set' | 'exact-card';
+type Kind = 'pokemon' | 'set' | 'illustrator' | 'trainer' | 'exact-card';
 /** A set is inserted as pockets that take any of its cards, or as one target per card. */
 type SetMode = 'any' | 'every';
 const MAX_ANY_POCKETS = 400;
@@ -29,13 +30,18 @@ function setKey(set: SetFacet): string {
   return `${set.language}:${set.setId}`;
 }
 
+/** Matching sets, starred ones first (each half keeps release order). */
 export function filterSets(sets: readonly SetFacet[], query: string): SetFacet[] {
   const lowered = query.trim().toLocaleLowerCase('en-AU');
-  return lowered
+  const matching = lowered
     ? sets.filter((set) =>
         `${set.setName} ${set.setId}`.toLocaleLowerCase('en-AU').includes(lowered),
       )
     : [...sets];
+  return [
+    ...matching.filter((set) => set.favorite === true),
+    ...matching.filter((set) => set.favorite !== true),
+  ];
 }
 
 function pokemonEntry(pokemonNumber: number): BinderEntry {
@@ -117,6 +123,7 @@ export function InsertPanel({
   const [setMode, setSetMode] = useState<SetMode>('any');
   const [anyCount, setAnyCount] = useState(String(pageSize));
   const [anySet, setAnySet] = useState<SetFacet | null>(null);
+  const [anyGroup, setAnyGroup] = useState<GroupChoice | null>(null);
   const selectAllRequest = useRef<AbortController | null>(null);
 
   const pokemon = kind === 'pokemon' ? filterPokemon(query) : [];
@@ -188,6 +195,28 @@ export function InsertPanel({
     );
     setMessage(
       `${count.toLocaleString('en-AU')} ${count === 1 ? 'pocket' : 'pockets'} for any card from ${set.setName}.`,
+    );
+  }
+
+  /** `count` pockets that each take any card by an illustrator or of a trainer. */
+  function selectAnyFromGroup(
+    groupKind: 'illustrator' | 'trainer',
+    group: GroupChoice,
+    countText: string,
+  ): void {
+    setAnyGroup(group);
+    const count = Number(countText);
+    if (!Number.isInteger(count) || count < 1 || count > MAX_ANY_POCKETS) {
+      setSelected(new Map());
+      setMessage(`Enter how many pockets, from 1 to ${MAX_ANY_POCKETS}.`);
+      return;
+    }
+    const entry: BinderEntry = { kind: groupKind, key: group.key, startsNewPage: false };
+    setSelected(
+      new Map(Array.from({ length: count }, (_unused, index) => [`any:${index}`, entry])),
+    );
+    setMessage(
+      `${count.toLocaleString('en-AU')} ${count === 1 ? 'pocket' : 'pockets'} for any card ${groupKind === 'illustrator' ? 'by' : 'of'} ${group.name}.`,
     );
   }
 
@@ -283,10 +312,13 @@ export function InsertPanel({
             setExactTotal(null);
             setChosenSet(null);
             setAnySet(null);
+            setAnyGroup(null);
           }}
           options={[
-            { value: 'pokemon', label: 'Pokémon targets' },
+            { value: 'pokemon', label: 'Pokémon' },
             { value: 'set', label: 'Set' },
+            { value: 'illustrator', label: 'Illustrator' },
+            { value: 'trainer', label: 'Trainer' },
             { value: 'exact-card', label: 'Exact cards' },
           ]}
         />
@@ -360,6 +392,31 @@ export function InsertPanel({
                 Next results
               </button>
             </nav>
+          </>
+        ) : kind === 'illustrator' || kind === 'trainer' ? (
+          <>
+            <label className="panel-field">
+              <span>How many pockets</span>
+              <input
+                type="number"
+                inputMode="numeric"
+                min="1"
+                max={MAX_ANY_POCKETS}
+                step="1"
+                value={anyCount}
+                disabled={busy}
+                onChange={(event) => {
+                  setAnyCount(event.target.value);
+                  if (anyGroup) selectAnyFromGroup(kind, anyGroup, event.target.value);
+                }}
+              />
+            </label>
+            <GroupPicker
+              kind={kind}
+              selectedKey={anyGroup?.key ?? null}
+              pending={busy}
+              onSelect={(group) => selectAnyFromGroup(kind, group, anyCount)}
+            />
           </>
         ) : kind === 'set' ? (
           <>

@@ -1,4 +1,8 @@
-import { catalogueSetsResponseSchema, setCodePatchRequestSchema } from '@pokedex/shared';
+import {
+  catalogueSetsResponseSchema,
+  illustratorRepresentativeSchema,
+  setCodePatchRequestSchema,
+} from '@pokedex/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { apiFetch } from '../client';
@@ -15,6 +19,9 @@ const setsResponseSchema = z
           language: z.string(),
           total: z.number(),
           owned: z.number(),
+          // Optional so a worker from before favourites still parses.
+          favorite: z.boolean().optional(),
+          representative: illustratorRepresentativeSchema.optional(),
         })
         .passthrough(),
     ),
@@ -26,14 +33,57 @@ export type SetFacet = z.infer<typeof setsResponseSchema>['sets'][number];
 /** Catalogue's own set filter reads this — the pre-existing, working facets list
  * (setId/setName/language/total/owned), independent of the admin-facing contract
  * below so the filter panel doesn't depend on ws-data-2's new endpoint. */
-export function useSets() {
+export function useSets({ preview = false }: { preview?: boolean } = {}) {
   return useQuery({
-    queryKey: queryKeys.sets.list(),
+    queryKey: preview ? queryKeys.sets.previews() : queryKeys.sets.list(),
     queryFn: ({ signal }) =>
-      apiFetch('/api/catalogue/facets/sets', setsResponseSchema, { signal }).then(
-        (body) => body.sets,
-      ),
+      apiFetch(`/api/catalogue/facets/sets${preview ? '?preview=true' : ''}`, setsResponseSchema, {
+        signal,
+      }).then((body) => body.sets),
     staleTime: 60_000,
+  });
+}
+
+const okEnvelope = z.object({ ok: z.literal(true) }).passthrough();
+
+/** Stars or unstars a set; the Sets page list flips at once and rolls back on refusal. */
+export function useSetSetFavorite() {
+  const queryClient = useQueryClient();
+  const keys = [queryKeys.sets.previews(), queryKeys.sets.list()];
+  return useMutation({
+    mutationFn: ({
+      setId,
+      language,
+      favorite,
+    }: {
+      setId: string;
+      language: string;
+      favorite: boolean;
+    }) =>
+      apiFetch('/api/sets/favorites', okEnvelope, {
+        method: 'PUT',
+        body: { setId, language, favorite },
+      }),
+    onMutate: async ({ setId, language, favorite }) => {
+      await Promise.all(keys.map((key) => queryClient.cancelQueries({ queryKey: key })));
+      const previous = keys.map((key) => queryClient.getQueryData<SetFacet[]>(key));
+      for (const key of keys)
+        queryClient.setQueryData<SetFacet[]>(key, (list) =>
+          list?.map((set) =>
+            set.setId === setId && set.language === language ? { ...set, favorite } : set,
+          ),
+        );
+      return { previous };
+    },
+    onError: (_error, _variables, context) => {
+      keys.forEach((key, index) => {
+        const previous = context?.previous[index];
+        if (previous) queryClient.setQueryData(key, previous);
+      });
+    },
+    onSettled: () => {
+      for (const key of keys) void queryClient.invalidateQueries({ queryKey: key });
+    },
   });
 }
 

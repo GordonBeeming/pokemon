@@ -30,7 +30,11 @@ function matchDetail(match: BinderSearchMatch): string {
     match.row !== null && match.column !== null
       ? `row ${match.row + 1}, pocket ${match.column + 1}`
       : null,
-    match.kind === 'pokemon' || match.kind === 'exact-card' || match.kind === 'set'
+    match.kind === 'pokemon' ||
+    match.kind === 'exact-card' ||
+    match.kind === 'set' ||
+    match.kind === 'illustrator' ||
+    match.kind === 'trainer'
       ? match.placed
         ? 'Placed'
         : 'Unfilled'

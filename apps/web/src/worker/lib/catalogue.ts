@@ -5,13 +5,16 @@ import {
   languageSchema,
   NATIONAL_POKEDEX,
   NATIONAL_POKEDEX_SIZE,
+  artistKey,
   pokedexNumberFromCardName,
+  trainerOf,
   RARITY_KEY_RAW_VALUES,
   rarityKeyFor,
   type CatalogueBrief,
   type CatalogueCardView,
   type CatalogueDetailView,
   type CatalogueSet,
+  type IllustratorRepresentative,
   type FrameType,
   type LanguageCode,
   type RarityKey,
@@ -21,6 +24,8 @@ import {
 } from '@pokedex/shared';
 import { z } from 'zod';
 import { artistSpellings } from './artists';
+import { groupRepresentative, rankedGroups } from './groups';
+import { getFavorites, setFavoriteKey } from './settings';
 import { base64UrlDecode, base64UrlEncode } from './crypto';
 import { escapedFtsQuery, isoFromSeconds, newId, nowSeconds, scalarCount } from './db';
 import { ApplicationError } from './log';
@@ -80,6 +85,8 @@ export interface CatalogueFilters {
   setId?: string;
   species?: string;
   artist?: string;
+  /** A trainer's Pokémon, by trainer key (see trainerOf). */
+  trainer?: string;
   /** The printed card number, matched like a numeric search (leading zeros and any
    * set total ignored), so it narrows a name search to one printing. */
   cardNumber?: string;
@@ -165,6 +172,21 @@ export interface ImportedCard {
   releaseDate?: string | null;
   pokedexNumber?: number | null;
   types?: string[] | null;
+  /** The illustrator and trainer groups the card belongs to (see artistKey, trainerOf). */
+  artistKey?: string | null;
+  trainerKey?: string | null;
+}
+
+/** The group keys a card is matched on, from its illustrator and name. */
+export function cardGroupKeys(card: { artist?: string | null; name: string; category: string }): {
+  artistKey: string | null;
+  trainerKey: string | null;
+} {
+  const artist = card.artist?.trim() ? artistKey(card.artist) : '';
+  return {
+    artistKey: artist || null,
+    trainerKey: card.category === 'pokemon' ? (trainerOf(card.name)?.key ?? null) : null,
+  };
 }
 
 const tcgdexCardSchema = z
@@ -274,6 +296,7 @@ export async function transformTcgdexCard(
     releaseDate: effectiveReleaseDate,
     pokedexNumber,
     types: card.types?.length ? card.types : null,
+    ...cardGroupKeys({ artist: card.illustrator, name: card.name, category }),
   };
 }
 
@@ -550,7 +573,7 @@ export async function stageCatalogueCards(
           `INSERT INTO catalogue_stage_cards
           (run_id, source_id, card_id, checksum, source_updated_at, name, language, category,
            set_id, set_name, number, number_sort, supertype, subtype, species, rarity, artist,
-           release_date, pokedex_number, types)
+           release_date, pokedex_number, types, artist_key, trainer_key)
          SELECT ?1,
            json_extract(value, '$.sourceId'),
            COALESCE(
@@ -567,7 +590,8 @@ export async function stageCatalogueCards(
            json_extract(value, '$.subtype'), json_extract(value, '$.species'),
            json_extract(value, '$.rarity'), json_extract(value, '$.artist'),
            json_extract(value, '$.releaseDate'), json_extract(value, '$.pokedexNumber'),
-           json_extract(value, '$.types')
+           json_extract(value, '$.types'),
+           json_extract(value, '$.artistKey'), json_extract(value, '$.trainerKey')
          FROM json_each(?2) WHERE true
          ON CONFLICT(run_id, source_id) DO UPDATE SET
            card_id = excluded.card_id, checksum = excluded.checksum,
@@ -577,7 +601,8 @@ export async function stageCatalogueCards(
            number_sort = excluded.number_sort, supertype = excluded.supertype,
            subtype = excluded.subtype, species = excluded.species, rarity = excluded.rarity,
            artist = excluded.artist, release_date = excluded.release_date,
-           pokedex_number = excluded.pokedex_number, types = excluded.types`,
+           pokedex_number = excluded.pokedex_number, types = excluded.types,
+           artist_key = excluded.artist_key, trainer_key = excluded.trainer_key`,
         )
         .bind(runId, JSON.stringify(chunk))
         .run();
@@ -696,9 +721,11 @@ export async function applyStagedCatalogueRun(
         .prepare(
           `INSERT INTO catalogue_cards
             (id, name, language, category, set_id, set_name, number, number_sort, supertype,
-             subtype, species, rarity, artist, pokedex_number, types, created_at, updated_at)
+             subtype, species, rarity, artist, pokedex_number, types, artist_key, trainer_key,
+             created_at, updated_at)
            SELECT card_id, name, language, category, set_id, set_name, number, number_sort,
-             supertype, subtype, species, rarity, artist, pokedex_number, types, ?1, ?1
+             supertype, subtype, species, rarity, artist, pokedex_number, types, artist_key,
+             trainer_key, ?1, ?1
            FROM catalogue_stage_cards
            WHERE run_id = ?2
              AND EXISTS (SELECT 1 FROM sync_run_claims WHERE run_id = ?2 AND claim_token = ?3)
@@ -709,6 +736,7 @@ export async function applyStagedCatalogueRun(
              rarity = excluded.rarity, artist = excluded.artist,
              pokedex_number = excluded.pokedex_number,
              types = COALESCE(excluded.types, catalogue_cards.types),
+             artist_key = excluded.artist_key, trainer_key = excluded.trainer_key,
              is_active = 1, updated_at = excluded.updated_at
            WHERE catalogue_cards.is_custom = 0`,
         )
@@ -1361,6 +1389,10 @@ export async function searchCards(
     where.push(`upper(ltrim(${numerator}, '0')) = ltrim(?${values.length + 1}, '0')`);
     values.push(cardNumberFilter);
   }
+  if (filters.trainer) {
+    where.push(`c.trainer_key = ?${values.length + 1}`);
+    values.push(filters.trainer);
+  }
   if (filters.artist) {
     const spellings = await artistSpellings(db, filters.artist);
     const placeholders = spellings.map((_, index) => `?${values.length + index + 1}`);
@@ -1412,6 +1444,7 @@ export async function searchCards(
     setIds: filters.setIds?.slice().sort() ?? null,
     species: filters.species ?? null,
     artist: filters.artist ?? null,
+    trainer: filters.trainer ?? null,
     numberFilter: cardNumberFilter || null,
     pokedexNumber: filters.pokedexNumber ?? null,
     region: filters.region ?? null,
@@ -1492,13 +1525,28 @@ export async function getCardDetail(
   return row ? detail(row, includePokemonNumber) : null;
 }
 
+export interface SetFacet {
+  setId: string;
+  setName: string;
+  language: LanguageCode;
+  total: number;
+  owned: number;
+  favorite: boolean;
+  /** A card to show for the set; only asked for by the Sets page. */
+  representative?: IllustratorRepresentative;
+}
+
 export async function listSetFacets(
   db: D1Database,
   ownerId: string,
   language?: LanguageCode,
-): Promise<
-  Array<{ setId: string; setName: string; language: LanguageCode; total: number; owned: number }>
-> {
+  withPreview = false,
+): Promise<SetFacet[]> {
+  const [favorites, previews] = await Promise.all([
+    getFavorites(db, ownerId, 'sets'),
+    withPreview ? rankedGroups(db, ownerId, 'set') : Promise.resolve([]),
+  ]);
+  const previewByKey = new Map(previews.map((row) => [row.group_key, row]));
   const result = await db
     .prepare(
       `SELECT c.set_id, c.set_name, c.language, COUNT(*) AS total, COUNT(CASE WHEN COALESCE(cc.quantity, 0) > 0 THEN 1 END) AS owned
@@ -1516,13 +1564,19 @@ export async function listSetFacets(
       total: number;
       owned: number;
     }>();
-  return result.results.map((row) => ({
-    setId: row.set_id,
-    setName: row.set_name,
-    language: row.language,
-    total: row.total,
-    owned: row.owned,
-  }));
+  return result.results.map((row) => {
+    const key = setFavoriteKey(row.set_id, row.language);
+    const preview = previewByKey.get(key);
+    return {
+      setId: row.set_id,
+      setName: row.set_name,
+      language: row.language,
+      total: row.total,
+      owned: row.owned,
+      favorite: favorites.has(key),
+      ...(preview ? { representative: groupRepresentative(preview) } : {}),
+    };
+  });
 }
 
 const tcgdexSetAbbreviationSchema = z
@@ -1706,8 +1760,9 @@ export async function createCustomCard(
       .prepare(
         `INSERT INTO catalogue_cards
           (id, name, language, category, set_id, set_name, number, number_sort, supertype,
-           subtype, species, rarity, artist, is_custom, owner_id, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?15, ?15)`,
+           subtype, species, rarity, artist, is_custom, owner_id, created_at, updated_at,
+           artist_key, trainer_key)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?15, ?15, ?16, ?17)`,
       )
       .bind(
         id,
@@ -1725,6 +1780,8 @@ export async function createCustomCard(
         input.artist ?? null,
         ownerId,
         now,
+        cardGroupKeys(input).artistKey,
+        cardGroupKeys(input).trainerKey,
       ),
     db
       .prepare(
