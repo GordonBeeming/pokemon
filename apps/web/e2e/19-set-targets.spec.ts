@@ -90,6 +90,8 @@ test('Insert targets can add pockets that take any card from a set', async ({ pa
   await press(page, phone, page.getByRole('button', { name: 'Insert targets here' }));
   const panel = page.getByRole('dialog', { name: /^Insert/ });
   await chooseSegment(panel, 'Set');
+  // One pocket unless asked for more; whole pages go through Reserve page for.
+  await expect(panel.getByLabel('How many pockets')).toHaveValue('1');
   await panel.getByLabel('How many pockets').fill('4');
   await panel.getByLabel('Search sets').fill(set.setName);
   await press(

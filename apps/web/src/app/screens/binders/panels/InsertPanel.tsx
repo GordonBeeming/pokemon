@@ -90,7 +90,6 @@ export function InsertPanel({
   versionId,
   at,
   reservedPage,
-  pageSize,
   palette,
   pending,
   error,
@@ -101,8 +100,6 @@ export function InsertPanel({
   versionId: string;
   at: BinderSlotLocation | null;
   reservedPage: boolean;
-  /** Pockets on one page face: the starting count for "any card from a set". */
-  pageSize: number;
   palette: Record<FrameType, string>;
   pending: boolean;
   error: string | null;
@@ -123,7 +120,8 @@ export function InsertPanel({
   const sets = useSets();
   const [chosenSet, setChosenSet] = useState<string | null>(null);
   const [setMode, setSetMode] = useState<SetMode>('any');
-  const [anyCount, setAnyCount] = useState(String(pageSize));
+  // Inserting starts from one pocket; whole pages have "Reserve page for…".
+  const [anyCount, setAnyCount] = useState('1');
   const [anySet, setAnySet] = useState<SetFacet | null>(null);
   const [anyGroup, setAnyGroup] = useState<GroupChoice | null>(null);
   const [energy, setEnergy] = useState<EnergyGroup | null>(null);

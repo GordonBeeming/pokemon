@@ -1380,7 +1380,6 @@ export function BinderView({
           versionId={versionId}
           at={selected}
           reservedPage={reservedPage}
-          pageSize={version ? version.layout.rows * version.layout.columns : 9}
           palette={palette}
           pending={pending}
           error={writer.error}

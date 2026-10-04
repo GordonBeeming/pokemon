@@ -73,7 +73,12 @@ describe('listing and patching people', () => {
 
     const hidden = await patchPerson(db, child.id, { showPrices: false });
     expect(hidden).toMatchObject({ showPrices: false, role: 'member', disabledAt: null });
-    expect((await listPeople(db)).map((person) => [person.label, person.showPrices])).toEqual([
+    // Both were created in the same second, so list order between them isn't fixed.
+    expect(
+      (await listPeople(db))
+        .map((person) => [person.label, person.showPrices])
+        .sort(([a], [b]) => String(a).localeCompare(String(b))),
+    ).toEqual([
       ['Gordon', true],
       ['Kid', false],
     ]);
