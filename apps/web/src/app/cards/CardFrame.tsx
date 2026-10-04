@@ -51,7 +51,9 @@ export interface CardFrameProps {
   /** Owned vs not owned is the whole story a frame tells (solid vs pale dashed); the
    * copy count lives only in the card inspector. */
   state: CardFrameState;
-  /** 'any' renders an ANY-printing binder target: the Pokémon, no set/number/rarity. */
+  /** 'any' renders a binder pocket that takes any card of something (a Pokémon, a set, an
+   * illustrator, a trainer, an energy): its name with an "Any" pill, no set/number/rarity.
+   * The top row shows the Pokémon's #dex and region, or `card.setCode` as a short label. */
   variant?: 'card' | 'any';
   /** false renders raw art only (still at the 245:337 aspect ratio) with no chrome. */
   frame?: boolean;
@@ -89,7 +91,8 @@ export function CardFrame({
   // provider has a scan (brand-new sets often don't yet), so a failed load falls
   // back to the named placeholder instead of the browser's broken-image icon.
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
-  const imageUrl = card.imageUrl && card.imageUrl !== failedUrl ? card.imageUrl : null;
+  const imageUrl =
+    variant === 'card' && card.imageUrl && card.imageUrl !== failedUrl ? card.imageUrl : null;
   // Scans aren't all exactly 245:337. The art box keeps that shape so every frame
   // lays out the same, and the picture is sized to its own shape inside it (never
   // cropped or squished) so the rounded corners land on the card, not on the
@@ -104,8 +107,7 @@ export function CardFrame({
   const rarityName = card.rarityKey ? RARITY_LABELS[card.rarityKey] : null;
   const rarityColor = rarity ? rarityToneColour(rarity.tone, isSolid, textColor) : textColor;
 
-  const codeNum =
-    variant === 'any' ? 'ANY' : [card.setCode, card.number].filter(Boolean).join(' · ');
+  const codeNum = variant === 'any' ? '' : [card.setCode, card.number].filter(Boolean).join(' · ');
 
   const ariaLabel = [
     card.name,
@@ -150,10 +152,13 @@ export function CardFrame({
       style={{
         background: placeholderBg,
         color: placeholderTextColor,
-        opacity: isSolid ? 1 : 0.45,
+        // An any-card pocket is words, not a picture: the pale dashed frame already says
+        // "not filled", and fading the words too left them hard to read.
+        opacity: isSolid || variant === 'any' ? 1 : 0.45,
       }}
     >
       <span>{card.name}</span>
+      {variant === 'any' ? <span className="card-frame-any-pill">Any</span> : null}
     </div>
   );
 
@@ -166,7 +171,9 @@ export function CardFrame({
         <span className="card-frame-dex">
           {card.pokedexNumber ? formatDexNumber(card.pokedexNumber) : ''}
         </span>
-        <span className="card-frame-region">{region ?? ''}</span>
+        <span className="card-frame-region">
+          {region ?? (variant === 'any' ? (card.setCode ?? '') : '')}
+        </span>
       </span>
       {art}
       <span className="card-frame-row">
@@ -176,9 +183,7 @@ export function CardFrame({
               {rarity.icon}
             </span>
           ) : null}
-          {variant === 'any' ? (
-            <span>ANY</span>
-          ) : (
+          {variant === 'any' ? null : (
             <span className="card-frame-codenum">
               <span>
                 {card.setCode}

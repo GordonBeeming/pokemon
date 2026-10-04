@@ -83,11 +83,27 @@ describe('CardFrame', () => {
     expect(frameEl()?.style.borderStyle).toBe('solid');
   });
 
-  it('renders ANY instead of the set code and number for the any-printing variant', async () => {
-    await step(() => root.render(<CardFrame card={pikachu} state="owned" variant="any" />));
-    expect(container.textContent).toContain('ANY');
+  it('draws an any-card pocket as the name with an Any pill, no art, set or number', async () => {
+    await step(() => root.render(<CardFrame card={pikachu} state="unowned" variant="any" />));
+    expect(container.querySelector('.card-frame-any-pill')?.textContent).toBe('Any');
+    expect(container.querySelector('.card-frame-art-placeholder')?.textContent).toContain(
+      'Pikachu',
+    );
+    expect(container.querySelector('img')).toBeNull();
     expect(container.textContent).not.toContain('MEW');
+    expect(container.querySelector('.card-frame-codenum')).toBeNull();
     expect(container.querySelector('.card-frame-rarity')).toBeNull();
+  });
+
+  it('labels a group pocket top right with its short label when it has no Pokémon', async () => {
+    const set: CardFrameCard = {
+      ...pikachu,
+      name: '30th Classic',
+      setCode: '30C',
+      pokedexNumber: null,
+    };
+    await step(() => root.render(<CardFrame card={set} state="unowned" variant="any" />));
+    expect(container.querySelector('.card-frame-region')?.textContent).toBe('30C');
   });
 
   it('renders only the raw art with no frame chrome when frame is false', async () => {

@@ -55,6 +55,8 @@
 }
 .card-frame-art-placeholder {
   display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
   width: 100%;
   aspect-ratio: 245 / 337;
   border-radius: 0.5rem;
@@ -85,7 +87,8 @@
 /* A trainer or energy card has no dex number or region, but its top row keeps a
    line's height so every frame in a grid is the same size. */
 .card-frame-dex:empty::before,
-.card-frame-region:empty::before {
+.card-frame-region:empty::before,
+.card-frame-code:empty::before {
   content: '\200b';
 }
 .card-frame-dex {
@@ -156,4 +159,15 @@
   font-size: clamp(0.5rem, 7cqi, 0.8125rem);
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* An any-card pocket: the "Any" pill under the name, on the same pale frame. */
+.card-frame-art-placeholder .card-frame-any-pill {
+  padding: 0.05rem 0.5rem;
+  font-size: clamp(0.5rem, 9cqi, 0.6875rem);
+  font-weight: 600;
+  color: #334155;
+  background: #ffffff;
+  border: 1px solid #94a3b8;
+  border-radius: 999px;
 }

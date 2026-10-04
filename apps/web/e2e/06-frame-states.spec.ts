@@ -34,7 +34,7 @@ test('owned cards render solid, unowned cards render pale and dashed', async ({ 
   await expect(ownedTile.locator('.card-frame-art')).toHaveCSS('opacity', '1');
 });
 
-test('an unfilled any-Pokémon target shows the ANY frame; turning the frame off shows words instead', async ({
+test('an unfilled any-Pokémon target shows the frame with an Any pill; turning the frame off shows words instead', async ({
   page,
 }) => {
   const binders = await api.listBinders(page.request);
@@ -64,7 +64,7 @@ test('an unfilled any-Pokémon target shows the ANY frame; turning the frame off
     `[data-pocket="${openTarget.pageIndex}:${openTarget.row}:${openTarget.column}"]`,
   );
   await expect(pocket).toBeVisible();
-  await expect(pocket.getByText('ANY', { exact: true })).toBeVisible();
+  await expect(pocket.locator('.card-frame-any-pill')).toHaveText('Any');
   // Inside a pocket, CardFrame renders without `onView` (a plain styled <div>, not
   // the button it is in the catalogue gallery) — the border lives there, not on
   // the outer `.pocket` button.
@@ -77,5 +77,5 @@ test('an unfilled any-Pokémon target shows the ANY frame; turning the frame off
   await expect(pocket.locator('.pocket-face .card-frame')).toHaveCount(0);
 
   await chooseSegment(page.locator('.binder-display'), 'On');
-  await expect(pocket.getByText('ANY', { exact: true })).toBeVisible();
+  await expect(pocket.locator('.card-frame-any-pill')).toHaveText('Any');
 });

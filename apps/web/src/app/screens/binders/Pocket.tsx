@@ -9,6 +9,7 @@ import {
   anyFrameCard,
   frameCardFrom,
   pocketAriaLabel,
+  groupAnyFrameCard,
   groupTargetName,
   isGroupTarget,
   pocketState,
@@ -107,6 +108,10 @@ function PocketContent({
       </span>
     );
   }
+  if (showFrame && (isGroupTarget(slot) || slot.entryKind === 'set'))
+    return (
+      <CardFrame card={groupAnyFrameCard(slot)} state="unowned" variant="any" palette={palette} />
+    );
   if (isGroupTarget(slot))
     return (
       <span className="pocket-any">

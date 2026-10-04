@@ -2,6 +2,8 @@ import {
   type BinderLayout,
   type BinderSlotLocation,
   formatDexNumber,
+  FRAME_TYPES,
+  type FrameType,
   NATIONAL_POKEDEX,
   type PeekColumns,
 } from '@pokedex/shared';
@@ -181,6 +183,35 @@ export function frameCardFrom(card: ResolvedCard): CardFrameCard {
     pokedexNumber: card.pokedexNumber ?? null,
     imageUrl: card.imageLowUrl,
     priceAud: card.price.amountAud,
+  };
+}
+
+const ENERGY_FRAME: Record<string, FrameType> = { all: 'energy', special: 'special-energy' };
+
+function frameTypeOf(value: string): FrameType | null {
+  return FRAME_TYPES.find((type) => type === value) ?? null;
+}
+
+/** An unfilled group target (a set, illustrator, trainer or energy) drawn as the ANY
+ * frame: an energy pocket takes its type's colour, the others the neutral frame. */
+export function groupAnyFrameCard(slot: BinderSlotView): CardFrameCard {
+  const energy = slot.entryKind === 'energy' ? (slot.groupKey ?? null) : null;
+  return {
+    id: `any:${slot.entryKind}:${slot.setId ?? slot.groupKey ?? ''}`,
+    name: slot.entryKind === 'set' ? setTargetName(slot) : groupTargetName(slot),
+    frameType: energy === null ? null : (ENERGY_FRAME[energy] ?? frameTypeOf(energy)),
+    setCode:
+      slot.entryKind === 'set'
+        ? (slot.setCode ?? slot.setId ?? null)
+        : slot.entryKind === 'illustrator'
+          ? 'Artist'
+          : slot.entryKind === 'trainer'
+            ? 'Trainer'
+            : null,
+    number: null,
+    rarityKey: null,
+    pokedexNumber: null,
+    imageUrl: null,
   };
 }
 
