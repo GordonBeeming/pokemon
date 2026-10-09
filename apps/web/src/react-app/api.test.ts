@@ -391,4 +391,42 @@ describe('API client', () => {
     vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ challenge: 42 })));
     await expect(api.authenticationOptions()).rejects.toMatchObject({ code: 'invalid_response' });
   });
+
+  it('posts logout, then purges only the private caches and tells the service worker', async () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal('navigator', { serviceWorker: { controller: { postMessage } } });
+    const deleteCache = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal('caches', {
+      keys: vi.fn().mockResolvedValue(['pokedex-private-v1', 'other-app']),
+      delete: deleteCache,
+    });
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ ok: true })));
+
+    await api.logout();
+
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/auth/logout',
+      expect.objectContaining({ method: 'POST', credentials: 'same-origin' }),
+    );
+    expect(postMessage).toHaveBeenCalledWith({ type: 'PURGE_PRIVATE_CACHES' });
+    expect(deleteCache).toHaveBeenCalledTimes(1);
+    expect(deleteCache).toHaveBeenCalledWith('pokedex-private-v1');
+  });
+
+  it('treats logout as done when the server succeeded but the cache purge fails', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.stubGlobal('caches', { keys: vi.fn().mockRejectedValue(new Error('storage locked')) });
+    vi.mocked(fetch).mockResolvedValue(new Response(JSON.stringify({ ok: true })));
+
+    await expect(api.logout()).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith('Private cache purge failed after logout', expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it('rejects logout when the server does not end the session', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(JSON.stringify({ ok: false, error: 'unavailable' }), { status: 503 }),
+    );
+    await expect(api.logout()).rejects.toBeInstanceOf(ApiError);
+  });
 });

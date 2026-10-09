@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import {
   api,
   ApiError,
@@ -143,26 +143,36 @@ export function App(): ReactElement {
     return () => controller.abort();
   }, []);
 
-  useEffect(() => {
-    const authenticationLost = (): void => {
-      loadController.current?.abort();
-      setNotice(null);
-      setAuth('anonymous');
-    };
-    addEventListener(AUTH_LOST_EVENT, authenticationLost);
-    return () => removeEventListener(AUTH_LOST_EVENT, authenticationLost);
+  // Whoever signs in next must not see the previous session's data, even for the render before
+  // their own route load replaces it.
+  const endSession = useCallback((): void => {
+    loadController.current?.abort();
+    setNotice(null);
+    setDashboard(null);
+    setSets(null);
+    setSpecies(null);
+    setSpeciesPreviews([]);
+    setDiscoveringSpecies(null);
+    setDiscoveryError(null);
+    setDiscoveryResult(null);
+    setTokens(null);
+    setPairCode(null);
+    setRouteError(null);
+    setRouteStatus('');
+    setAuth('anonymous');
   }, []);
+
+  useEffect(() => {
+    addEventListener(AUTH_LOST_EVENT, endSession);
+    return () => removeEventListener(AUTH_LOST_EVENT, endSession);
+  }, [endSession]);
 
   function logout(): void {
     if (loggingOut) return;
     setLoggingOut(true);
     void api
       .logout()
-      .then(() => {
-        loadController.current?.abort();
-        setNotice(null);
-        setAuth('anonymous');
-      })
+      .then(endSession)
       .catch((error: unknown) => {
         const message = userMessage(error);
         if (message) setNotice({ kind: 'error', message });
