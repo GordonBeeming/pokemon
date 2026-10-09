@@ -358,6 +358,13 @@ export const api = {
     request('/api/auth/me', sessionSchema, { signal }),
   devLogin: (): Promise<void> =>
     request('/api/auth/dev-login', successSchema, { method: 'POST' }).then(() => undefined),
+  logout: async (): Promise<void> => {
+    await request('/api/auth/logout', successSchema, { method: 'POST' });
+    // The server session is already revoked here, so a purge failure must not read as a failed logout.
+    await purgePrivateCaches().catch((error: unknown) => {
+      console.warn('Private cache purge failed after logout', error);
+    });
+  },
   authenticationOptions: (): Promise<PublicKeyCredentialRequestOptionsJSON> =>
     request('/api/auth/passkey/auth/options', authenticationOptionsSchema, { method: 'POST' }),
   verifyAuthentication: (response: AuthenticationResponseJSON): Promise<void> =>

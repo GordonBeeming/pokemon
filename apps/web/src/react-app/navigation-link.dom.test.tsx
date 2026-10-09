@@ -20,7 +20,13 @@ describe('browser-native navigation links', () => {
     const navigate = vi.fn();
     await step(() =>
       root.render(
-        <Shell route="catalogue" navigate={navigate} notice={null}>
+        <Shell
+          route="catalogue"
+          navigate={navigate}
+          notice={null}
+          onLogout={() => undefined}
+          loggingOut={false}
+        >
           <p>Content</p>
         </Shell>,
       ),
