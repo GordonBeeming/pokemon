@@ -124,6 +124,27 @@
     color: var(--rail-text-active);
     background: var(--rail-active-bg);
   }
+  .rail-footer {
+    margin-top: auto;
+    padding-top: 0.75rem;
+  }
+  /* A button dressed as a rail link, so it needs the browser's button chrome removed. */
+  .app-rail .rail-logout {
+    width: 100%;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    background: none;
+    border: 0;
+  }
+  .app-rail .rail-logout:hover:not(:disabled) {
+    color: var(--rail-text-active);
+    background: var(--rail-active-bg);
+  }
+  .app-rail .rail-logout:disabled {
+    cursor: progress;
+    opacity: 0.7;
+  }
 }
 
 .sign-in-shell {

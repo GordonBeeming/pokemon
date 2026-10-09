@@ -20,12 +20,18 @@ export class ApiError extends Error {
 export const AUTH_LOST_EVENT = 'pokedex:authentication-lost';
 export const RETURN_TO_STORAGE_KEY = 'pokedex:return-to';
 
-async function purgePrivateCaches(): Promise<void> {
+// The shell cache (public/sw.js) holds only the public index page, which signed-out
+// and offline launches need, so it survives a purge. Keep this prefix in step with sw.js.
+const SHELL_CACHE_PREFIX = 'pokedex-shell-';
+
+export async function purgePrivateCaches(): Promise<void> {
   navigator.serviceWorker?.controller?.postMessage({ type: 'PURGE_PRIVATE_CACHES' });
   if (!('caches' in globalThis)) return;
   const names = await caches.keys();
   await Promise.all(
-    names.filter((name) => name.startsWith('pokedex-')).map(async (name) => caches.delete(name)),
+    names
+      .filter((name) => name.startsWith('pokedex-') && !name.startsWith(SHELL_CACHE_PREFIX))
+      .map(async (name) => caches.delete(name)),
   );
 }
 
@@ -78,7 +84,11 @@ export async function apiFetch<Output>(
     const retryAfter = Number.parseInt(response.headers.get('retry-after') ?? '', 10);
     if (response.status === 401) {
       rememberReturnTo();
-      await purgePrivateCaches();
+      // A locked-down browser can refuse CacheStorage on every call; that must not
+      // turn this 401 into a different error, or the shell can never reach sign-in.
+      await purgePrivateCaches().catch((error: unknown) => {
+        console.warn('Private cache purge failed after a 401', error);
+      });
       if (typeof globalThis.dispatchEvent === 'function')
         globalThis.dispatchEvent(new Event(AUTH_LOST_EVENT));
     }

@@ -29,13 +29,15 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('message', (event) => {
   if (event.data?.type !== 'PURGE_PRIVATE_CACHES') return;
   event.waitUntil(
-    caches
-      .keys()
-      .then((names) =>
-        Promise.all(
-          names.filter((name) => name.startsWith(CACHE_PREFIX)).map((name) => caches.delete(name)),
-        ),
+    caches.keys().then((names) =>
+      // The shell cache holds only the public index page, which a signed-out or
+      // offline launch still needs.
+      Promise.all(
+        names
+          .filter((name) => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME)
+          .map((name) => caches.delete(name)),
       ),
+    ),
   );
 });
 

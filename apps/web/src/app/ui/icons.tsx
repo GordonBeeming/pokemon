@@ -34,6 +34,7 @@ export const ICON_NAMES = [
   'pencil',
   'illustrator',
   'star',
+  'logout',
 ] as const;
 export type IconName = (typeof ICON_NAMES)[number];
 
@@ -107,6 +108,7 @@ const PATHS: Record<IconName, ReactElement> = {
       <circle cx="19" cy="12" r="1.2" />
     </>
   ),
+  logout: <path d="M14 4.5H6.5v15H14M10.5 12H20.5M17 8.5l3.5 3.5-3.5 3.5" />,
 };
 
 export function Icon({
