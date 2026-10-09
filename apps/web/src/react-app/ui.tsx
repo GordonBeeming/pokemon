@@ -220,11 +220,15 @@ export function Shell({
   route,
   navigate,
   notice,
+  onLogout,
+  loggingOut,
   children,
 }: {
   route: Route;
   navigate: (route: Route) => void;
   notice: Notice;
+  onLogout: () => void;
+  loggingOut: boolean;
   children: ReactNode;
 }): ReactElement {
   const main = useRef<HTMLElement>(null);
@@ -257,6 +261,17 @@ export function Shell({
             </NavigationLink>
           ))}
         </nav>
+        <div className="sidebar-footer">
+          <button
+            className="account-button"
+            type="button"
+            onClick={onLogout}
+            disabled={loggingOut}
+            aria-busy={loggingOut}
+          >
+            {loggingOut ? 'Logging out…' : 'Log out'}
+          </button>
+        </div>
       </aside>
       <main className="workspace" ref={main} tabIndex={-1}>
         <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">

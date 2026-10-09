@@ -37,7 +37,13 @@ describe('accessible frontend structure', () => {
 
   it('marks the active route and keeps status regions mounted', () => {
     const html = renderToStaticMarkup(
-      <Shell route="catalogue" navigate={() => undefined} notice={null}>
+      <Shell
+        route="catalogue"
+        navigate={() => undefined}
+        notice={null}
+        onLogout={() => undefined}
+        loggingOut={false}
+      >
         <h1>Catalogue</h1>
       </Shell>,
     );

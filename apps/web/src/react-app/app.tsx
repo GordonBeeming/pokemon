@@ -114,6 +114,7 @@ export function App(): ReactElement {
   const [routeError, setRouteError] = useState<string | null>(null);
   const [routeReload, setRouteReload] = useState(0);
   const [pairPending, setPairPending] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   const [catalogueParams, setCatalogueParams] = useState(() =>
     hashRoute() === 'catalogue' ? hashParams() : new URLSearchParams(),
   );
@@ -151,6 +152,23 @@ export function App(): ReactElement {
     addEventListener(AUTH_LOST_EVENT, authenticationLost);
     return () => removeEventListener(AUTH_LOST_EVENT, authenticationLost);
   }, []);
+
+  function logout(): void {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    void api
+      .logout()
+      .then(() => {
+        loadController.current?.abort();
+        setNotice(null);
+        setAuth('anonymous');
+      })
+      .catch((error: unknown) => {
+        const message = userMessage(error);
+        if (message) setNotice({ kind: 'error', message });
+      })
+      .finally(() => setLoggingOut(false));
+  }
 
   useEffect(() => {
     const update = (): void => {
@@ -456,7 +474,13 @@ export function App(): ReactElement {
     );
 
   return (
-    <Shell route={route} navigate={navigate} notice={notice}>
+    <Shell
+      route={route}
+      navigate={navigate}
+      notice={notice}
+      onLogout={logout}
+      loggingOut={loggingOut}
+    >
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {routeStatus}
       </p>

@@ -11,6 +11,7 @@ import { DevicesView } from './ui';
 
 const apiMocks = vi.hoisted(() => ({
   me: vi.fn(),
+  logout: vi.fn(),
   dashboard: vi.fn(),
   sets: vi.fn(),
   species: vi.fn(),
@@ -373,6 +374,40 @@ describe('async frontend announcements', () => {
     await waitFor(() => container.textContent?.includes('Open your collection.') === true);
 
     expect(container.textContent).toContain('Continue with passkey');
+  });
+
+  it('logs out from the sidebar and returns to passkey login', async () => {
+    apiMocks.me.mockResolvedValue({ user: { id: 'owner' } });
+    apiMocks.tokens.mockResolvedValue([]);
+    apiMocks.logout.mockResolvedValue(undefined);
+
+    act(() => root.render(<App />));
+    await waitFor(() => container.textContent?.includes('No scanner is paired.') === true);
+    await clickButton('Log out');
+    await waitFor(() => container.textContent?.includes('Open your collection.') === true);
+
+    expect(apiMocks.logout).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('Continue with passkey');
+  });
+
+  it('stays signed in and reports the error when logout fails', async () => {
+    apiMocks.me.mockResolvedValue({ user: { id: 'owner' } });
+    apiMocks.tokens.mockResolvedValue([]);
+    apiMocks.logout.mockRejectedValue(
+      new ApiError('unavailable', 'Logout is unavailable right now.', 503, null, null),
+    );
+
+    act(() => root.render(<App />));
+    await waitFor(() => container.textContent?.includes('No scanner is paired.') === true);
+    await clickButton('Log out');
+    await waitFor(() => container.querySelector('[role="alert"]')?.textContent?.trim() !== '');
+
+    expect(container.querySelector('[role="alert"]')?.textContent).not.toBe('');
+    expect(container.textContent).toContain('No scanner is paired.');
+    const button = Array.from(container.querySelectorAll('button')).find(
+      (item) => item.textContent === 'Log out',
+    );
+    expect(button?.disabled).toBe(false);
   });
 
   it('preserves the chosen set language when opening its catalogue', async () => {
