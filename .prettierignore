@@ -2,3 +2,4 @@ apps/web/cloudflare-env.d.ts
 apps/web/.wrangler/**
 apps/web/dist/**
 .playwright-cli/**
+pnpm-lock.yaml

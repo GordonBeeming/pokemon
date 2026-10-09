@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { Buffer } from 'node:buffer';
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
@@ -13,6 +13,9 @@ const exec = promisify(execFile);
 const app = fileURLToPath(new URL('..', import.meta.url));
 const wrangler = join(app, 'node_modules/.bin/wrangler');
 const persist = await mkdtemp(join(tmpdir(), 'pokedex-desktop-routes-'));
+// dev-login signs a real session cookie, and CI has no .dev.vars, so the worker gets
+// a throwaway secret that lives only as long as this run.
+const sessionSecret = randomBytes(32).toString('hex');
 const assets = join(persist, 'assets');
 await mkdir(assets);
 const port = await new Promise((resolve, reject) => {
@@ -71,6 +74,8 @@ try {
       assets,
       '--port',
       String(port),
+      '--var',
+      `SESSION_SECRET:${sessionSecret}`,
     ],
     {
       cwd: app,
