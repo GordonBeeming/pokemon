@@ -6,6 +6,7 @@ import { queryKeys } from '../api/keys';
 import { useSession } from '../api/queries/session';
 import { ApiError, AUTH_LOST_EVENT, RETURN_TO_STORAGE_KEY } from '../api/client';
 import { Icon } from '../ui/icons';
+import { LogoutButton } from './LogoutButton';
 import { NAV_ITEMS } from './nav-items';
 import { SignIn } from './SignIn';
 import './shell.css';
@@ -106,6 +107,9 @@ export function AppShell(): ReactElement {
           <span>Pokédex</span>
         </div>
         <Nav variant="rail" />
+        <div className="rail-footer">
+          <LogoutButton className="nav-item rail-logout" icon={<Icon name="logout" />} />
+        </div>
       </nav>
       <main className="app-content">
         <PriceVisibilityProvider>

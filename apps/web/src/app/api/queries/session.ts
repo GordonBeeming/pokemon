@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
-import { apiFetch, ApiError } from '../client';
+import { apiFetch, ApiError, purgePrivateCaches } from '../client';
 import { queryKeys } from '../keys';
 
 // Not strict: /me grows fields (role today) and an unknown field must never lock
@@ -12,6 +12,8 @@ const sessionSchema = z.object({
   role: z.enum(['admin', 'member']).optional(),
 });
 export type Session = z.infer<typeof sessionSchema>;
+
+const logoutSchema = z.object({ ok: z.literal(true) }).passthrough();
 
 /**
  * Backs the app-shell auth gate: a 401 here (not a thrown network error) is the normal
@@ -25,5 +27,30 @@ export function useSession() {
     retry: (failureCount, error) =>
       error instanceof ApiError && error.status === 401 ? false : failureCount < 2,
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Ends the session on the server, then clears what this browser holds for it. On
+ * success the shell lands on sign-in the same way a lost session does: every other
+ * query is dropped so the next person never sees this one's data, and the session
+ * query is reset so it refetches and comes back 401.
+ */
+export function useLogout() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<void> => {
+      await apiFetch('/api/auth/logout', logoutSchema, { method: 'POST' });
+      // The server session is already revoked here, so a purge failure must not read
+      // as a failed logout.
+      await purgePrivateCaches().catch((error: unknown) => {
+        console.warn('Private cache purge failed after logout', error);
+      });
+    },
+    onSuccess: async () => {
+      const sessionKey = queryKeys.session();
+      queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== sessionKey[0] });
+      await queryClient.resetQueries({ queryKey: sessionKey });
+    },
   });
 }

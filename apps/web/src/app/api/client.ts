@@ -20,7 +20,7 @@ export class ApiError extends Error {
 export const AUTH_LOST_EVENT = 'pokedex:authentication-lost';
 export const RETURN_TO_STORAGE_KEY = 'pokedex:return-to';
 
-async function purgePrivateCaches(): Promise<void> {
+export async function purgePrivateCaches(): Promise<void> {
   navigator.serviceWorker?.controller?.postMessage({ type: 'PURGE_PRIVATE_CACHES' });
   if (!('caches' in globalThis)) return;
   const names = await caches.keys();

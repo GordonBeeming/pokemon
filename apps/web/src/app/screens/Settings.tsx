@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react';
 import { useMe } from '../api/queries/people';
+import { LogoutButton } from '../shell/LogoutButton';
 import type { SettingsSearch } from '../routes/search-params';
 import { Icon, type IconName } from '../ui/icons';
 import { ApiTokensTab } from './settings/ApiTokensTab';
@@ -86,7 +87,13 @@ export function Settings({
 
   return (
     <section className="settings" aria-labelledby="settings-heading">
-      <h1 id="settings-heading">Settings</h1>
+      <div className="settings-header">
+        <h1 id="settings-heading">Settings</h1>
+        <div className="settings-account">
+          {me.data ? <span className="settings-help">Signed in as {me.data.label}</span> : null}
+          <LogoutButton icon={<Icon name="logout" />} />
+        </div>
+      </div>
       <nav className="settings-tabs" aria-label="Settings sections">
         {visible.map((entry) => (
           <button
