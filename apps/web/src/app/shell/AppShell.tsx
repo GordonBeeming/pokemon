@@ -5,6 +5,7 @@ import { useEffect, useRef, type ReactElement } from 'react';
 import { queryKeys } from '../api/keys';
 import { useSession } from '../api/queries/session';
 import { ApiError, AUTH_LOST_EVENT, RETURN_TO_STORAGE_KEY } from '../api/client';
+import { onLoggedOutElsewhere, reloadSignedOut } from '../api/session-exit';
 import { Icon } from '../ui/icons';
 import { LogoutButton } from './LogoutButton';
 import { NAV_ITEMS } from './nav-items';
@@ -63,6 +64,10 @@ export function AppShell(): ReactElement {
     globalThis.addEventListener(AUTH_LOST_EVENT, onAuthLost);
     return () => globalThis.removeEventListener(AUTH_LOST_EVENT, onAuthLost);
   }, [queryClient]);
+
+  // Another tab logged out: this tab's cookie is already gone, so leave the same way
+  // that tab did rather than keep its private data on screen.
+  useEffect(() => onLoggedOutElsewhere(reloadSignedOut), []);
 
   useEffect(() => {
     if (!session.data || restored.current) return;
