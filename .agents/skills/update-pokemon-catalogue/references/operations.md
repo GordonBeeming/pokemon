@@ -7,7 +7,7 @@ The production D1 database ID is `5e955d9c-188b-476a-80e9-8b1908f20f54`; the art
 ## Inventory and freshness
 
 ```sh
-pnpm --dir apps/web exec wrangler d1 execute DB --remote --config wrangler.jsonc --env-file /dev/null --json --command "SELECT language,COUNT(*) AS cards,MAX(release_date) AS newest_release FROM catalogue_cards WHERE is_active=1 GROUP BY language; SELECT id,status,started_at,completed_at,source_count,imported_count,inactive_count,refusal_reason FROM sync_runs WHERE provider='tcgdex' AND language='en' AND complete_source=1 ORDER BY started_at DESC LIMIT 5; SELECT variant,COUNT(*) AS stored_images,SUM(bytes) AS stored_bytes FROM art_manifest GROUP BY variant;"
+pnpm --dir apps/web exec wrangler d1 execute DB --remote --config wrangler.jsonc --env-file /dev/null --json --command "SELECT language,COUNT(*) AS cards,MAX(release_date) AS newest_release FROM catalogue_cards WHERE is_active=1 GROUP BY language; SELECT id,status,started_at,completed_at,source_count,imported_count,inactive_count,refusal_reason FROM sync_runs WHERE provider='tcgdex' AND language='en' AND complete_source=1 ORDER BY started_at DESC LIMIT 5; SELECT variant,COUNT(*) AS stored_images,SUM(bytes) AS stored_bytes FROM art_manifest GROUP BY variant; SELECT id,label,role FROM users WHERE disabled_at IS NULL ORDER BY id;"
 ```
 
 `/api/health` reports dependency and freshness state. A pre-existing missing pricing feed is separate from a catalogue refresh. Compare before and after instead of treating every non-200 response as a new deployment failure.
@@ -18,17 +18,19 @@ The set catalogue is `https://api.tcgdex.net/v2/en/sets`; set details are `/v2/e
 
 Use a distinct `<run-id>` per requested refresh. Check existing instances and D1 running full-sync rows first.
 
-```sh
-pnpm --dir apps/web exec wrangler workflows trigger pokedex-backup '{"ownerId":"owner","operation":"create"}' --id '<run-id>-backup' --config wrangler.jsonc --env-file /dev/null
-pnpm --dir apps/web exec wrangler workflows instances describe pokedex-backup '<run-id>-backup' --config wrangler.jsonc --env-file /dev/null --no-step-output
+Back up each active user from the inventory query, one instance per user. The workflow refuses an id that isn't a real user.
 
-pnpm --dir apps/web exec wrangler workflows trigger pokedex-catalogue-sync '{"language":"en","actorId":"owner","requestId":"<run-id>"}' --id '<run-id>' --config wrangler.jsonc --env-file /dev/null
+```sh
+pnpm --dir apps/web exec wrangler workflows trigger pokedex-backup '{"ownerId":"<user-id>","operation":"create"}' --id '<run-id>-backup-<user-id>' --config wrangler.jsonc --env-file /dev/null
+pnpm --dir apps/web exec wrangler workflows instances describe pokedex-backup '<run-id>-backup-<user-id>' --config wrangler.jsonc --env-file /dev/null --no-step-output
+
+pnpm --dir apps/web exec wrangler workflows trigger pokedex-catalogue-sync '{"language":"en","actorId":"<admin-id>","requestId":"<run-id>"}' --id '<run-id>' --config wrangler.jsonc --env-file /dev/null
 pnpm --dir apps/web exec wrangler workflows instances describe pokedex-catalogue-sync '<run-id>' --config wrangler.jsonc --env-file /dev/null --no-step-output
 ```
 
 The full-sync D1 row is `sync_<run-id>`. Poll at a sensible interval and keep progress visible. The command can produce many step rows; redirect to a log and summarize status and the last successful step. Use server start/end timestamps if the CLI's displayed duration is inconsistent.
 
-The backup protects user collection/binder/custom-card state; provider catalogue data is rebuildable. Do not describe it as a full database export.
+Each backup protects one user's collection/binder/custom-card state; provider catalogue data is rebuildable. Do not describe it as a full database export.
 
 ## Replayed workflow tracking
 
@@ -40,7 +42,7 @@ Never mark the row complete yourself. The workflow's successful apply must set i
 
 ## Artwork pass
 
-The helper takes the repository path (`.` from the root) and persistent run directory. `provision` creates a 24-hour `art:read` credential, generates and stores it in 1Password, and registers only its hash in D1. It prints a secret reference, never the credential. `access.json` contains the reference and hash, not plaintext.
+The helper takes the repository path (`.` from the root) and persistent run directory. `provision` looks up the active admin (set `POKEDEX_ADMIN_ID=<admin-id>` when there are several; it refuses an id that isn't an active admin) and creates a 24-hour `art:read` credential owned by that admin, generates and stores it in 1Password, and registers only its hash in D1. It prints a secret reference, never the credential. `access.json` contains the reference and hash, not plaintext.
 
 ```sh
 node .agents/skills/update-pokemon-catalogue/scripts/artwork-refresh.mjs provision . '<run-dir>'
@@ -61,13 +63,13 @@ Build a JSON report with:
 
 - run ID, provider, language, and site;
 - start time, catalogue completion time, artwork verification time;
-- backup ID and catalogue workflow ID;
+- the admin id it ran as, each user's backup ID, and the catalogue workflow ID;
 - before/after card counts and newly present sets;
 - low/high manifest counts and bytes, verified/failed/unvisited/mismatched image counts;
 - unavailable source images and any other unresolved failure;
 - an accurate overall outcome (`complete` only when verification is complete).
 
-Store the dated report at `pokedex-art/maintenance/catalogue-refresh/<run-id>.json` and its latest outcome at `pokedex-art/maintenance/catalogue-refresh/latest.json` using `wrangler r2 object put --remote --file ... --content-type application/json`. Download the report again to verify it. Add an `audit` row for actor `owner`, action `catalogue.refresh_completed` or `catalogue.refresh_incomplete`, target run ID, and the report summary in `meta`. Escape SQL values; never interpolate raw provider strings into SQL.
+Store the dated report at `pokedex-art/maintenance/catalogue-refresh/<run-id>.json` and its latest outcome at `pokedex-art/maintenance/catalogue-refresh/latest.json` using `wrangler r2 object put --remote --file ... --content-type application/json`. Download the report again to verify it. Add an `audit` row for the chosen admin as actor, action `catalogue.refresh_completed` or `catalogue.refresh_incomplete`, target run ID, and the report summary in `meta`. Escape SQL values; never interpolate raw provider strings into SQL.
 
 Do not invent or overwrite a successful `sync_runs.completed_at`. It records the actual successful workflow apply time, independently of artwork verification and the report timestamp.
 
