@@ -1,0 +1,4 @@
+interface:
+  display_name: 'Update Pokémon catalogue'
+  short_description: 'Refresh Pokédex cards, artwork, and freshness records'
+  default_prompt: 'Use $update-pokemon-catalogue to refresh my Pokédex catalogue and cache its artwork.'
