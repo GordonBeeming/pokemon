@@ -22,9 +22,10 @@ if(cmd==='op') {
  else if(a[0]==='read') console.log(JSON.parse(fs.readFileSync(process.env.MOCK_DIR+'/test-item.json')).fields.find(f=>f.id==='credential'||f.id==='password').value);
  else if(a[1]==='template') console.log(JSON.stringify({category:'API_CREDENTIAL',fields:[{id:'credential'},{id:'notesPlain'},{id:'hostname'}]}));
  else if(a[1]==='create') {let data={fields:[{id:'password',value:'7'.repeat(64)}]};fs.writeFileSync(process.env.MOCK_DIR+'/test-item.json',JSON.stringify(data));console.log(JSON.stringify({id:'test-item'}));}
- else if(a[1]==='delete') console.log('archived'); else process.exit(3);
+ else if(a[1]==='delete') {fs.appendFileSync(process.env.MOCK_DIR+'/op-deletes',a[2]+'\n');console.log('archived');} else process.exit(3);
 } else {
  const sql=a[a.indexOf('--command')+1];let rows=[];
+ if(process.env.MOCK_DB_FAIL && sql.startsWith('INSERT')) process.exit(1);
  if(sql.startsWith('SELECT c.id,c.language,c.is_active')) {
   const marker=process.env.MOCK_DIR+'/retry-marker';
   if(process.env.MOCK_RETRY_ZERO && !fs.existsSync(marker+'-zero')) {fs.writeFileSync(marker+'-zero','1');console.log(JSON.stringify([{success:false,error:{code:7429}}]));process.exit(0);}
@@ -43,7 +44,7 @@ for (const name of ['op', 'pnpm']) {
 const preload = path.join(dir, 'fetch.mjs');
 fs.writeFileSync(
   preload,
-  `import{createHash}from'node:crypto';const bytes=Buffer.from('RIFF0000WEBPfixture'+(process.env.MOCK_CHANGE?'changed':''));globalThis.fetch=async(url)=>{if(process.env.MOCK_AUTH_FAIL)return new Response('',{status:401});if(String(url).includes('/manifest'))return Response.json({entries:['card-a','card-b'].flatMap(cardId=>['high','low'].map(variant=>({cardId,variant,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length}))),cursor:null});return new Response(bytes,{headers:{'content-type':'image/webp'}})};`,
+  `import{createHash}from'node:crypto';const bytes=process.env.MOCK_JPEG?Buffer.concat([Buffer.from([0xff,0xd8,0xff,0xe0]),Buffer.from('jpegfixture')]):Buffer.from('RIFF0000WEBPfixture'+(process.env.MOCK_CHANGE?'changed':''));globalThis.fetch=async(url)=>{if(process.env.MOCK_AUTH_FAIL)return new Response('',{status:401});if(String(url).includes('/manifest'))return Response.json({entries:['card-a','card-b'].flatMap(cardId=>['high','low'].map(variant=>({cardId,variant,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length}))),cursor:null});return new Response(bytes,{headers:{'content-type':'image/webp'}})};`,
 );
 let env = { ...process.env, PATH: bin + ':' + process.env.PATH, MOCK_DIR: dir };
 const runDir = path.join(dir, 'run');
@@ -100,6 +101,48 @@ assert.equal(JSON.parse(fs.readFileSync(path.join(failedDir, 'progress.json'))).
 r = run('revoke');
 assert.equal(r.status, 0, r.stderr);
 assert(JSON.parse(fs.readFileSync(path.join(runDir, 'access.json'))).revokedAt);
+
+// A TCGplayer JPEG served by the art route counts as cached artwork.
+const jpegDir = path.join(dir, 'jpeg');
+fs.mkdirSync(jpegDir);
+fs.copyFileSync(path.join(runDir, 'access.json'), path.join(jpegDir, 'access.json'));
+r = run('warm', undefined, jpegDir, { MOCK_JPEG: '1' });
+assert.equal(r.status, 0, r.stderr);
+r = run('verify', undefined, jpegDir, { MOCK_JPEG: '1' });
+assert.equal(r.status, 0, r.stderr);
+
+// A failed retry after an earlier success is attempted again on the next warm.
+const resumeDir = path.join(dir, 'resume');
+fs.mkdirSync(resumeDir);
+fs.copyFileSync(path.join(runDir, 'access.json'), path.join(resumeDir, 'access.json'));
+const resumeLog = path.join(resumeDir, 'artwork.jsonl');
+fs.writeFileSync(
+  resumeLog,
+  [
+    { id: 'card-a', variant: 'high', ok: true, sha256: 'old', bytes: 1 },
+    { id: 'card-a', variant: 'high', ok: false, error: 'HTTP 500' },
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join('\n') + '\n',
+);
+r = run('warm', undefined, resumeDir);
+assert.equal(r.status, 0, r.stderr);
+const retried = fs
+  .readFileSync(resumeLog, 'utf8')
+  .trim()
+  .split('\n')
+  .map((line) => JSON.parse(line))
+  .filter((entry) => entry.id === 'card-a' && entry.variant === 'high');
+assert.equal(retried.length, 3);
+assert.equal(retried.at(-1).ok, true);
+
+// A failed D1 registration leaves no access.json and archives the unused credential.
+const provisionDir = path.join(dir, 'provision-fail');
+r = run('provision', undefined, provisionDir, { MOCK_DB_FAIL: '1' });
+assert.equal(r.status, 1);
+assert(!fs.existsSync(path.join(provisionDir, 'access.json')));
+assert(fs.readFileSync(path.join(dir, 'op-deletes'), 'utf8').includes('test-item'));
+
 const { DatabaseSync } = require('node:sqlite');
 const db = new DatabaseSync(':memory:');
 db.exec(
@@ -118,6 +161,6 @@ assert(
 );
 db.close();
 console.log(
-  'PASS: secret-safe provisioning; partial verification fails; resume completes all variants; authorization failure stops; cleanup records revocation.',
+  'PASS: secret-safe provisioning; partial verification fails; resume completes all variants; authorization failure stops; cleanup records revocation; JPEG artwork accepted; failed retries resume; failed registration leaves no run state.',
 );
 fs.rmSync(dir, { recursive: true });

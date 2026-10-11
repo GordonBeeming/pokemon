@@ -6,7 +6,7 @@ import { resolve, join } from 'node:path';
 const [command, repoArg, runArg, limitArg] = process.argv.slice(2);
 if (!['provision', 'warm', 'verify', 'revoke'].includes(command) || !repoArg || !runArg) {
   throw new Error(
-    'Usage: node pokemon-art-refresh.mjs provision|warm|verify|revoke REPO RUN_DIR [LIMIT]',
+    'Usage: node artwork-refresh.mjs provision|warm|verify|revoke REPO RUN_DIR [LIMIT]',
   );
 }
 const repo = resolve(repoArg);
@@ -136,10 +136,17 @@ try {
       expiresAt,
       origin,
     };
-    writeFileSync(metaPath, JSON.stringify(meta, null, 2));
-    database(`INSERT INTO desktop_tokens (token_hash,owner_id,label,scopes,created_at,expires_at)
+    // Register the token before recording the run, so a failed insert leaves no
+    // access.json pointing at a credential the site doesn't know; archive the unused item.
+    try {
+      database(`INSERT INTO desktop_tokens (token_hash,owner_id,label,scopes,created_at,expires_at)
     VALUES (${sqlString(tokenHash)},'owner',${sqlString(title)},'["art:read"]',${createdAt},${expiresAt});
     INSERT INTO audit (actor,action,target,meta,created_at) VALUES ('owner','catalogue.art_refresh_started',${sqlString(tokenHash)},'{"scope":"art:read"}',${createdAt});`);
+    } catch (error) {
+      execute('op', ['item', 'delete', item.id, '--vault', 'ai-secrets', '--archive']);
+      throw error;
+    }
+    writeFileSync(metaPath, JSON.stringify(meta, null, 2));
     console.log(
       JSON.stringify({
         tokenRef: meta.tokenRef,
@@ -169,7 +176,11 @@ try {
     if (existsSync(logPath))
       for (const line of readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean)) {
         const entry = JSON.parse(line);
-        if (entry.ok) completed.add(`${entry.id}|${entry.variant}`);
+        // The latest entry for a variant wins, so a failed retry after an earlier
+        // success is attempted again.
+        const key = `${entry.id}|${entry.variant}`;
+        if (entry.ok) completed.add(key);
+        else completed.delete(key);
       }
     const previousVerification = join(runDir, 'verification.json');
     if (existsSync(previousVerification)) {
@@ -223,8 +234,11 @@ try {
             chunks.push(chunk);
           }
           const bytes = Buffer.concat(chunks);
-          if (bytes.toString('ascii', 0, 4) !== 'RIFF' || bytes.toString('ascii', 8, 12) !== 'WEBP')
-            throw new Error('Artwork is not WebP');
+          // The art route serves TCGdex WebP, or a TCGplayer JPEG when TCGdex has none.
+          const webp =
+            bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP';
+          const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+          if (!webp && !jpeg) throw new Error('Artwork is not WebP or JPEG');
           log({
             ...card,
             ok: true,
