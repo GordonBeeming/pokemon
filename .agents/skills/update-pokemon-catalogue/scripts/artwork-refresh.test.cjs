@@ -49,6 +49,8 @@ fs.writeFileSync(
   `import{createHash}from'node:crypto';const bytes=process.env.MOCK_JPEG?Buffer.concat([Buffer.from([0xff,0xd8,0xff,0xe0]),Buffer.from('jpegfixture')]):Buffer.from('RIFF0000WEBPfixture'+(process.env.MOCK_CHANGE?'changed':''));globalThis.fetch=async(url)=>{if(process.env.MOCK_AUTH_FAIL)return new Response('',{status:401});if(String(url).includes('/manifest'))return Response.json({entries:['card-a','card-b'].flatMap(cardId=>['high','low'].map(variant=>({cardId,variant,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length}))),cursor:null});return new Response(bytes,{headers:{'content-type':'image/webp'}})};`,
 );
 let env = { ...process.env, PATH: bin + ':' + process.env.PATH, MOCK_DIR: dir };
+// A shell that already picked an admin must not decide the admin-selection cases.
+delete env.POKEDEX_ADMIN_ID;
 const runDir = path.join(dir, 'run');
 function run(command, limit, runPath = runDir, overrides = {}) {
   return cp.spawnSync(
