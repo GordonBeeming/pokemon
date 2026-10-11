@@ -73,6 +73,24 @@ async function readDatabase(sql) {
     cause: lastReset,
   });
 }
+// The site is multi-user, so the refresh acts as a real admin rather than a fixed id.
+// POKEDEX_ADMIN_ID picks one when several admins are active.
+function resolveAdmin() {
+  const admins = database(
+    "SELECT id,label FROM users WHERE role='admin' AND disabled_at IS NULL ORDER BY id;",
+  );
+  const requested = process.env.POKEDEX_ADMIN_ID;
+  if (requested) {
+    const match = admins.find((admin) => admin.id === requested);
+    if (!match) throw new Error(`POKEDEX_ADMIN_ID ${requested} is not an active admin`);
+    return match.id;
+  }
+  if (admins.length === 1) return admins[0].id;
+  if (!admins.length) throw new Error('No active admin found in users');
+  throw new Error(
+    `Several active admins (${admins.map((admin) => `${admin.id} ${admin.label}`).join(', ')}); set POKEDEX_ADMIN_ID`,
+  );
+}
 let activeStats = null;
 function readMeta() {
   return JSON.parse(readFileSync(metaPath, 'utf8'));
@@ -104,6 +122,7 @@ try {
     if (existsSync(metaPath))
       throw new Error('Access metadata already exists; reuse it or choose a new run directory');
     execute('op', ['whoami']);
+    const adminId = resolveAdmin();
     const createdAt = Math.floor(Date.now() / 1000);
     const expiresAt = createdAt + 24 * 60 * 60;
     const title = `Pokédex artwork refresh ${new Date().toISOString()}`;
@@ -132,6 +151,7 @@ try {
       itemId: item.id,
       tokenRef,
       tokenHash,
+      ownerId: adminId,
       createdAt,
       expiresAt,
       origin,
@@ -140,8 +160,8 @@ try {
     // access.json pointing at a credential the site doesn't know; archive the unused item.
     try {
       database(`INSERT INTO desktop_tokens (token_hash,owner_id,label,scopes,created_at,expires_at)
-    VALUES (${sqlString(tokenHash)},'owner',${sqlString(title)},'["art:read"]',${createdAt},${expiresAt});
-    INSERT INTO audit (actor,action,target,meta,created_at) VALUES ('owner','catalogue.art_refresh_started',${sqlString(tokenHash)},'{"scope":"art:read"}',${createdAt});`);
+    VALUES (${sqlString(tokenHash)},${sqlString(adminId)},${sqlString(title)},'["art:read"]',${createdAt},${expiresAt});
+    INSERT INTO audit (actor,action,target,meta,created_at) VALUES (${sqlString(adminId)},'catalogue.art_refresh_started',${sqlString(tokenHash)},'{"scope":"art:read"}',${createdAt});`);
     } catch (error) {
       execute('op', ['item', 'delete', item.id, '--vault', 'ai-secrets', '--archive']);
       throw error;
@@ -155,8 +175,11 @@ try {
     );
   } else if (command === 'revoke') {
     const meta = readMeta();
+    // Run directories provisioned before the multi-user change have no ownerId; those
+    // tokens were all issued to the original 'owner' admin.
+    const ownerId = meta.ownerId ?? 'owner';
     database(
-      `UPDATE desktop_tokens SET revoked_at=${Math.floor(Date.now() / 1000)} WHERE token_hash=${sqlString(meta.tokenHash)} AND owner_id='owner';`,
+      `UPDATE desktop_tokens SET revoked_at=${Math.floor(Date.now() / 1000)} WHERE token_hash=${sqlString(meta.tokenHash)} AND owner_id=${sqlString(ownerId)};`,
     );
     execute('op', ['item', 'delete', meta.itemId, '--vault', 'ai-secrets', '--archive']);
     writeFileSync(

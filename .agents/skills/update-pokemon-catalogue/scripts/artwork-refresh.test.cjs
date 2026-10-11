@@ -26,6 +26,8 @@ if(cmd==='op') {
 } else {
  const sql=a[a.indexOf('--command')+1];let rows=[];
  if(process.env.MOCK_DB_FAIL && sql.startsWith('INSERT')) process.exit(1);
+ if(/^(INSERT|UPDATE)/.test(sql)) fs.appendFileSync(process.env.MOCK_DIR+'/writes.jsonl',JSON.stringify(sql)+'\n');
+ if(sql.startsWith('SELECT id,label FROM users')) {console.log(JSON.stringify([{success:true,results:JSON.parse(process.env.MOCK_ADMINS||'[{"id":"admin-1","label":"Ash"}]')}]));process.exit(0);}
  if(sql.startsWith('SELECT c.id,c.language,c.is_active')) {
   const marker=process.env.MOCK_DIR+'/retry-marker';
   if(process.env.MOCK_RETRY_ZERO && !fs.existsSync(marker+'-zero')) {fs.writeFileSync(marker+'-zero','1');console.log(JSON.stringify([{success:false,error:{code:7429}}]));process.exit(0);}
@@ -47,6 +49,8 @@ fs.writeFileSync(
   `import{createHash}from'node:crypto';const bytes=process.env.MOCK_JPEG?Buffer.concat([Buffer.from([0xff,0xd8,0xff,0xe0]),Buffer.from('jpegfixture')]):Buffer.from('RIFF0000WEBPfixture'+(process.env.MOCK_CHANGE?'changed':''));globalThis.fetch=async(url)=>{if(process.env.MOCK_AUTH_FAIL)return new Response('',{status:401});if(String(url).includes('/manifest'))return Response.json({entries:['card-a','card-b'].flatMap(cardId=>['high','low'].map(variant=>({cardId,variant,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length}))),cursor:null});return new Response(bytes,{headers:{'content-type':'image/webp'}})};`,
 );
 let env = { ...process.env, PATH: bin + ':' + process.env.PATH, MOCK_DIR: dir };
+// A shell that already picked an admin must not decide the admin-selection cases.
+delete env.POKEDEX_ADMIN_ID;
 const runDir = path.join(dir, 'run');
 function run(command, limit, runPath = runDir, overrides = {}) {
   return cp.spawnSync(
@@ -143,6 +147,30 @@ assert.equal(r.status, 1);
 assert(!fs.existsSync(path.join(provisionDir, 'access.json')));
 assert(fs.readFileSync(path.join(dir, 'op-deletes'), 'utf8').includes('test-item'));
 
+// The token and audit rows belong to the active admin, and revoke targets that admin.
+const writes = fs.readFileSync(path.join(dir, 'writes.jsonl'), 'utf8');
+assert(writes.includes("'admin-1'"));
+assert(!writes.includes("'owner'"));
+assert.equal(JSON.parse(fs.readFileSync(path.join(runDir, 'access.json'))).ownerId, 'admin-1');
+
+// Several active admins need POKEDEX_ADMIN_ID to pick one.
+const twoAdmins = JSON.stringify([
+  { id: 'admin-1', label: 'Ash' },
+  { id: 'admin-2', label: 'Misty' },
+]);
+r = run('provision', undefined, path.join(dir, 'two-admins'), { MOCK_ADMINS: twoAdmins });
+assert.equal(r.status, 1);
+assert(r.stderr.includes('set POKEDEX_ADMIN_ID'));
+const pickedDir = path.join(dir, 'picked-admin');
+r = run('provision', undefined, pickedDir, {
+  MOCK_ADMINS: twoAdmins,
+  POKEDEX_ADMIN_ID: 'admin-2',
+});
+assert.equal(r.status, 0, r.stderr);
+assert.equal(JSON.parse(fs.readFileSync(path.join(pickedDir, 'access.json'))).ownerId, 'admin-2');
+r = run('provision', undefined, path.join(dir, 'unknown-admin'), { POKEDEX_ADMIN_ID: 'nobody' });
+assert.equal(r.status, 1);
+
 const { DatabaseSync } = require('node:sqlite');
 const db = new DatabaseSync(':memory:');
 db.exec(
@@ -161,6 +189,6 @@ assert(
 );
 db.close();
 console.log(
-  'PASS: secret-safe provisioning; partial verification fails; resume completes all variants; authorization failure stops; cleanup records revocation; JPEG artwork accepted; failed retries resume; failed registration leaves no run state.',
+  'PASS: secret-safe provisioning; partial verification fails; resume completes all variants; authorization failure stops; cleanup records revocation; JPEG artwork accepted; failed retries resume; failed registration leaves no run state; runs as a real admin.',
 );
 fs.rmSync(dir, { recursive: true });
