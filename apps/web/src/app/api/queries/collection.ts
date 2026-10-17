@@ -28,7 +28,8 @@ const removeResponseSchema = z
 
 /**
  * Mirrors every visible copy of a card's collection state after a mutation: the
- * catalogue search cache (any page currently held), the card-detail cache, and the
+ * catalogue search cache (any page currently held, and binder search's printings), the
+ * resolved cards behind binder pages, the card-detail cache, and the
  * dashboard summary (unique/total counters). Skips a stale write the same way the
  * old app's `applyState` did — never overwrite a state with a lower revision than
  * what's already cached, which can happen if a slower request resolves after a
@@ -52,6 +53,17 @@ function applyCollectionState(
         ),
       };
     },
+  );
+  // Binder pages and binder search draw from resolved cards; keep their owned state
+  // in step too.
+  queryClient.setQueriesData(
+    { queryKey: ['binders', 'cards'] },
+    (data: Array<{ id: string; collection: CollectionState | null }> | undefined) =>
+      data?.map((card) =>
+        card.id === cardId && (card.collection?.revision ?? 0) <= state.revision
+          ? { ...card, collection: state }
+          : card,
+      ),
   );
   queryClient.setQueryData(
     queryKeys.catalogue.card(cardId),

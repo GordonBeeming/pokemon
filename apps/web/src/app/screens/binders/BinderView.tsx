@@ -283,6 +283,10 @@ export function BinderView({
     [onSearch],
   );
 
+  // While a search is set its results replace the pages, so page turns, the selected
+  // pocket's actions and the hint all step aside until it is cleared.
+  const searching = search.q.trim().length > 0;
+
   const goToPage = useCallback(
     (index: number) => {
       if (index < 0 || (pageCount > 0 && index >= pageCount) || index === pageIndex) return;
@@ -575,7 +579,7 @@ export function BinderView({
   // Page turns from anywhere on the screen that isn't a text field.
   useEffect(() => {
     function onKey(event: globalThis.KeyboardEvent): void {
-      if (panel || isTypingTarget(event.target) || event.defaultPrevented) return;
+      if (panel || searching || isTypingTarget(event.target) || event.defaultPrevented) return;
       const inPocket = event.target instanceof Element && event.target.closest('[data-pocket]');
       if (event.key === 'PageDown' || (event.key === 'ArrowRight' && !inPocket)) {
         event.preventDefault();
@@ -589,7 +593,7 @@ export function BinderView({
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [panel, goToPage, pageIndex, moveSource, cancelMove]);
+  }, [panel, searching, goToPage, pageIndex, moveSource, cancelMove]);
 
   // Clicking anywhere outside the pockets, the action bar and open dialogs deselects.
   useEffect(() => {
@@ -707,7 +711,8 @@ export function BinderView({
       {
         page: bookmark.at.page + 1,
         v: search.v,
-        q: search.q,
+        // A bookmark is a destination in the pages, so it ends any search.
+        q: '',
         sel:
           bookmark.kind === 'pocket'
             ? slotIdOf(bookmark.pageId, bookmark.at.row, bookmark.at.column)
@@ -716,8 +721,6 @@ export function BinderView({
       false,
     );
   }
-
-  const searching = search.q.trim().length > 0;
 
   // A match is chosen from the results grid, so the search is done with: clearing it
   // brings the pages back with the pocket selected.
@@ -1281,7 +1284,7 @@ export function BinderView({
         />
       )}
 
-      {selectedSlot && selected && !moveSource && !panel ? (
+      {selectedSlot && selected && !moveSource && !panel && !searching ? (
         <PocketActions
           phone={phone}
           summary={{

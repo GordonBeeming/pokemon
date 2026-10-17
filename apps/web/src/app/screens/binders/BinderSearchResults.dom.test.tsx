@@ -92,6 +92,9 @@ const matches = [
 
 let container: HTMLDivElement;
 let root: Root;
+let searchMatches: unknown[];
+let resolveFails: boolean;
+let requests: string[];
 
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -112,13 +115,24 @@ beforeEach(() => {
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);
+  searchMatches = matches;
+  resolveFails = false;
+  requests = [];
   vi.stubGlobal(
     'fetch',
     vi.fn((path: string) => {
+      requests.push(path);
       if (path.includes('/search?q='))
-        return Promise.resolve(json({ ok: true, matches, nextOffset: null }));
+        return Promise.resolve(json({ ok: true, matches: searchMatches, nextOffset: null }));
       if (path.startsWith('/api/catalogue/cards/resolve'))
-        return Promise.resolve(json({ ok: true, cards: [placed, wanted] }));
+        return Promise.resolve(
+          resolveFails
+            ? new Response(JSON.stringify({ ok: false, error: 'internal_error' }), {
+                status: 500,
+                headers: { 'content-type': 'application/json' },
+              })
+            : json({ ok: true, cards: [placed, wanted] }),
+        );
       if (path.startsWith('/api/catalogue/search'))
         return Promise.resolve(
           json({ ok: true, total: 5, cards: [ownedPrinting, missingPrinting], cursor: null }),
@@ -133,23 +147,41 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+async function render(onJump = vi.fn()): Promise<void> {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  act(() =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <BinderSearchResults
+          versionId="bv_1"
+          query="claydol"
+          palette={DEFAULT_FRAME_PALETTE}
+          onJump={onJump}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  await flush();
+}
+
+function openPocket(pokemonNumber: number) {
+  return {
+    page: 0,
+    row: 0,
+    column: pokemonNumber,
+    label: `#${pokemonNumber}`,
+    kind: 'pokemon',
+    placed: false,
+    assignedCardId: null,
+    targetCardId: null,
+    pokemonNumber,
+  };
+}
+
 describe('BinderSearchResults', () => {
   it('draws each match the way the catalogue does and jumps to its pocket', async () => {
     const onJump = vi.fn();
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    act(() =>
-      root.render(
-        <QueryClientProvider client={client}>
-          <BinderSearchResults
-            versionId="bv_1"
-            query="claydol"
-            palette={DEFAULT_FRAME_PALETTE}
-            onJump={onJump}
-          />
-        </QueryClientProvider>,
-      ),
-    );
-    await flush();
+    await render(onJump);
 
     const tiles = Array.from(
       container.querySelectorAll<HTMLButtonElement>('.binder-result-button'),
@@ -180,5 +212,30 @@ describe('BinderSearchResults', () => {
 
     act(() => tiles[3]?.click());
     expect(onJump).toHaveBeenCalledWith(expect.objectContaining({ page: 1, row: 1, column: 0 }));
+  });
+
+  it('expands only the first few open Pokémon pockets into printings', async () => {
+    searchMatches = Array.from({ length: 8 }, (_, index) => openPocket(index + 1));
+    await render();
+
+    const printingRequests = requests.filter((path) => path.startsWith('/api/catalogue/search'));
+    expect(printingRequests).toHaveLength(6);
+    const labels = Array.from(container.querySelectorAll('.binder-result-button')).map(
+      (tile) => tile.getAttribute('aria-label') ?? '',
+    );
+    // Six pockets with two printings each, then one faded "any" tile per remaining pocket.
+    expect(labels).toHaveLength(14);
+    expect(labels.slice(12).every((label) => label.endsWith('Any printing · pocket open'))).toBe(
+      true,
+    );
+  });
+
+  it('says so when card lookups fail instead of showing empty pockets', async () => {
+    resolveFails = true;
+    await render();
+
+    const alert = container.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain('Some cards could not be drawn');
+    expect(alert?.querySelector('button')?.textContent).toBe('Try again');
   });
 });
