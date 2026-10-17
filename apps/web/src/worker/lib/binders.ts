@@ -984,6 +984,7 @@ export async function searchBinderSpaces(
       `
     SELECT p.position AS page, s.row_index AS row, s.column_index AS column,
       ${slotKindSql('s')} AS kind, s.pokemon_number, s.assigned_card_id,
+      CASE WHEN s.entry_kind='exact-card' THEN s.card_id END AS target_card_id,
       CASE WHEN s.set_id IS NOT NULL THEN 'Any card · ' || COALESCE(target_set.set_name, s.set_id)
         WHEN s.entry_kind = 'reserved' THEN 'Reserved: ' || COALESCE(s.label, 'sleeve')
         WHEN s.entry_kind = 'empty' THEN 'Empty pocket'
@@ -1014,6 +1015,7 @@ export async function searchBinderSpaces(
         OR (s.entry_kind='exact-card' AND instr(${foldText("COALESCE(c.name,'') || ' ' || COALESCE(c.set_name,'') || ' ' || COALESCE(c.number,'')")},?2)>0))
     UNION ALL
     SELECT position AS page,NULL AS row,NULL AS column,'reserved-page' AS kind,NULL AS pokemon_number,NULL AS assigned_card_id,
+      NULL AS target_card_id,
       CASE WHEN kind='reserved' THEN 'Reserved page: ' || COALESCE(label,'Unlabelled')
         ELSE 'Page: ' || label END AS label,
       NULL AS placed_label, NULL AS group_kind, NULL AS group_key, NULL AS group_sample,
@@ -1043,6 +1045,7 @@ export async function searchBinderSpaces(
       kind: string;
       pokemon_number: number | null;
       assigned_card_id: string | null;
+      target_card_id: string | null;
       label: string;
       placed_label: string | null;
       group_kind: string | null;
@@ -1059,6 +1062,9 @@ export async function searchBinderSpaces(
         column: row.column,
         kind: row.kind,
         placed: row.assigned_card_id !== null,
+        assignedCardId: row.assigned_card_id,
+        targetCardId: row.target_card_id,
+        pokemonNumber: row.pokemon_number,
         // A filled pocket is named by the card in it; an open one by what it wants.
         label:
           row.placed_label ??

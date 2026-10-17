@@ -360,29 +360,27 @@ test.describe('binder pages from anywhere', () => {
 });
 
 test.describe('basic controls', () => {
-  test('find in this binder: always on screen, the list fits the field, and a pick clears it', async ({
+  test('find in this binder: always on screen, matches show as a card grid, and a pick clears it', async ({
     page,
   }) => {
     const binder = await createBinder(page.request, 2, species(1, 9));
     await openBinder(page, binder);
     // On a phone, find and jump-to-bookmark sit under the title, not in Tools.
-    const field = page.getByRole('combobox', { name: 'Find in this binder' });
+    const field = page.getByRole('searchbox', { name: 'Find in this binder' });
     await expect(field).toBeVisible();
     await expect(
       page.getByRole('button', { name: /Jump to bookmark|No bookmarks yet/ }),
     ).toBeVisible();
     await field.fill('Charmander');
-    const list = page.getByRole('listbox');
-    const match = list.getByRole('option', { name: /Charmander/ }).first();
+    // The matches replace the pages while the search is set.
+    const results = page.getByRole('region', { name: /Binder matches for Charmander/ });
+    const match = results.getByRole('button', { name: /^Go to Page 1/ }).first();
     await expect(match).toBeVisible();
-    const fieldBox = await field.boundingBox();
-    const listBox = await page.locator('.space-search-popover').boundingBox();
-    if (!fieldBox || !listBox) throw new Error('find field or results list has no box');
-    expect(listBox.width).toBeLessThanOrEqual(fieldBox.width + 1);
+    await expect(page.locator('[data-pocket]')).toHaveCount(0);
     await expectLayoutSound(page, 'The find results');
 
     await match.tap();
-    await expect(page.getByRole('listbox')).toHaveCount(0);
+    await expect(results).toHaveCount(0);
     await expect(field).toHaveValue('');
     await expect.poll(() => new URL(page.url()).searchParams.get('q') ?? '').toBe('');
     // One layer: just the found pocket's own sheet.

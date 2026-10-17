@@ -342,62 +342,80 @@ an action at the end */
 .binder-scope .space-search input {
   width: min(100%, 16rem);
 }
-/* The results list is anchored to the field and never wider than it (or the
-   screen): React Aria places it and keeps it inside the viewport. */
-.space-search-popover {
-  width: var(--trigger-width);
-  max-width: calc(100vw - 1rem);
-  max-height: min(24rem, var(--popover-max-height, 24rem));
-  padding: 0.35rem;
-  overflow-y: auto;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  box-shadow: 0 12px 32px rgb(15 23 42 / 18%);
-  outline: none;
+.binder-results {
+  /* The stage centres the page track; results use its full width instead. */
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
 }
-.space-search-list {
+/* The same grid as the catalogue, so a card reads the same in both places. */
+.binder-results-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.binder-result {
+  min-width: 0;
+}
+.binder-scope .binder-result-button {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
-  outline: none;
-}
-.space-search-option {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 0.1rem;
-  min-height: 2.75rem;
-  padding: 0.45rem 0.7rem;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0.4rem;
+  width: 100%;
+  min-height: 0;
+  padding: 0;
   color: var(--ink);
+  text-align: left;
   cursor: pointer;
-  border-radius: var(--radius-sm);
-  outline: none;
-  overflow-wrap: anywhere;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-md);
 }
-.space-search-option[data-focused],
-.space-search-option[data-hovered] {
-  background: var(--paper);
+.binder-scope .binder-result-button:focus-visible {
+  outline: 2px solid var(--accent-deep);
+  outline-offset: 3px;
 }
-.space-search-option[data-pressed] {
-  background: var(--line);
+.binder-scope .binder-result-button:hover .binder-result-where {
+  text-decoration: underline;
 }
-.space-search-option[data-focus-visible] {
-  box-shadow: inset 0 0 0 2px var(--accent-deep);
-}
-.space-search-option-detail {
+/* A pocket with no single card to draw (a set, group, reservation or empty pocket)
+   keeps the card's shape so the grid stays even. */
+.binder-result-empty {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 245 / 337;
+  padding: 0.75rem;
   font-size: 0.8125rem;
   color: var(--muted);
+  text-align: center;
+  overflow-wrap: anywhere;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-md);
 }
-.space-search-more {
+.binder-result-caption {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  font-size: 0.8125rem;
+}
+.binder-result-where {
   font-weight: 600;
-  color: var(--accent-deep);
+  overflow-wrap: anywhere;
 }
-.space-search-status {
-  margin: 0;
-  padding: 0.5rem 0.7rem;
-  font-size: 0.875rem;
+.binder-result-note {
   color: var(--muted);
+}
+.binder-results-paging {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1.25rem;
 }
 
 .binder-display-controls {

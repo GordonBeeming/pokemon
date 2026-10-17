@@ -80,6 +80,7 @@ import {
   ReserveSleevePanel,
 } from './panels/PocketPanels';
 import { PocketActions, pocketActionItems } from './PocketActions';
+import { BinderSearchResults } from './BinderSearchResults';
 import { SpaceSearch } from './SpaceSearch';
 import { PHONE_QUERY, REDUCED_MOTION_QUERY, useMediaQuery } from './useMediaQuery';
 import { useBinderWriter } from './useBinderWriter';
@@ -597,7 +598,7 @@ export function BinderView({
       if (!(event.target instanceof Element)) return;
       if (
         event.target.closest(
-          '[data-pocket], .pocket-actions, [role="dialog"], .dialog-backdrop, .sheet-backdrop, .menu-button, .menu-popover, .select-popover, .space-search-popover, .toast-viewport',
+          '[data-pocket], .pocket-actions, [role="dialog"], .dialog-backdrop, .sheet-backdrop, .menu-button, .menu-popover, .select-popover, .toast-viewport',
         )
       )
         return;
@@ -673,7 +674,12 @@ export function BinderView({
     [inactiveHere],
   );
 
-  function jumpTo(at: BinderSlotLocation, open?: PanelKind): void {
+  function jumpTo(
+    at: BinderSlotLocation,
+    open?: PanelKind,
+    { clearQuery = false }: { clearQuery?: boolean } = {},
+  ): void {
+    const q = clearQuery ? '' : search.q;
     if (at.page === pageIndex && currentPage) {
       const slot = currentPage.slots.find(
         (item) => item.row === at.row && item.column === at.column,
@@ -681,7 +687,7 @@ export function BinderView({
       if (slot) {
         pendingFocus.current = 'selected';
         navigate(
-          { ...search, sel: slotIdOf(currentPage.id, slot.row, slot.column), mode: undefined },
+          { ...search, q, sel: slotIdOf(currentPage.id, slot.row, slot.column), mode: undefined },
           true,
         );
         if (open) setPanel(open);
@@ -690,7 +696,7 @@ export function BinderView({
     }
     pendingSelect.current = { at, open };
     setNavigationEpoch((value) => value + 1);
-    navigate({ page: at.page + 1, v: search.v, q: search.q }, false);
+    navigate({ page: at.page + 1, v: search.v, q }, false);
   }
 
   function jumpToBookmark(bookmark: BinderBookmark): void {
@@ -711,12 +717,19 @@ export function BinderView({
     );
   }
 
+  const searching = search.q.trim().length > 0;
+
+  // A match is chosen from the results grid, so the search is done with: clearing it
+  // brings the pages back with the pocket selected.
   function jumpToSpace(match: BinderSearchMatch): void {
     if (match.row === null || match.column === null) {
-      goToPage(match.page);
+      setNavigationEpoch((value) => value + 1);
+      navigate({ page: match.page + 1, v: search.v, q: '' }, false);
       return;
     }
-    jumpTo({ page: match.page, row: match.row, column: match.column });
+    jumpTo({ page: match.page, row: match.row, column: match.column }, undefined, {
+      clearQuery: true,
+    });
   }
 
   // --- display settings -----------------------------------------------------------
@@ -969,11 +982,9 @@ export function BinderView({
           <div className="binder-header-actions binder-toolbar">
             <SpaceSearch
               key={versionId}
-              versionId={versionId}
               query={search.q}
               pending={pending}
               onQueryChange={(q) => navigate({ ...search, q }, true)}
-              onJump={jumpToSpace}
             />
             <BookmarkJump
               bookmarks={bookmarks.data ?? []}
@@ -1016,11 +1027,9 @@ export function BinderView({
         <div className="binder-phone-finders">
           <SpaceSearch
             key={versionId}
-            versionId={versionId}
             query={search.q}
             pending={pending}
             onQueryChange={(q) => navigate({ ...search, q }, true)}
-            onJump={jumpToSpace}
           />
           <BookmarkJump
             bookmarks={bookmarks.data ?? []}
@@ -1206,6 +1215,14 @@ export function BinderView({
               Try again
             </button>
           </div>
+        ) : version && versionId && searching ? (
+          <BinderSearchResults
+            key={`${versionId}:${search.q.trim()}`}
+            versionId={versionId}
+            query={search.q.trim()}
+            palette={palette}
+            onJump={jumpToSpace}
+          />
         ) : version ? (
           <PageTrack
             pages={trackPages}
@@ -1245,8 +1262,9 @@ export function BinderView({
         )}
       </div>
 
-      {/* Paging reads after the content, like the foot of a book page. */}
-      {phone ? (
+      {/* Paging reads after the content, like the foot of a book page. Search results
+          replace the pages, so there is nothing to page through while they show. */}
+      {searching ? null : phone ? (
         <PhonePageStepper
           pageIndex={pageIndex}
           pageCount={Math.max(pageCount, 1)}
@@ -1290,7 +1308,7 @@ export function BinderView({
           items={actionItems}
           onClose={deselect}
         />
-      ) : !selectedSlot && !moveSource ? (
+      ) : !selectedSlot && !moveSource && !searching ? (
         <p className="binder-hint">
           Select a pocket for its actions. Drag a card onto a neighbouring page to move it; hold it
           over the edge to turn the page.
