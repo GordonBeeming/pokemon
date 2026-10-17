@@ -42,6 +42,19 @@ describe('binder space search', () => {
       const name = await searchBinderSpaces(db, 'owner', version.id, { q: 'PIKACHU' });
       expect(name.matches.map((item) => item.page)).toEqual([0, 2]);
       expect(name.matches[1]).toMatchObject({ row: 0, column: 1, kind: 'pokemon', placed: false });
+      // The results grid draws each match from these: the exact card asked for, or the
+      // Pokémon whose printings an unfilled pocket can take.
+      expect(name.matches[0]).toMatchObject({
+        kind: 'exact-card',
+        targetCardId: 'card',
+        assignedCardId: null,
+        pokemonNumber: null,
+      });
+      expect(name.matches[1]).toMatchObject({
+        targetCardId: null,
+        assignedCardId: null,
+        pokemonNumber: 25,
+      });
       expect(
         (await searchBinderSpaces(db, 'owner', version.id, { q: '#0025' })).matches,
       ).toHaveLength(1);

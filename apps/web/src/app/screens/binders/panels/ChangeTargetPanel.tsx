@@ -2,7 +2,7 @@ import type { FrameType } from '@pokedex/shared';
 import { useState, type ReactElement } from 'react';
 import type { BinderSlotView, ResolvedCard } from '../../../api/queries/binders';
 import { SegmentedControl } from '../../../ui/SegmentedControl';
-import type { CardLookup } from '../model';
+import { isGroupTarget, type CardLookup } from '../model';
 import { CardPicker, type PickerQuery } from './CardPicker';
 import { Panel } from './Panel';
 import { TargetConfirm } from './TargetConfirm';
@@ -28,6 +28,13 @@ export function sameTypeFilters(
   return null;
 }
 
+/** Sleeves that ask for any card of a kind (a Pokémon, set, illustrator, trainer or
+ * energy) rather than one exact card. Picking a card of the same type for one of these
+ * places that copy; the sleeve keeps asking for the whole kind. */
+export function isTypedTarget(slot: BinderSlotView): boolean {
+  return slot.entryKind === 'pokemon' || slot.entryKind === 'set' || isGroupTarget(slot);
+}
+
 export function ChangeTargetPanel({
   slot,
   pocketLabel,
@@ -36,6 +43,7 @@ export function ChangeTargetPanel({
   pending,
   error,
   onChoose,
+  onPlace,
   onClose,
 }: {
   slot: BinderSlotView;
@@ -45,6 +53,8 @@ export function ChangeTargetPanel({
   pending: boolean;
   error: string | null;
   onChoose: (card: ResolvedCard) => void;
+  /** Places a copy without changing the target, for a typed sleeve in same-type mode. */
+  onPlace: (card: ResolvedCard) => void;
   onClose: () => void;
 }): ReactElement {
   const sameFilters = sameTypeFilters(slot, cards);
@@ -52,6 +62,7 @@ export function ChangeTargetPanel({
   const [picked, setPicked] = useState<ResolvedCard | null>(null);
   const query: PickerQuery =
     mode === 'same' && sameFilters ? { q: '', filters: sameFilters } : { q: '' };
+  const places = mode === 'same' && isTypedTarget(slot);
 
   return (
     <Panel title={`Change target · ${pocketLabel}`} onClose={onClose} wide>
@@ -65,7 +76,9 @@ export function ChangeTargetPanel({
           card={picked}
           pending={pending}
           palette={palette}
-          onConfirm={() => onChoose(picked)}
+          heading={places ? 'Place this copy here?' : undefined}
+          confirmLabel={places ? 'Place this copy' : undefined}
+          onConfirm={() => (places ? onPlace(picked) : onChoose(picked))}
           onBack={() => setPicked(null)}
         />
       ) : (
@@ -86,7 +99,9 @@ export function ChangeTargetPanel({
           ) : (
             <>
               <p className="panel-help">
-                Choose a replacement for this sleeve. Other sleeves stay in place.
+                {places
+                  ? 'Choose the copy to show. This sleeve keeps its target, so any card of this type still fits it.'
+                  : 'Choose a replacement for this sleeve. Other sleeves stay in place.'}
               </p>
               <CardPicker
                 key={mode}

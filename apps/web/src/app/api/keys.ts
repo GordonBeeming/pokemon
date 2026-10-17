@@ -9,6 +9,9 @@ export const queryKeys = {
       ['catalogue', 'search', filters, page] as const,
     card: (cardId: string) => ['catalogue', 'card', cardId] as const,
     binderMatches: (cardId: string) => ['catalogue', 'card', cardId, 'binder-matches'] as const,
+    // Under 'search' so collection writes patch these the same way as catalogue pages.
+    printings: (pokemonNumber: number, limit: number) =>
+      ['catalogue', 'search', 'printings', pokemonNumber, limit] as const,
   },
   pokedex: {
     national: () => ['pokedex', 'national'] as const,

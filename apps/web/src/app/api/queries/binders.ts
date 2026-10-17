@@ -358,6 +358,26 @@ export function useResolvedCardGroups(groups: ReadonlyArray<readonly string[]>) 
   });
 }
 
+/** The catalogue printings of each Pokémon, one cached query per species, for drawing
+ * what an unfilled "any printing" pocket could hold. */
+export function useSpeciesPrintings(pokemonNumbers: readonly number[], limit: number) {
+  return useQueries({
+    queries: [...new Set(pokemonNumbers)].map((pokemonNumber) => ({
+      queryKey: queryKeys.catalogue.printings(pokemonNumber, limit),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        searchCards(
+          new URLSearchParams({
+            pokedexNumber: String(pokemonNumber),
+            limit: String(limit),
+            offset: '0',
+          }),
+          signal,
+        ),
+      staleTime: 60_000,
+    })),
+  });
+}
+
 export function searchCards(params: URLSearchParams, signal?: AbortSignal) {
   const query = new URLSearchParams(params);
   query.set('includePokemonNumber', 'true');

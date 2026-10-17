@@ -14,8 +14,7 @@ export function hasCdp(testInfo: TestInfo): boolean {
   return engine === undefined || engine === 'chromium';
 }
 
-const OVERLAY_SELECTOR =
-  '[role="dialog"], .menu-popover, .select-popover, .space-search-popover, .toast-viewport .toast';
+const OVERLAY_SELECTOR = '[role="dialog"], .menu-popover, .select-popover, .toast-viewport .toast';
 
 interface LayoutProblem {
   what: string;
