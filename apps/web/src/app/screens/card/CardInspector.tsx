@@ -20,6 +20,7 @@ import { useToast } from '../../ui/Toast';
 import { BinderRow } from './BinderRow';
 import { WhereFromDialog } from './WhereFromDialog';
 import './card-inspector.css';
+import { ebaySoldSearchUrl } from '../../cards/ebay';
 import { useShowPrices } from '../../cards/PriceVisibility';
 
 const NOTES_MAX = 2000;
@@ -216,6 +217,19 @@ export function CardInspector({
             <p title={card.price.amountAud === null ? 'No market price yet' : 'Market estimate'}>
               ~{card.price.amountAud === null ? 'A$ –' : formatMoney(card.price.amountAud)}
             </p>
+          ) : null}
+          {/* What it actually sells for, next to the vendor estimate. Hidden with prices,
+              since sold listings are prices too. */}
+          {showPrices ? (
+            <a
+              className="card-inspector-ebay-link"
+              href={ebaySoldSearchUrl(card)}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              eBay AU sold listings
+              <span className="sr-only"> (opens in a new tab)</span>
+            </a>
           ) : null}
           {pokedexNumber ? (
             <button
