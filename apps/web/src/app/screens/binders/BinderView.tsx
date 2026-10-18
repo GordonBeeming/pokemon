@@ -1393,11 +1393,6 @@ export function BinderView({
               binderApi.setSlot(versionId, selected, card.id, revision),
             )
           }
-          onPlace={(card) =>
-            void run(`${card.name} placed. The sleeve keeps its target.`, (revision) =>
-              binderApi.assign(versionId, selected, card.id, revision),
-            )
-          }
           onClose={closePanel}
         />
       ) : null}

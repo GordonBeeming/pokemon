@@ -1,9 +1,9 @@
 // @vitest-environment happy-dom
+import { DEFAULT_FRAME_PALETTE } from '@pokedex/shared';
 import { act, type ReactElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BinderSlotView, ResolvedCard } from '../../../api/queries/binders';
-import { DEFAULT_FRAME_PALETTE } from '@pokedex/shared';
 import { ChangeTargetPanel } from './ChangeTargetPanel';
 
 const claydol = {
@@ -50,60 +50,12 @@ async function step(action: () => unknown): Promise<void> {
   });
 }
 
-function slot(overrides: Partial<BinderSlotView>): BinderSlotView {
-  return {
-    pageId: 'page_1',
-    row: 0,
-    column: 1,
-    cardId: null,
-    entryKind: 'empty',
-    label: null,
-    pokemonNumber: null,
-    assignedCardId: null,
-    startsNewPage: false,
-    ...overrides,
-  };
-}
-
 function button(name: string): HTMLButtonElement {
   const found = Array.from(document.body.querySelectorAll('button')).find(
     (item) => item.textContent?.trim() === name,
   );
   if (!found) throw new Error(`Button not found: ${name}`);
   return found;
-}
-
-async function pickAndConfirm(target: BinderSlotView, mode: 'same' | 'any') {
-  const onChoose = vi.fn();
-  const onPlace = vi.fn();
-  await step(() =>
-    root.render(
-      <ChangeTargetPanel
-        slot={target}
-        pocketLabel="Page 1 · row 1, pocket 2"
-        cards={new Map()}
-        palette={DEFAULT_FRAME_PALETTE}
-        pending={false}
-        error={null}
-        onChoose={onChoose}
-        onPlace={onPlace}
-        onClose={() => undefined}
-      />,
-    ),
-  );
-  if (mode === 'any') {
-    const option = Array.from(document.body.querySelectorAll('label')).find(
-      (item) => item.textContent?.trim() === 'Replace with any card',
-    );
-    if (!option) throw new Error('Replace with any card option missing');
-    await step(() => option.click());
-  }
-  await step(() => button('Pick Claydol').click());
-  const confirm = document.body.querySelector<HTMLButtonElement>('.copy-choice .button-primary');
-  if (!confirm) throw new Error('Confirm button missing');
-  const label = confirm.textContent;
-  await step(() => confirm.click());
-  return { onChoose, onPlace, label, text: document.body.textContent ?? '' };
 }
 
 beforeEach(() => {
@@ -118,35 +70,37 @@ afterEach(async () => {
 });
 
 describe('ChangeTargetPanel', () => {
-  it('places the picked copy and keeps a Pokémon sleeve’s target in same-type mode', async () => {
-    const result = await pickAndConfirm(slot({ entryKind: 'pokemon', pokemonNumber: 344 }), 'same');
-    expect(result.label).toBe('Place this copy');
-    expect(result.onPlace).toHaveBeenCalledWith(claydol);
-    expect(result.onChoose).not.toHaveBeenCalled();
-  });
-
-  it('places a copy for a group sleeve in same-type mode', async () => {
-    const result = await pickAndConfirm(
-      slot({ entryKind: 'illustrator', groupKey: 'ken-sugimori', groupName: 'Ken Sugimori' }),
-      'same',
+  // Placing a copy is Find cards' job; Change target only ever changes the target.
+  it('sets the picked card as the target, even on a Pokémon sleeve in same-type mode', async () => {
+    const onChoose = vi.fn();
+    const slot: BinderSlotView = {
+      pageId: 'page_1',
+      row: 0,
+      column: 1,
+      cardId: null,
+      entryKind: 'pokemon',
+      label: null,
+      pokemonNumber: 344,
+      assignedCardId: null,
+      startsNewPage: false,
+    };
+    await step(() =>
+      root.render(
+        <ChangeTargetPanel
+          slot={slot}
+          pocketLabel="Page 1 · row 1, pocket 2"
+          cards={new Map()}
+          palette={DEFAULT_FRAME_PALETTE}
+          pending={false}
+          error={null}
+          onChoose={onChoose}
+          onClose={() => undefined}
+        />,
+      ),
     );
-    expect(result.onPlace).toHaveBeenCalledWith(claydol);
-    expect(result.onChoose).not.toHaveBeenCalled();
-  });
+    await step(() => button('Pick Claydol').click());
+    await step(() => button('Set as target').click());
 
-  it('still retargets a typed sleeve when replacing with any card', async () => {
-    const result = await pickAndConfirm(slot({ entryKind: 'pokemon', pokemonNumber: 344 }), 'any');
-    expect(result.label).toBe('Set as target');
-    expect(result.onChoose).toHaveBeenCalledWith(claydol);
-    expect(result.onPlace).not.toHaveBeenCalled();
-  });
-
-  it('still retargets an exact-card sleeve in same-type mode', async () => {
-    const result = await pickAndConfirm(
-      slot({ entryKind: 'exact-card', cardId: 'card-claydol-dp4', pokemonNumber: 344 }),
-      'same',
-    );
-    expect(result.onChoose).toHaveBeenCalledWith(claydol);
-    expect(result.onPlace).not.toHaveBeenCalled();
+    expect(onChoose).toHaveBeenCalledWith(claydol);
   });
 });
