@@ -4,7 +4,7 @@ import {
   type ResolvedCard,
   useBinderSpaceSearch,
   useResolvedCardGroups,
-  useSpeciesPrintings,
+  useOwnedPrintings,
 } from '../../api/queries/binders';
 import { CardFrame, type CardFrameCard } from '../../cards/CardFrame';
 import { EmptyState } from '../../ui/EmptyState';
@@ -12,12 +12,13 @@ import { CardFrameSkeleton } from '../../ui/Skeleton';
 import { anyFrameCard, binderErrorMessage, frameCardFrom } from './model';
 
 const PAGE_SIZE = 50;
-/** How many printings an unfilled "any printing" pocket shows before "+N more". */
-const PRINTINGS_PER_POCKET = 12;
-/** How many open Pokémon pockets on one results page expand into their printings. A
- * broad query ("a", a region) can match 50 open pockets; past this many, each shows one
- * faded "any printing" tile, so one keystroke never fans out into hundreds of cards. */
-const EXPANDED_POCKETS = 6;
+/** Owned printings fetched per Pokémon: enough for a few open pockets of one species
+ * to each show a different copy. */
+const OWNED_PRINTINGS = 6;
+/** How many Pokémon on one results page look up their owned printings. A broad query
+ * ("a", a region) can match 50 open pockets; past this many, an open pocket shows the
+ * faded "any printing" card without the lookup. */
+const LOOKED_UP_SPECIES = 12;
 
 interface Tile {
   key: string;
@@ -27,6 +28,8 @@ interface Tile {
   /** The card's name, set and number, read out with the pocket. */
   title: string;
   note: string;
+  /** "N owned printings" when an open pocket could take more than the one it shows. */
+  extra?: string;
 }
 
 function cardTile(key: string, match: BinderSearchMatch, card: ResolvedCard, note: string): Tile {
@@ -53,6 +56,8 @@ function tilesFor(
   match: BinderSearchMatch,
   cards: ReadonlyMap<string, ResolvedCard>,
   printings: ReadonlyMap<number, { cards: ResolvedCard[]; total: number }>,
+  /** Cards already drawn somewhere in the results; an open pocket adds the one it shows. */
+  taken: Set<string>,
 ): Tile[] {
   const base = `${match.page}-${match.row}-${match.column}`;
   const placed = match.assignedCardId ? cards.get(match.assignedCardId) : undefined;
@@ -67,21 +72,20 @@ function tilesFor(
         owned(target) ? 'Owned · pocket open' : 'Not owned · pocket open',
       ),
     ];
-  // An open "any printing" pocket shows every printing it could hold, the same way the
-  // catalogue does: what you own at full colour, the rest faded.
-  const species =
+  // One tile per pocket. An open "any printing" pocket shows a printing you own that
+  // isn't drawn elsewhere in the results, at full colour; with none, the faded "any"
+  // card below, the same way the catalogue fades what you don't have.
+  const owns =
     match.kind === 'pokemon' && match.pokemonNumber
       ? printings.get(match.pokemonNumber)
       : undefined;
-  if (species && species.cards.length > 0)
-    return species.cards.map((card) =>
-      cardTile(
-        `${base}-${card.id}`,
-        match,
-        card,
-        owned(card) ? 'Owned · pocket open' : 'Not owned · pocket open',
-      ),
-    );
+  const free = owns?.cards.find((card) => owned(card) && !taken.has(card.id));
+  if (free) {
+    taken.add(free.id);
+    const tile = cardTile(base, match, free, 'Owned · pocket open');
+    if (owns && owns.total > 1) tile.extra = `${owns.total} owned printings`;
+    return [tile];
+  }
   if (match.kind === 'pokemon' && match.pokemonNumber)
     return [
       {
@@ -89,7 +93,10 @@ function tilesFor(
         match,
         frame: { card: anyFrameCard(match.pokemonNumber), variant: 'any', faded: true },
         title: match.label,
-        note: 'Any printing · pocket open',
+        note:
+          owns && owns.total > 0
+            ? 'Owned copies shown elsewhere · pocket open'
+            : 'Not owned · pocket open',
       },
     ];
   // Set, group, reserved and empty pockets have no one card to draw, so they stay empty.
@@ -123,8 +130,8 @@ export function BinderSearchResults({
         .filter((match) => match.kind === 'pokemon' && !match.placed && match.pokemonNumber)
         .map((match) => match.pokemonNumber as number),
     ),
-  ].slice(0, EXPANDED_POCKETS);
-  const speciesQueries = useSpeciesPrintings(openSpecies, PRINTINGS_PER_POCKET);
+  ].slice(0, LOOKED_UP_SPECIES);
+  const speciesQueries = useOwnedPrintings(openSpecies, OWNED_PRINTINGS);
 
   const cards = new Map<string, ResolvedCard>();
   for (const query of resolved) for (const card of query.data ?? []) cards.set(card.id, card);
@@ -138,7 +145,12 @@ export function BinderSearchResults({
     results.isPending ||
     resolved.some((item) => item.isPending) ||
     speciesQueries.some((item) => item.isPending);
-  const tiles = matches.flatMap((match) => tilesFor(match, cards, printings));
+  const taken = new Set(
+    matches.flatMap((match) =>
+      [match.assignedCardId, match.targetCardId].filter((id): id is string => Boolean(id)),
+    ),
+  );
+  const tiles = matches.flatMap((match) => tilesFor(match, cards, printings, taken));
   // A failed card or printing lookup must not pass for a pocket with nothing in it.
   const failedLookups = [...resolved, ...speciesQueries].filter((item) => item.isError);
   const status = results.isError
@@ -186,13 +198,6 @@ export function BinderSearchResults({
         <ul className="binder-results-grid">
           {tiles.map((tile) => {
             const where = whereOf(tile.match);
-            const more =
-              tile.frame?.variant === 'card' &&
-              tile.match.kind === 'pokemon' &&
-              tile.match.pokemonNumber
-                ? printings.get(tile.match.pokemonNumber)
-                : undefined;
-            const isLastPrinting = more && more.cards.at(-1)?.id === tile.frame?.card.id;
             return (
               <li key={tile.key} className="binder-result">
                 <button
@@ -218,11 +223,7 @@ export function BinderSearchResults({
                   <span className="binder-result-caption">
                     <span className="binder-result-where">{where}</span>
                     {tile.frame ? <span className="binder-result-note">{tile.note}</span> : null}
-                    {isLastPrinting && more.total > more.cards.length ? (
-                      <span className="binder-result-note">
-                        +{more.total - more.cards.length} more printings
-                      </span>
-                    ) : null}
+                    {tile.extra ? <span className="binder-result-note">{tile.extra}</span> : null}
                   </span>
                 </button>
               </li>
