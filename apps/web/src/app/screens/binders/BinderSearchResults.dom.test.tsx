@@ -187,61 +187,56 @@ function openPocket(pokemonNumber: number) {
   };
 }
 
+function tiles(): Array<{ label: string; tier: string; art: string }> {
+  return Array.from(container.querySelectorAll('.binder-result')).map((item) => ({
+    label: item.querySelector('.binder-result-button')?.getAttribute('aria-label') ?? '',
+    tier: item.getAttribute('data-tier') ?? '',
+    art: item.querySelector('[role="img"]')?.getAttribute('aria-label') ?? '',
+  }));
+}
+
 describe('BinderSearchResults', () => {
-  it('draws each match the way the catalogue does and jumps to its pocket', async () => {
+  it('draws what the binder holds first, then what you own, then the rest faded', async () => {
     const onJump = vi.fn();
     await render(onJump);
 
-    const tiles = Array.from(
-      container.querySelectorAll<HTMLButtonElement>('.binder-result-button'),
+    const drawn = tiles();
+    // One tile per matching pocket.
+    expect(drawn).toHaveLength(4);
+    expect(drawn[0]?.label).toMatch(
+      /^Go to Page 1 · row 1, pocket 2: Claydol · Battle Styles · 58\. In this binder$/,
     );
-    const labels = tiles.map((tile) => tile.getAttribute('aria-label') ?? '');
-    // One tile per matching pocket: placed copy, exact target, the open Pokémon pocket
-    // showing the printing you own, and the set pocket.
-    expect(labels).toHaveLength(4);
-    expect(labels[0]).toMatch(
-      /^Go to Page 1 · row 1, pocket 2: Claydol · Battle Styles · 58\. Placed/,
+    expect(drawn[0]?.tier).toBe('binder');
+    expect(drawn[1]?.label).toMatch(/Great Encounters · 15\. Not owned$/);
+    expect(drawn[1]?.tier).toBe('missing');
+    expect(drawn[1]?.art).toMatch(/not owned/);
+    // The open Claydol pocket shows the printing you own, a step back from the binder's.
+    expect(drawn[2]?.label).toMatch(
+      /^Go to Page 2 · row 2, pocket 1: Claydol · Ancient Origins · 33\. Owned · not in this binder$/,
     );
-    expect(labels[1]).toMatch(/Great Encounters · 15\. Not owned · pocket open/);
-    expect(labels[2]).toMatch(
-      /^Go to Page 2 · row 2, pocket 1: Claydol · Ancient Origins · 33\. Owned · pocket open/,
-    );
-    expect(labels[3]).toMatch(/^Go to Page 3 · row 1, pocket 1: Any card · Hidden Legends/);
+    expect(drawn[2]?.tier).toBe('owned');
+    expect(drawn[2]?.art).toMatch(/, owned$/);
+    expect(drawn[3]?.label).toMatch(/^Go to Page 3 · row 1, pocket 1: Any card · Hidden Legends/);
+    expect(drawn[3]?.tier).toBe('');
 
-    // Owned cards are solid, the rest faded, as in the catalogue.
-    const art = tiles.map(
-      (tile) => tile.querySelector('[role="img"]')?.getAttribute('aria-label') ?? '',
-    );
-    expect(art[0]).toMatch(/, owned$/);
-    expect(art[1]).toMatch(/not owned/);
-    expect(art[2]).toMatch(/, owned$/);
-    expect(tiles[3]?.querySelector('.binder-result-empty')).not.toBeNull();
-    expect(container.textContent).toContain('5 owned printings');
-    expect(labels[2]).toMatch(/Owned · pocket open\. 5 owned printings$/);
-    // Only owned printings are asked for.
-    expect(requests.find((path) => path.startsWith('/api/catalogue/search'))).toContain(
-      'owned=true',
-    );
-
-    act(() => tiles[2]?.click());
+    act(() => container.querySelectorAll<HTMLButtonElement>('.binder-result-button')[2]?.click());
     expect(onJump).toHaveBeenCalledWith(expect.objectContaining({ page: 1, row: 1, column: 0 }));
   });
 
-  it('shows one faded card for an open pocket when nothing of it is owned', async () => {
-    printingCards = [];
+  it('shows real art, faded, for an open pocket when none of it is owned', async () => {
+    printingCards = [missingPrinting];
     printingTotal = undefined;
     searchMatches = [matches[2]];
     await render();
 
-    const tiles = Array.from(container.querySelectorAll('.binder-result-button'));
-    expect(tiles).toHaveLength(1);
-    expect(tiles[0]?.getAttribute('aria-label')).toMatch(/Not owned · pocket open$/);
-    expect(tiles[0]?.querySelector('[role="img"]')?.getAttribute('aria-label')).toMatch(
-      /not owned/,
-    );
+    const drawn = tiles();
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0]?.label).toMatch(/Claydol · Hidden Legends · 2\. Not owned$/);
+    expect(drawn[0]?.tier).toBe('missing');
+    expect(drawn[0]?.art).toMatch(/not owned/);
   });
 
-  it('looks up owned printings for only the first few Pokémon on a page', async () => {
+  it('looks up printings for only the first few Pokémon on a page', async () => {
     searchMatches = Array.from({ length: 14 }, (_, index) => openPocket(index + 1));
     printingCards = [];
     printingTotal = undefined;
@@ -249,15 +244,13 @@ describe('BinderSearchResults', () => {
 
     const printingRequests = requests.filter((path) => path.startsWith('/api/catalogue/search'));
     expect(printingRequests).toHaveLength(12);
-    const labels = Array.from(container.querySelectorAll('.binder-result-button')).map(
-      (tile) => tile.getAttribute('aria-label') ?? '',
-    );
-    expect(labels).toHaveLength(14);
-    // Looked up and none owned, against not looked up at all.
-    expect(labels[11]).toMatch(/Not owned · pocket open$/);
-    expect(labels.slice(12).every((label) => label.endsWith('Any printing · pocket open'))).toBe(
-      true,
-    );
+    // Every lookup is the catalogue's owned-first order, not an owned-only filter.
+    expect(printingRequests.every((path) => !path.includes('owned='))).toBe(true);
+    const drawn = tiles();
+    expect(drawn).toHaveLength(14);
+    // Looked up with no printings, against not looked up at all.
+    expect(drawn[11]?.label).toMatch(/Not owned$/);
+    expect(drawn.slice(12).every((tile) => tile.label.endsWith('Any printing'))).toBe(true);
   });
 
   it('says so when card lookups fail instead of showing empty pockets', async () => {
@@ -271,33 +264,19 @@ describe('BinderSearchResults', () => {
 
   it('never shows the same card for two pockets', async () => {
     // The placed Battle Styles copy is also an owned printing, and two open pockets want
-    // any Claydol.
-    printingCards = [placed, ownedPrinting];
+    // any Claydol: the first takes the other owned copy, the second real unowned art.
+    printingCards = [placed, ownedPrinting, missingPrinting];
     printingTotal = undefined;
     searchMatches = [matches[0], matches[2], { ...matches[2], page: 3 }];
     await render();
 
-    const labels = Array.from(container.querySelectorAll('.binder-result-button')).map(
-      (tile) => tile.getAttribute('aria-label') ?? '',
+    const drawn = tiles();
+    expect(drawn).toHaveLength(3);
+    expect(drawn.filter((tile) => tile.label.includes('Battle Styles'))).toHaveLength(1);
+    expect(drawn[1]?.label).toMatch(/Ancient Origins · 33\. Owned · not in this binder$/);
+    expect(drawn[2]?.label).toMatch(
+      /^Go to Page 4 · row 2, pocket 1: Claydol · Hidden Legends · 2\. Owned copies shown elsewhere$/,
     );
-    expect(labels).toHaveLength(3);
-    expect(labels.filter((label) => label.includes('Battle Styles'))).toHaveLength(1);
-    expect(labels.filter((label) => label.includes('Ancient Origins'))).toHaveLength(1);
-    expect(labels[2]).toMatch(
-      /^Go to Page 4 · row 2, pocket 1: .*Owned copies shown elsewhere · pocket open$/,
-    );
-  });
-
-  it('does not claim where owned copies are when the lookup was cut short', async () => {
-    // Seven owned printings exist but only the one fetched is known, and it's shown elsewhere.
-    printingCards = [placed];
-    printingTotal = 7;
-    searchMatches = [matches[0], matches[2]];
-    await render();
-
-    const labels = Array.from(container.querySelectorAll('.binder-result-button')).map(
-      (tile) => tile.getAttribute('aria-label') ?? '',
-    );
-    expect(labels[1]).toMatch(/Any printing · pocket open$/);
+    expect(drawn[2]?.tier).toBe('missing');
   });
 });

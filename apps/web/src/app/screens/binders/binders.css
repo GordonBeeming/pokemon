@@ -397,6 +397,10 @@ an action at the end */
   border: 1px dashed var(--line-strong);
   border-radius: var(--radius-md);
 }
+/* Owned but not in this binder: still solid, a step back from what the binder holds. */
+.binder-result[data-tier='owned'] .card-frame {
+  opacity: 0.7;
+}
 .binder-result-caption {
   display: flex;
   flex-direction: column;
