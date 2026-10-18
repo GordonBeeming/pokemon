@@ -208,6 +208,12 @@
   min-height: 2.75rem;
   color: var(--ink);
 }
+.card-inspector-ebay-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  color: var(--accent-deep);
+}
 
 .where-from-option {
   display: flex;

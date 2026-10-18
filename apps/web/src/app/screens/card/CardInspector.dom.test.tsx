@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PriceVisibilityContextForTests } from '../../cards/PriceVisibility';
 import { ToastProvider } from '../../ui/Toast';
 import { CardInspector } from './CardInspector';
 
@@ -200,3 +201,41 @@ async function flushUntil(predicate: () => boolean, attempts = 50): Promise<void
   }
   if (!predicate()) throw new Error('flushUntil: condition never became true');
 }
+
+describe('CardInspector — eBay sold listings', () => {
+  async function renderWithPrices(showPrices: boolean): Promise<void> {
+    await step(() =>
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ToastProvider>
+            <PriceVisibilityContextForTests value={showPrices}>
+              <CardInspector cardId="card-1" onClose={vi.fn()} />
+            </PriceVisibilityContextForTests>
+          </ToastProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await flushUntil(() => container.textContent?.includes('Pikachu') === true);
+  }
+
+  it('links to eBay Australia sold listings for this card in a new tab', async () => {
+    await renderWithPrices(true);
+
+    const link = Array.from(container.querySelectorAll('a')).find((item) =>
+      item.textContent?.includes('eBay AU sold listings'),
+    );
+    expect(link?.target).toBe('_blank');
+    expect(link?.rel).toBe('noopener noreferrer');
+    const url = new URL(link?.href ?? '');
+    expect(url.hostname).toBe('www.ebay.com.au');
+    expect(url.searchParams.get('_nkw')).toBe('Pikachu 025 151 -psa -cgc -bgs');
+    expect(url.searchParams.get('LH_Sold')).toBe('1');
+    expect(link?.textContent).toContain('(opens in a new tab)');
+  });
+
+  it('hides the link for someone whose prices are hidden', async () => {
+    await renderWithPrices(false);
+
+    expect(container.textContent).not.toContain('eBay AU sold listings');
+  });
+});
