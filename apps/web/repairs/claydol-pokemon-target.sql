@@ -1,6 +1,6 @@
 -- Turns the Claydol sleeve back into an "any Claydol" Pokémon target (#344).
--- Change target with "Replace with same type" used to rewrite a Pokémon sleeve as an
--- exact-card target and drop the copy placed in it.
+-- The sleeve was changed through Change target, which makes it an exact-card target
+-- and takes out the copy placed in it; placing a different copy is Find cards' job.
 --
 -- Run from apps/web. Wrangler prints only counts for --file, so check the sleeve with
 -- --command before and after:

@@ -4,36 +4,32 @@ import type { ResolvedCard } from '../../../api/queries/binders';
 import { CardFrame } from '../../../cards/CardFrame';
 import { frameCardFrom } from '../model';
 
-/** Confirms the picked card before Change target writes it: a new target, or (for a
- * typed sleeve in same-type mode) the copy to place. Nothing here adds to the
+/** Confirms a new target for a pocket after picking it. Change target only changes what
+ * the binder wants here; placing a copy is Find cards' job, so nothing here touches the
  * collection. The card is a neutral preview (full colour) because this is a picker. */
 export function TargetConfirm({
   card,
   pending,
   palette,
-  heading = 'Make this the target?',
-  confirmLabel = 'Set as target',
   onConfirm,
   onBack,
 }: {
   card: ResolvedCard;
   pending: boolean;
   palette: Record<FrameType, string>;
-  heading?: string;
-  confirmLabel?: string;
   onConfirm: () => void;
   onBack: () => void;
 }): ReactElement {
-  const headingRef = useRef<HTMLHeadingElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
 
   useEffect(() => {
-    headingRef.current?.focus();
+    heading.current?.focus();
   }, [card.id]);
 
   return (
-    <section className="copy-choice" aria-label={heading}>
-      <h3 ref={headingRef} tabIndex={-1}>
-        {heading}
+    <section className="copy-choice" aria-label="Confirm the new target">
+      <h3 ref={heading} tabIndex={-1}>
+        Make this the target?
       </h3>
       <div className="copy-choice-card">
         <CardFrame
@@ -51,7 +47,7 @@ export function TargetConfirm({
       </div>
       <div className="panel-actions">
         <button type="button" className="button-primary" disabled={pending} onClick={onConfirm}>
-          {confirmLabel}
+          Set as target
         </button>
         <button type="button" className="button-text" disabled={pending} onClick={onBack}>
           Back to cards
