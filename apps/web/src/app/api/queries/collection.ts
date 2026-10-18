@@ -72,6 +72,9 @@ function applyCollectionState(
         ? { ...current, collection: state, notes: state.notes }
         : current,
   );
+  // Owned-only printing lookups are filtered on the server, so a card gaining its first
+  // copy or losing its last changes which cards they hold; refetch rather than patch.
+  void queryClient.invalidateQueries({ queryKey: ['catalogue', 'search', 'owned-printings'] });
   void queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.summary() });
   void queryClient.invalidateQueries({ queryKey: queryKeys.pokedex.national() });
 }

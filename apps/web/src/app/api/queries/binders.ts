@@ -358,9 +358,9 @@ export function useResolvedCardGroups(groups: ReadonlyArray<readonly string[]>) 
   });
 }
 
-/** The catalogue printings of each Pokémon, one cached query per species, for drawing
- * what an unfilled "any printing" pocket could hold. */
-export function useSpeciesPrintings(pokemonNumbers: readonly number[], limit: number) {
+/** The printings of each Pokémon that the owner holds, one cached query per species,
+ * for showing an owned copy in an unfilled "any printing" pocket. */
+export function useOwnedPrintings(pokemonNumbers: readonly number[], limit: number) {
   return useQueries({
     queries: [...new Set(pokemonNumbers)].map((pokemonNumber) => ({
       queryKey: queryKeys.catalogue.printings(pokemonNumber, limit),
@@ -368,6 +368,7 @@ export function useSpeciesPrintings(pokemonNumbers: readonly number[], limit: nu
         searchCards(
           new URLSearchParams({
             pokedexNumber: String(pokemonNumber),
+            owned: 'true',
             limit: String(limit),
             offset: '0',
           }),

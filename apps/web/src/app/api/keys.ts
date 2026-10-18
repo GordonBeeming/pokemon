@@ -11,7 +11,7 @@ export const queryKeys = {
     binderMatches: (cardId: string) => ['catalogue', 'card', cardId, 'binder-matches'] as const,
     // Under 'search' so collection writes patch these the same way as catalogue pages.
     printings: (pokemonNumber: number, limit: number) =>
-      ['catalogue', 'search', 'printings', pokemonNumber, limit] as const,
+      ['catalogue', 'search', 'owned-printings', pokemonNumber, limit] as const,
   },
   pokedex: {
     national: () => ['pokedex', 'national'] as const,
