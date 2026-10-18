@@ -397,6 +397,11 @@ an action at the end */
   border: 1px dashed var(--line-strong);
   border-radius: var(--radius-md);
 }
+/* Owned but not in this binder: a step back from what the binder holds. Only the art
+   dims; the frame and its small labels keep their full contrast. */
+.binder-result[data-tier='owned'] .card-frame-art-box {
+  opacity: 0.7;
+}
 .binder-result-caption {
   display: flex;
   flex-direction: column;
