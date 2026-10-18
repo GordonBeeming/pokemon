@@ -95,6 +95,7 @@ let root: Root;
 let searchMatches: unknown[];
 let resolveFails: boolean;
 let printingCards: unknown[];
+let printingTotal: number | undefined;
 let requests: string[];
 
 function json(body: unknown): Response {
@@ -119,6 +120,7 @@ beforeEach(() => {
   searchMatches = matches;
   resolveFails = false;
   printingCards = [ownedPrinting, missingPrinting];
+  printingTotal = 5;
   requests = [];
   vi.stubGlobal(
     'fetch',
@@ -139,7 +141,7 @@ beforeEach(() => {
         return Promise.resolve(
           json({
             ok: true,
-            total: printingCards.length ? 5 : 0,
+            total: printingTotal ?? printingCards.length,
             cards: printingCards,
             cursor: null,
           }),
@@ -215,6 +217,7 @@ describe('BinderSearchResults', () => {
     expect(art[2]).toMatch(/, owned$/);
     expect(tiles[3]?.querySelector('.binder-result-empty')).not.toBeNull();
     expect(container.textContent).toContain('5 owned printings');
+    expect(labels[2]).toMatch(/Owned · pocket open\. 5 owned printings$/);
     // Only owned printings are asked for.
     expect(requests.find((path) => path.startsWith('/api/catalogue/search'))).toContain(
       'owned=true',
@@ -226,6 +229,7 @@ describe('BinderSearchResults', () => {
 
   it('shows one faded card for an open pocket when nothing of it is owned', async () => {
     printingCards = [];
+    printingTotal = undefined;
     searchMatches = [matches[2]];
     await render();
 
@@ -240,11 +244,20 @@ describe('BinderSearchResults', () => {
   it('looks up owned printings for only the first few Pokémon on a page', async () => {
     searchMatches = Array.from({ length: 14 }, (_, index) => openPocket(index + 1));
     printingCards = [];
+    printingTotal = undefined;
     await render();
 
     const printingRequests = requests.filter((path) => path.startsWith('/api/catalogue/search'));
     expect(printingRequests).toHaveLength(12);
-    expect(container.querySelectorAll('.binder-result-button')).toHaveLength(14);
+    const labels = Array.from(container.querySelectorAll('.binder-result-button')).map(
+      (tile) => tile.getAttribute('aria-label') ?? '',
+    );
+    expect(labels).toHaveLength(14);
+    // Looked up and none owned, against not looked up at all.
+    expect(labels[11]).toMatch(/Not owned · pocket open$/);
+    expect(labels.slice(12).every((label) => label.endsWith('Any printing · pocket open'))).toBe(
+      true,
+    );
   });
 
   it('says so when card lookups fail instead of showing empty pockets', async () => {
@@ -260,6 +273,7 @@ describe('BinderSearchResults', () => {
     // The placed Battle Styles copy is also an owned printing, and two open pockets want
     // any Claydol.
     printingCards = [placed, ownedPrinting];
+    printingTotal = undefined;
     searchMatches = [matches[0], matches[2], { ...matches[2], page: 3 }];
     await render();
 
@@ -272,5 +286,18 @@ describe('BinderSearchResults', () => {
     expect(labels[2]).toMatch(
       /^Go to Page 4 · row 2, pocket 1: .*Owned copies shown elsewhere · pocket open$/,
     );
+  });
+
+  it('does not claim where owned copies are when the lookup was cut short', async () => {
+    // Seven owned printings exist but only the one fetched is known, and it's shown elsewhere.
+    printingCards = [placed];
+    printingTotal = 7;
+    searchMatches = [matches[0], matches[2]];
+    await render();
+
+    const labels = Array.from(container.querySelectorAll('.binder-result-button')).map(
+      (tile) => tile.getAttribute('aria-label') ?? '',
+    );
+    expect(labels[1]).toMatch(/Any printing · pocket open$/);
   });
 });

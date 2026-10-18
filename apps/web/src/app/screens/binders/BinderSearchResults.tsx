@@ -93,10 +93,14 @@ function tilesFor(
         match,
         frame: { card: anyFrameCard(match.pokemonNumber), variant: 'any', faded: true },
         title: match.label,
-        note:
-          owns && owns.total > 0
-            ? 'Owned copies shown elsewhere · pocket open'
-            : 'Not owned · pocket open',
+        note: !owns
+          ? // Not looked up (past the per-page cap) or not loaded: say nothing about ownership.
+            'Any printing · pocket open'
+          : owns.total === 0
+            ? 'Not owned · pocket open'
+            : owns.cards.length >= owns.total
+              ? 'Owned copies shown elsewhere · pocket open'
+              : 'Any printing · pocket open',
       },
     ];
   // Set, group, reserved and empty pockets have no one card to draw, so they stay empty.
@@ -204,9 +208,9 @@ export function BinderSearchResults({
                   type="button"
                   className="binder-result-button"
                   aria-label={
-                    tile.frame
+                    (tile.frame
                       ? `Go to ${where}: ${tile.title}. ${tile.note}`
-                      : `Go to ${where}: ${tile.note}`
+                      : `Go to ${where}: ${tile.note}`) + (tile.extra ? `. ${tile.extra}` : '')
                   }
                   onClick={() => onJump(tile.match)}
                 >
