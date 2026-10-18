@@ -12,10 +12,12 @@ import { CardFrameSkeleton } from '../../ui/Skeleton';
 import { anyFrameCard, binderErrorMessage, frameCardFrom } from './model';
 
 const PAGE_SIZE = 50;
-/** Printings fetched per Pokémon. The catalogue lists owned printings first for a
- * Pokémon, so this is enough for a few open pockets of one species to each show a
- * different owned copy, or real art to fade when nothing is owned. */
-const PRINTINGS = 6;
+/** Spare printings fetched per Pokémon on top of the ones other tiles may already use.
+ * The catalogue lists owned printings first for a Pokémon, so the lookup reaches real art
+ * to fade once the owned ones are spent. */
+const SPARE_PRINTINGS = 6;
+/** The most printings one lookup asks for, however many tiles a page has. */
+const MAX_PRINTINGS = 40;
 /** How many Pokémon on one results page look up their printings. A broad query ("a", a
  * region) can match 50 open pockets; past this many, an open pocket shows the faded
  * "any printing" card without the lookup. */
@@ -151,7 +153,16 @@ export function BinderSearchResults({
         .map((match) => match.pokemonNumber as number),
     ),
   ].slice(0, LOOKED_UP_SPECIES);
-  const speciesQueries = useSpeciesPrintings(openSpecies, PRINTINGS);
+  // Every card already drawn on this page, and every open pocket, can use up one
+  // printing before a pocket reaches one it can show, so the lookup reaches past them.
+  const openPockets = matches.filter(
+    (match) => match.kind === 'pokemon' && !match.placed && match.pokemonNumber,
+  ).length;
+  const printingLimit = Math.min(
+    MAX_PRINTINGS,
+    SPARE_PRINTINGS + new Set(cardIds).size + openPockets,
+  );
+  const speciesQueries = useSpeciesPrintings(openSpecies, printingLimit);
 
   const cards = new Map<string, ResolvedCard>();
   for (const query of resolved) for (const card of query.data ?? []) cards.set(card.id, card);

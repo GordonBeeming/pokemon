@@ -246,6 +246,8 @@ describe('BinderSearchResults', () => {
     expect(printingRequests).toHaveLength(12);
     // Every lookup is the catalogue's owned-first order, not an owned-only filter.
     expect(printingRequests.every((path) => !path.includes('owned='))).toBe(true);
+    // Six spare printings plus one for each of the 14 open pockets that could use one up.
+    expect(printingRequests.every((path) => path.includes('limit=20'))).toBe(true);
     const drawn = tiles();
     expect(drawn).toHaveLength(14);
     // Looked up with no printings, against not looked up at all.
