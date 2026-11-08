@@ -134,6 +134,8 @@ describe('TCGplayer art fallback', () => {
         if (options?.redirect === 'error')
           throw new TypeError('Workers only supports follow or manual redirects');
         const url = typeof input === 'string' ? input : input.url;
+        if (url.includes('tcgcsv.com') && !new Headers(options?.headers).get('user-agent'))
+          return Promise.resolve(new Response(null, { status: 401 }));
         if (url.includes('api.tcgdex.net'))
           return Promise.resolve(new Response(null, { status: 404 }));
         if (url.endsWith('/groups'))

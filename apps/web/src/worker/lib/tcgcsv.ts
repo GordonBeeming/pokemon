@@ -95,7 +95,10 @@ async function csvJson<T>(art: R2Bucket, path: string, schema: z.ZodType<T>): Pr
   }
   try {
     const response = await fetch(`https://tcgcsv.com/tcgplayer/3/${path}`, {
-      headers: { accept: 'application/json' },
+      headers: {
+        accept: 'application/json',
+        'user-agent': 'PokedexCatalogue/1.0 (+https://github.com/GordonBeeming/pokemon)',
+      },
       signal: AbortSignal.timeout(30_000),
       redirect: 'manual',
     });

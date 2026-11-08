@@ -625,7 +625,10 @@ async function fetchImageBytes(
   headers: Record<string, string>,
 ): Promise<Uint8Array<ArrayBuffer> | null> {
   const response = await fetch(url, {
-    headers,
+    headers: {
+      'user-agent': 'PokedexCatalogue/1.0 (+https://github.com/GordonBeeming/pokemon)',
+      ...headers,
+    },
     signal: AbortSignal.timeout(30_000),
     redirect: 'manual',
   });
