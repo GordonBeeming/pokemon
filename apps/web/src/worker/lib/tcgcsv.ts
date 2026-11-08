@@ -97,7 +97,7 @@ async function csvJson<T>(art: R2Bucket, path: string, schema: z.ZodType<T>): Pr
     const response = await fetch(`https://tcgcsv.com/tcgplayer/3/${path}`, {
       headers: { accept: 'application/json' },
       signal: AbortSignal.timeout(30_000),
-      redirect: 'error',
+      redirect: 'manual',
     });
     const data = schema.parse(await readJson(response));
     await art.put(key, JSON.stringify({ fetchedAt: nowSeconds(), data }), {

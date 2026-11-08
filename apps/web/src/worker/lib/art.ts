@@ -627,7 +627,7 @@ async function fetchImageBytes(
   const response = await fetch(url, {
     headers,
     signal: AbortSignal.timeout(30_000),
-    redirect: 'error',
+    redirect: 'manual',
   });
   const declared = Number(response.headers.get('content-length') ?? 0);
   if (!response.ok && response.status !== 404 && response.status !== 410) {

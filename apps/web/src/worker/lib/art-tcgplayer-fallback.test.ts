@@ -130,7 +130,9 @@ describe('TCGplayer art fallback', () => {
       .run();
     vi.stubGlobal(
       'fetch',
-      vi.fn((input: RequestInfo) => {
+      vi.fn((input: RequestInfo, options?: RequestInit) => {
+        if (options?.redirect === 'error')
+          throw new TypeError('Workers only supports follow or manual redirects');
         const url = typeof input === 'string' ? input : input.url;
         if (url.includes('api.tcgdex.net'))
           return Promise.resolve(new Response(null, { status: 404 }));
