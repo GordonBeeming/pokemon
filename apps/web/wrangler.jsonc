@@ -34,6 +34,11 @@
   "r2_buckets": [{ "binding": "ART", "bucket_name": "pokedex-art" }],
   "workflows": [
     {
+      "binding": "SUPPLEMENTAL_SYNC",
+      "name": "pokedex-supplemental-sync",
+      "class_name": "SupplementalSyncWorkflow",
+    },
+    {
       "binding": "CATALOGUE_SYNC",
       "name": "pokedex-catalogue-sync",
       "class_name": "CatalogueSyncWorkflow",
@@ -63,6 +68,8 @@
   "triggers": {
     // 17:00 UTC is 3am in Brisbane (no daylight saving): nightly exchange rates, prices
     // and backups, plus the weekly catalogue sync on Sunday mornings.
-    "crons": ["0 17 * * *"],
+    // Supplemental metadata and missing artwork run at 5am AEST, after the
+    // weekly catalogue import has had time to finish.
+    "crons": ["0 17 * * *", "0 19 * * *"],
   },
 }

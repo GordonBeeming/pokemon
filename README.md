@@ -77,4 +77,13 @@ pnpm --dir apps/web exec wrangler workflows instances list pokedex-catalogue-syn
   --config wrangler.jsonc
 ```
 
-The Worker's cron trigger (`0 17 * * *`, 3am in Brisbane) starts the scheduled work each night: exchange rates, prices for every card someone owns or has in a binder, the next 1,000 catalogue cards' prices, and a backup per active user. On Sunday mornings it also runs the full catalogue sync. Admins can start a catalogue sync or a price refresh from Settings › Catalogue at any time.
+The Worker's nightly trigger starts at 3:00 am AEST: exchange rates, prices for every card someone owns or has in a binder, the next 1,000 catalogue cards' prices, and a backup per active user. On Sunday mornings it also runs the full catalogue sync. Admins can start a catalogue sync or a price refresh from Settings › Catalogue at any time.
+
+At 5:00 am AEST daily, `pokedex-supplemental-sync` imports missing McDonald's and MEP promo cards from TCGCSV and warms up to 60 missing card images. It skips the run if a full catalogue sync is still active. Artwork requests also try TCGCSV when TCGdex has no card or artwork and no linked product image can fill the gap. A match requires one set, printed number and card name; ambiguous products are skipped. Existing artwork and primary metadata are retained. When TCGdex adds a supplemental printing, its existing card ID and collection references are reused.
+
+To run the supplemental import immediately after deployment:
+
+```sh
+pnpm --dir apps/web exec wrangler workflows trigger pokedex-supplemental-sync \
+  --params '{}' --config wrangler.jsonc
+```

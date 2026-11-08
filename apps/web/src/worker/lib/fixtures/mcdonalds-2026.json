@@ -1,0 +1,362 @@
+[
+  {
+    "productId": 730416,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Decidueye",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730416_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "001/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Grass"
+      }
+    ]
+  },
+  {
+    "productId": 730417,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Chandelure",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730417_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "002/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Fire"
+      }
+    ]
+  },
+  {
+    "productId": 730418,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Palafin",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730418_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "003/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Water"
+      }
+    ]
+  },
+  {
+    "productId": 730419,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Pikachu",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730419_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "004/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Lightning"
+      }
+    ]
+  },
+  {
+    "productId": 730420,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Mimikyu",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730420_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "005/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Psychic"
+      }
+    ]
+  },
+  {
+    "productId": 730421,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Lucario",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730421_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "006/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Fighting"
+      }
+    ]
+  },
+  {
+    "productId": 730422,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Hawlucha",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730422_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "007/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Fighting"
+      }
+    ]
+  },
+  {
+    "productId": 730423,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Tyranitar",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730423_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "008/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Dark"
+      }
+    ]
+  },
+  {
+    "productId": 730424,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Absol",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730424_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "009/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Darkness"
+      }
+    ]
+  },
+  {
+    "productId": 730426,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Zoroark",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730426_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "010/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Darkness"
+      }
+    ]
+  },
+  {
+    "productId": 730427,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Metagross",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730427_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "011/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Metal"
+      }
+    ]
+  },
+  {
+    "productId": 730429,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Jirachi",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730429_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "012/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Metal"
+      }
+    ]
+  },
+  {
+    "productId": 730430,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Eevee",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730430_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "013/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Colorless"
+      }
+    ]
+  },
+  {
+    "productId": 730431,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Snorlax",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730431_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "014/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Colorless"
+      }
+    ]
+  },
+  {
+    "productId": 730432,
+    "groupId": 24938,
+    "categoryId": 3,
+    "name": "Wooloo",
+    "imageUrl": "https://tcgplayer-cdn.tcgplayer.com/product/730432_200w.jpg",
+    "extendedData": [
+      {
+        "name": "Number",
+        "displayName": "Card Number",
+        "value": "015/015"
+      },
+      {
+        "name": "Rarity",
+        "displayName": "Rarity",
+        "value": "Promo"
+      },
+      {
+        "name": "Card Type",
+        "displayName": "Card Type",
+        "value": "Colorless"
+      }
+    ]
+  }
+]

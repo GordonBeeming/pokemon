@@ -1,7 +1,13 @@
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyAllMigrations, sqliteD1 } from './d1-test-helper';
-import { brisbaneDay, runNightlyJobs, runningCatalogueSync, type NightlyJobs } from './nightly';
+import {
+  brisbaneDay,
+  runNightlyJobs,
+  runSupplementalJob,
+  runningCatalogueSync,
+  type NightlyJobs,
+} from './nightly';
 
 const databases: DatabaseSync[] = [];
 afterEach(() => {
@@ -108,5 +114,19 @@ describe('runningCatalogueSync', () => {
     expect(raw.prepare("SELECT status FROM sync_runs WHERE id = 'sync_catalogue-a'").get()).toEqual(
       { status: 'failed' },
     );
+  });
+});
+
+describe('daily supplemental job', () => {
+  it('starts a dated daily run and skips it while the primary catalogue is running', async () => {
+    const started: string[] = [];
+    const jobs = {
+      now: SATURDAY_3AM_BRISBANE,
+      runningCatalogueSync: () => Promise.resolve(null as string | null),
+      startSupplemental: (id: string) => Promise.resolve(started.push(id)),
+    };
+    await runSupplementalJob(jobs);
+    await runSupplementalJob({ ...jobs, runningCatalogueSync: () => Promise.resolve('weekly') });
+    expect(started).toEqual(['supplemental-nightly-20261003']);
   });
 });

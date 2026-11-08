@@ -470,7 +470,7 @@ function physicalPrintingKey(card: {
   return [
     card.language,
     card.setName.toLocaleLowerCase('en'),
-    card.number,
+    card.number.replace(/^0+(?=\d)/u, ''),
     card.name.toLocaleLowerCase('en'),
   ].join('\u0000');
 }
@@ -528,7 +528,7 @@ export async function stageCatalogueCards(
          JOIN candidate
            ON card.language = json_extract(candidate.value, '$.language')
           AND lower(card.set_name) = lower(json_extract(candidate.value, '$.setName'))
-          AND card.number = json_extract(candidate.value, '$.number')
+          AND ltrim(card.number, '0') = ltrim(json_extract(candidate.value, '$.number'), '0')
           AND lower(card.name) = lower(json_extract(candidate.value, '$.name'))
          WHERE card.is_custom = 0
          UNION ALL
@@ -537,7 +537,7 @@ export async function stageCatalogueCards(
          JOIN candidate
            ON staged.language = json_extract(candidate.value, '$.language')
           AND lower(staged.set_name) = lower(json_extract(candidate.value, '$.setName'))
-          AND staged.number = json_extract(candidate.value, '$.number')
+          AND ltrim(staged.number, '0') = ltrim(json_extract(candidate.value, '$.number'), '0')
           AND lower(staged.name) = lower(json_extract(candidate.value, '$.name'))
          WHERE staged.run_id = ?2`,
       )
@@ -854,7 +854,7 @@ function artUrl(
   key: string | null,
   sourceProvider: string | null,
 ): string | null {
-  return key || sourceProvider === 'tcgdex'
+  return key || sourceProvider === 'tcgdex' || sourceProvider === 'tcgcsv'
     ? `/api/art/${encodeURIComponent(cardId)}/${variant}`
     : null;
 }
@@ -900,7 +900,7 @@ export async function listNationalPokedexCoverage(
            low.object_key AS low_key, high.object_key AS high_key,
            EXISTS (
              SELECT 1 FROM card_sources source
-             WHERE source.card_id = c.id AND source.provider = 'tcgdex' AND source.active = 1
+             WHERE source.card_id = c.id AND source.provider IN ('tcgdex','tcgcsv') AND source.active = 1
            ) AS has_tcgdex_source,
            ROW_NUMBER() OVER (
              PARTITION BY c.pokedex_number
@@ -921,7 +921,7 @@ export async function listNationalPokedexCoverage(
            low.object_key AS low_key, high.object_key AS high_key,
            EXISTS (
              SELECT 1 FROM card_sources source
-             WHERE source.card_id = card.id AND source.provider = 'tcgdex' AND source.active = 1
+             WHERE source.card_id = card.id AND source.provider IN ('tcgdex','tcgcsv') AND source.active = 1
            ) AS has_tcgdex_source
          FROM species_representatives choice
          JOIN catalogue_cards card ON card.id = choice.card_id
@@ -1244,7 +1244,7 @@ const cardSelect = `
   LEFT JOIN card_sources s ON s.rowid = (
     SELECT source.rowid FROM card_sources source
     WHERE source.card_id = c.id AND source.active = 1
-    ORDER BY source.imported_at DESC, source.provider, source.source_id
+    ORDER BY CASE WHEN source.provider='tcgdex' THEN 0 ELSE 1 END, source.imported_at DESC, source.provider, source.source_id
     LIMIT 1
   )
   LEFT JOIN collection_cards cc ON cc.card_id = c.id AND cc.owner_id = ?1

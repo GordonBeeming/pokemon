@@ -67,6 +67,22 @@ export async function runNightlyJobs(jobs: NightlyJobs): Promise<void> {
   }
 }
 
+export async function runSupplementalJob(jobs: {
+  now: Date;
+  runningCatalogueSync: () => Promise<string | null>;
+  startSupplemental: (id: string) => Promise<unknown>;
+}): Promise<void> {
+  const running = await jobs.runningCatalogueSync();
+  if (running) {
+    logInfo({ evt: 'nightly.supplemental_skipped', runningWorkflowId: running });
+    return;
+  }
+  const { date } = brisbaneDay(jobs.now);
+  await start('supplemental', `supplemental-nightly-${date}`, () =>
+    jobs.startSupplemental(`supplemental-nightly-${date}`),
+  );
+}
+
 /**
  * A catalogue sync row stays 'running' if its workflow errored or was terminated,
  * because only the workflow's own completion step closes it. Such a run is marked

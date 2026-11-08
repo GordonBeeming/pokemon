@@ -9,12 +9,13 @@ import { ApplicationError, describeError, logError, logInfo } from './lib/log';
 import { applySecurityHeaders } from './lib/security-headers';
 import { latestFullEnglishCatalogueSync } from './lib/catalogue';
 import { signedBackupWorkflowId } from './lib/backup';
-import { runNightlyJobs, runningCatalogueSync } from './lib/nightly';
+import { runNightlyJobs, runSupplementalJob, runningCatalogueSync } from './lib/nightly';
 import type { AuthVars } from './lib/types';
 export { BackupWorkflow } from './workflows/backup';
 export { CatalogueFetcher, CatalogueSyncWorkflow } from './workflows/catalogue';
 export { FxSyncWorkflow } from './workflows/fx';
 export { PriceSyncWorkflow } from './workflows/pricing';
+export { SupplementalSyncWorkflow } from './workflows/supplemental';
 
 export class AuthCoordinator extends DurableObject<CloudflareEnv> {
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
@@ -252,6 +253,22 @@ function scheduled(
   env: CloudflareEnv,
   ctx: ExecutionContext,
 ): void {
+  if (controller.cron === '0 19 * * *') {
+    ctx.waitUntil(
+      runSupplementalJob({
+        now: new Date(controller.scheduledTime),
+        startSupplemental: (id) => env.SUPPLEMENTAL_SYNC.create({ id, params: {} }),
+        runningCatalogueSync: () =>
+          runningCatalogueSync(
+            env.DB,
+            async (id) => (await (await env.CATALOGUE_SYNC.get(id)).status()).status,
+          ),
+      }).catch((error: unknown) =>
+        logError({ evt: 'nightly.supplemental_start_failed', err: describeError(error) }),
+      ),
+    );
+    return;
+  }
   ctx.waitUntil(
     runNightlyJobs({
       db: env.DB,

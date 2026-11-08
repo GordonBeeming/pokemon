@@ -1,6 +1,7 @@
 import { createHash, type Hash } from 'node:crypto';
 import { nowSeconds } from './db';
 import { tcgdexArtImageBase, tcgplayerProductId } from './tcgdex-art-image';
+import { supplementalArtUrl } from './tcgcsv';
 import { ApplicationError, describeError, logWarn } from './log';
 
 const MAX_ART_BYTES = 15 * 1024 * 1024;
@@ -567,9 +568,33 @@ export async function getArtResponse(
     .prepare('SELECT object_key FROM art_manifest WHERE card_id = ?1 AND variant = ?2')
     .bind(cardId, variant)
     .first<{ object_key: string }>();
+  let fallbackAllowed = false;
   if (!manifest) {
     const cached = await cacheTcgdexArt(db, art, cardId, variant);
-    if (cached) manifest = { object_key: cached };
+    if (cached.state === 'cached') manifest = { object_key: cached.objectKey };
+    fallbackAllowed = cached.state === 'missing';
+  }
+  if (!manifest && fallbackAllowed) {
+    try {
+      const url = await supplementalArtUrl(db, art, cardId);
+      if (url) {
+        const bytes = await fetchImageBytes(url, { accept: 'image/jpeg' });
+        if (bytes && isJpeg(bytes))
+          manifest = {
+            object_key: await storeCachedArt(
+              db,
+              art,
+              cardId,
+              variant,
+              bytes,
+              'image/jpeg',
+              tcgplayerArtObjectKey,
+            ),
+          };
+      }
+    } catch (error) {
+      logWarn({ evt: 'art.tcgcsv_failed', cardId, variant, err: describeError(error) });
+    }
   }
   if (!manifest) return null;
   const rangeHeader = request.headers.get('range');
@@ -599,10 +624,41 @@ async function fetchImageBytes(
   url: string,
   headers: Record<string, string>,
 ): Promise<Uint8Array<ArrayBuffer> | null> {
-  const response = await fetch(url, { headers, signal: AbortSignal.timeout(30_000) });
+  const response = await fetch(url, {
+    headers,
+    signal: AbortSignal.timeout(30_000),
+    redirect: 'error',
+  });
   const declared = Number(response.headers.get('content-length') ?? 0);
-  if (!response.ok || declared > MAX_ART_BYTES) return null;
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (!response.ok && response.status !== 404 && response.status !== 410) {
+    await response.body?.cancel();
+    throw new Error(`art_provider_unavailable_${response.status}`);
+  }
+  if (!response.ok || declared > MAX_ART_BYTES || !response.body) {
+    await response.body?.cancel();
+    return null;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) break;
+      size += result.value.byteLength;
+      if (size > MAX_ART_BYTES) return null;
+      chunks.push(result.value);
+    }
+  } finally {
+    await reader.cancel();
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
   return bytes.byteLength > 0 && bytes.byteLength <= MAX_ART_BYTES ? bytes : null;
 }
 
@@ -637,7 +693,7 @@ async function cacheTcgdexArt(
   art: R2Bucket,
   cardId: string,
   variant: ArtVariant,
-): Promise<string | null> {
+): Promise<{ state: 'cached'; objectKey: string } | { state: 'missing' | 'unavailable' }> {
   const source = await db
     .prepare(
       `SELECT source_id, language FROM card_sources
@@ -646,13 +702,19 @@ async function cacheTcgdexArt(
     )
     .bind(cardId)
     .first<{ source_id: string; language: string }>();
-  if (!source || !/^[a-z]{2}(?:-[a-z]{2})?$/u.test(source.language)) return null;
+  if (!source) return { state: 'missing' };
+  if (!/^[a-z]{2}(?:-[a-z]{2})?$/u.test(source.language)) return { state: 'unavailable' };
   try {
     const detail = await fetch(
       `https://api.tcgdex.net/v2/${encodeURIComponent(source.language)}/cards/${encodeURIComponent(source.source_id)}`,
       { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(30_000) },
     );
-    if (!detail.ok) return null;
+    if (!detail.ok) {
+      await detail.body?.cancel();
+      if (detail.status !== 404 && detail.status !== 410)
+        logWarn({ evt: 'art.tcgdex_unavailable', cardId, variant, status: detail.status });
+      return { state: detail.status === 404 || detail.status === 410 ? 'missing' : 'unavailable' };
+    }
     const payload: unknown = await detail.json();
     const imageBase = tcgdexArtImageBase(payload, source.source_id, source.language);
     if (imageBase) {
@@ -660,7 +722,18 @@ async function cacheTcgdexArt(
         accept: 'image/webp',
       });
       if (bytes && isWebp(bytes))
-        return storeCachedArt(db, art, cardId, variant, bytes, 'image/webp', artObjectKey);
+        return {
+          state: 'cached',
+          objectKey: await storeCachedArt(
+            db,
+            art,
+            cardId,
+            variant,
+            bytes,
+            'image/webp',
+            artObjectKey,
+          ),
+        };
     }
     // TCGdex has no image of its own for this printing (a real gap, not just
     // a network failure) - fall back to the TCGplayer product image TCGdex's
@@ -672,9 +745,20 @@ async function cacheTcgdexArt(
         { accept: 'image/jpeg' },
       );
       if (bytes && isJpeg(bytes))
-        return storeCachedArt(db, art, cardId, variant, bytes, 'image/jpeg', tcgplayerArtObjectKey);
+        return {
+          state: 'cached',
+          objectKey: await storeCachedArt(
+            db,
+            art,
+            cardId,
+            variant,
+            bytes,
+            'image/jpeg',
+            tcgplayerArtObjectKey,
+          ),
+        };
     }
-    return null;
+    return { state: 'missing' };
   } catch (error) {
     logWarn({
       evt: 'art.tcgdex_cache_failed',
@@ -682,7 +766,7 @@ async function cacheTcgdexArt(
       variant,
       err: describeError(error),
     });
-    return null;
+    return { state: 'unavailable' };
   }
 }
 
