@@ -3,8 +3,111 @@ import { useOverlayAction } from '../../../ui/overlay';
 import { SegmentedControl } from '../../../ui/SegmentedControl';
 import { Stepper } from '../../../ui/Stepper';
 import { Panel } from './Panel';
+import type { BinderPageRemovalMode } from '@pokedex/shared';
 
 export const MAX_BLANK_PAGES = 20;
+
+export function RemovePagePanel({
+  pageIndex,
+  pageCount,
+  pocketCount,
+  placeholderCount,
+  placedCount,
+  pending,
+  error,
+  onRemove,
+  onClose,
+}: {
+  pageIndex: number;
+  pageCount: number;
+  pocketCount: number;
+  placeholderCount: number;
+  placedCount: number;
+  pending: boolean;
+  error: string | null;
+  onRemove: (mode: BinderPageRemovalMode) => Promise<boolean>;
+  onClose: () => void;
+}): ReactElement {
+  const [mode, setMode] = useState<BinderPageRemovalMode>(
+    placeholderCount > 0 ? 'clear-placeholders' : 'delete-page',
+  );
+  const action = useOverlayAction();
+  const busy = pending || action.pending;
+  const blocked = mode === 'delete-page' ? pageCount <= 1 : placeholderCount === 0;
+  return (
+    <Panel title={`Remove from page ${pageIndex + 1}`} onClose={onClose}>
+      <form
+        className="panel-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!busy && !blocked) void action.run(() => onRemove(mode));
+        }}
+      >
+        {error ? (
+          <p role="alert" className="panel-error">
+            {error}
+          </p>
+        ) : null}
+        <SegmentedControl<BinderPageRemovalMode>
+          label="What to remove"
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: 'clear-placeholders', label: 'Clear placeholders' },
+            { value: 'delete-page', label: 'Remove entire page' },
+          ]}
+        />
+        {mode === 'delete-page' ? (
+          <>
+            <p className="panel-help">
+              Remove page {pageIndex + 1} and its {pocketCount} pockets, including all targets and
+              bookmarks on this page. Later pages move forward.
+            </p>
+            {placedCount > 0 ? (
+              <p className="panel-help">
+                {placedCount} placed {placedCount === 1 ? 'card will' : 'cards will'} become
+                unplaced. Your owned quantities stay the same.
+              </p>
+            ) : null}
+            {pageCount <= 1 ? (
+              <p className="panel-error">
+                A binder must keep at least one page. You can clear its placeholders instead.
+              </p>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <p className="panel-help">
+              Clear {placeholderCount} unfilled{' '}
+              {placeholderCount === 1 ? 'placeholder' : 'placeholders'} on this page. Keep the page,
+              its pockets and bookmarks, reserved pockets, and all placed cards in their current
+              positions.
+            </p>
+            {placeholderCount === 0 ? (
+              <p className="panel-help">There are no unfilled placeholders on this page.</p>
+            ) : null}
+          </>
+        )}
+        <div className="panel-actions">
+          <button
+            type="submit"
+            className={mode === 'delete-page' ? 'button-danger' : 'button-primary'}
+            disabled={busy || blocked}
+          >
+            {busy
+              ? 'Removing…'
+              : mode === 'delete-page'
+                ? `Remove page and ${pocketCount} pockets`
+                : `Clear ${placeholderCount} placeholders`}
+          </button>
+          <button type="button" className="button-text" disabled={busy} onClick={onClose}>
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Panel>
+  );
+}
 
 type Side = 'before' | 'after';
 

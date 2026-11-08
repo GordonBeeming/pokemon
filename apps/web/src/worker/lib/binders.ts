@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  type BinderPageRemovalMode,
   type BinderAssignmentCandidate,
   binderAssignmentCandidatesSchema,
   type BinderBookmark,
@@ -1365,6 +1366,7 @@ export async function deleteBinderPage(
   versionId: string,
   pageId: string,
   requestedRevision?: number,
+  mode?: BinderPageRemovalMode,
 ): Promise<BinderMutationResult> {
   const version = await readVersion(db, ownerId, versionId);
   requireEditable(version);
@@ -1372,6 +1374,20 @@ export async function deleteBinderPage(
   const pages = await listPageRows(db, versionId);
   const page = pages.find((item) => item.id === pageId);
   if (!page) domainError('binder_page_not_found');
+  if (mode === 'clear-placeholders') {
+    await runVersionBatch(db, ownerId, versionId, version.revision, false, [
+      db
+        .prepare(
+          `UPDATE binder_slots SET entry_kind='empty',card_id=NULL,pokemon_number=NULL,
+        set_id=NULL,set_language=NULL,group_kind=NULL,group_key=NULL,energy_group=NULL,label=NULL,
+        starts_new_page=0,is_manual_gap=1
+        WHERE binder_page_id=?1 AND assigned_card_id IS NULL AND ${ASSIGNABLE_SQL}`,
+        )
+        .bind(pageId),
+      ...revisionStatements(db, version, nowSeconds()),
+    ]);
+    return mutationResult(db, ownerId, versionId, [page.position]);
+  }
   if (pages.length <= 1) domainError('binder_last_page');
   const deletedSlots = await db
     .prepare('SELECT COUNT(*) AS count FROM binder_slots WHERE binder_page_id = ?1')
@@ -1383,15 +1399,19 @@ export async function deleteBinderPage(
   const offset = pages.length + 1;
   const now = nowSeconds();
   await runVersionBatch(db, ownerId, versionId, version.revision, false, [
-    db
-      .prepare(
-        `SELECT CASE WHEN NOT EXISTS (
+    ...(mode === 'delete-page'
+      ? []
+      : [
+          db
+            .prepare(
+              `SELECT CASE WHEN NOT EXISTS (
           SELECT 1 FROM binder_pages target LEFT JOIN binder_slots slot ON slot.binder_page_id = target.id
           WHERE target.id = ?1 AND (target.kind = 'reserved' OR slot.entry_kind <> 'empty'
             OR slot.assigned_card_id IS NOT NULL OR slot.starts_new_page = 1)
          ) THEN 1 ELSE json_extract('binder_shrink_occupied', '$') END AS valid`,
-      )
-      .bind(pageId),
+            )
+            .bind(pageId),
+        ]),
     db.prepare('DELETE FROM binder_pages WHERE id = ?1').bind(pageId),
     db
       .prepare('UPDATE binder_pages SET position = position + ?1 WHERE binder_version_id = ?2')

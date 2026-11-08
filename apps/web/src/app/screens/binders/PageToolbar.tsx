@@ -262,9 +262,9 @@ function pageActions(
     },
     { label: 'Arrange targets', disabled, run: actions.onArrange },
     {
-      label: 'Remove this page',
+      label: 'Remove page or placeholders…',
       danger: true,
-      disabled: disabled || !actions.canRemove || pageCount <= 1,
+      disabled: disabled || !actions.canRemove,
       run: actions.onRemovePage,
     },
   ];

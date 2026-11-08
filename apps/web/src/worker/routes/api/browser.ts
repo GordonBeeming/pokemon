@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import {
   binderDisplayPatchRequestSchema,
+  binderPageRemovalRequestSchema,
   binderPasteRequestSchema,
   binderSearchQuerySchema,
   cardPlaceRequestSchema,
@@ -1135,7 +1136,7 @@ browserApiRoutes.post('/binders/versions/:id/pages', async (c) => {
 });
 browserApiRoutes.delete('/binders/versions/:id/pages/:pageId', async (c) => {
   try {
-    const parsed = binderRevisionRequestSchema.safeParse(await parsedJson(c.req.raw));
+    const parsed = binderPageRemovalRequestSchema.safeParse(await parsedJson(c.req.raw));
     if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
     return c.json({
       ok: true,
@@ -1143,6 +1144,7 @@ browserApiRoutes.delete('/binders/versions/:id/pages/:pageId', async (c) => {
         c.req.param('id'),
         c.req.param('pageId'),
         parsed.data.expectedRevision,
+        parsed.data.mode,
       ),
     });
   } catch (error) {

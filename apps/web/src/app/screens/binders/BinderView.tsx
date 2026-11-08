@@ -50,6 +50,7 @@ import {
   bookmarkDefaultName,
   cardIdsOnPages,
   frameCardFrom,
+  isTarget,
   parseSlotId,
   placedStatus,
   pocketState,
@@ -70,7 +71,12 @@ import { ChangeTargetPanel } from './panels/ChangeTargetPanel';
 import { InsertPanel } from './panels/InsertPanel';
 import { PageFillPanel } from './panels/PageFillPanel';
 import { FindCardsPanelContainer, ManagePanelContainer } from './panels/containers';
-import { InsertPagesPanel, MovePagePanel, movedPageOrder } from './panels/PagePanels';
+import {
+  InsertPagesPanel,
+  MovePagePanel,
+  RemovePagePanel,
+  movedPageOrder,
+} from './panels/PagePanels';
 import { PastePanel } from './panels/PastePanel';
 import {
   BookmarkPanel,
@@ -107,6 +113,7 @@ type PanelKind =
   | 'page-fill'
   | 'insert-pages'
   | 'move-page'
+  | 'remove-page'
   | 'manage'
   | 'discard'
   | 'delete';
@@ -806,10 +813,7 @@ export function BinderView({
       : undefined;
   const reservedPage = currentPage?.kind === 'reserved';
   const pageBookmarkName = !reservedPage ? (currentPage?.label ?? '') : '';
-  const pageRemovable =
-    currentPage !== undefined &&
-    currentPage.kind !== 'reserved' &&
-    currentPage.slots.every((slot) => pocketState(slot) === 'empty' && !slot.startsNewPage);
+  const pageRemovable = currentPage !== undefined;
 
   const pageEmptyPockets =
     currentPage?.slots.filter((slot) => pocketState(slot) === 'empty').length ?? 0;
@@ -887,14 +891,7 @@ export function BinderView({
     onEarlier: () => reorder(-1),
     onLater: () => reorder(1),
     onArrange: () => setPanel('manage'),
-    onRemovePage: () => {
-      if (versionId && currentPage)
-        void run(
-          'Page removed.',
-          (revision) => binderApi.deletePage(versionId, currentPage.id, revision),
-          null,
-        );
-    },
+    onRemovePage: () => setPanel('remove-page'),
   };
 
   const displayControls = (
@@ -1609,6 +1606,27 @@ export function BinderView({
           error={writer.error}
           onMove={(to) => movePageTo(to)}
           onClose={closePanel}
+        />
+      ) : null}
+      {panel === 'remove-page' && versionId && currentPage ? (
+        <RemovePagePanel
+          pageIndex={pageIndex}
+          pageCount={pageCount}
+          pocketCount={currentPage.slots.length}
+          placeholderCount={
+            currentPage.slots.filter((s) => isTarget(s) && !s.assignedCardId).length
+          }
+          placedCount={currentPage.slots.filter((s) => Boolean(s.assignedCardId)).length}
+          pending={pending}
+          error={writer.error}
+          onClose={closePanel}
+          onRemove={(mode) =>
+            write({
+              label: mode === 'delete-page' ? 'Page removed.' : 'Unfilled placeholders cleared.',
+              run: (revision) => binderApi.deletePage(versionId, currentPage.id, revision, mode),
+              focusAt: null,
+            })
+          }
         />
       ) : null}
       {panel === 'manage' && version && versionId ? (

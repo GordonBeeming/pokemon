@@ -1,4 +1,5 @@
 import type {
+  BinderPageRemovalMode,
   BinderBookmarkSetRequest,
   BinderLayout,
   BinderCopyChoice,
@@ -219,8 +220,12 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       insertBlankBinderPages(env.DB, ownerId, versionId, beforePosition, count, expectedRevision),
     addBinderPage: (versionId: string, expectedRevision: number) =>
       addBinderPage(env.DB, ownerId, versionId, expectedRevision),
-    deleteBinderPage: (versionId: string, pageId: string, expectedRevision: number) =>
-      deleteBinderPage(env.DB, ownerId, versionId, pageId, expectedRevision),
+    deleteBinderPage: (
+      versionId: string,
+      pageId: string,
+      expectedRevision: number,
+      mode?: BinderPageRemovalMode,
+    ) => deleteBinderPage(env.DB, ownerId, versionId, pageId, expectedRevision, mode),
     reorderBinderPages: (versionId: string, pageIds: string[], expectedRevision: number) =>
       reorderBinderPages(env.DB, ownerId, versionId, pageIds, expectedRevision),
     setBinderSlot(

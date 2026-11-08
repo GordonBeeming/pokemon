@@ -385,6 +385,11 @@ export const binderRevisionRequestSchema = z
   .object({ expectedRevision: z.number().int().positive() })
   .strict();
 export type BinderRevisionRequest = z.infer<typeof binderRevisionRequestSchema>;
+export const binderPageRemovalModeSchema = z.enum(['delete-page', 'clear-placeholders']);
+export type BinderPageRemovalMode = z.infer<typeof binderPageRemovalModeSchema>;
+export const binderPageRemovalRequestSchema = binderRevisionRequestSchema
+  .extend({ mode: binderPageRemovalModeSchema.optional() })
+  .strict();
 
 export const binderSlotLocationSchema = z
   .object({

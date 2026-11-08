@@ -1,4 +1,5 @@
 import {
+  type BinderPageRemovalMode,
   type BinderDisplayPatchRequest,
   binderAssignmentCandidateSchema,
   binderBookmarkSchema,
@@ -516,8 +517,13 @@ export const binderApi = {
   ) => mutate(versionId, '/pages/insert', 'POST', { beforePosition, count, expectedRevision }),
   addPage: (versionId: string, expectedRevision: number) =>
     mutate(versionId, '/pages', 'POST', { expectedRevision }),
-  deletePage: (versionId: string, pageId: string, expectedRevision: number) =>
-    mutate(versionId, `/pages/${encodeURIComponent(pageId)}`, 'DELETE', { expectedRevision }),
+  deletePage: (
+    versionId: string,
+    pageId: string,
+    expectedRevision: number,
+    mode?: BinderPageRemovalMode,
+  ) =>
+    mutate(versionId, `/pages/${encodeURIComponent(pageId)}`, 'DELETE', { expectedRevision, mode }),
   arrange: (versionId: string, mode: ArrangeMode, expectedRevision: number) =>
     mutate(versionId, '/arrange', 'POST', { mode, expectedRevision }),
   resize: (versionId: string, capacity: number, expectedRevision: number) =>
