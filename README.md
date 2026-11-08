@@ -67,7 +67,7 @@ The production Worker exposes catalogue, pricing, FX, and backup Workflows. Star
 
 ```sh
 pnpm --dir apps/web exec wrangler workflows trigger pokedex-catalogue-sync \
-  --params '{"language":"en"}' --config wrangler.jsonc
+  '{"language":"en"}' --config wrangler.jsonc
 ```
 
 Monitor it with:
@@ -85,5 +85,5 @@ To run the supplemental import immediately after deployment:
 
 ```sh
 pnpm --dir apps/web exec wrangler workflows trigger pokedex-supplemental-sync \
-  --params '{}' --config wrangler.jsonc
+  '{}' --config wrangler.jsonc
 ```
