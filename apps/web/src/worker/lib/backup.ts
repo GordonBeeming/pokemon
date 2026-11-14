@@ -1023,13 +1023,16 @@ export async function restoreBackup(
            ON CONFLICT(id) DO NOTHING`,
           )
           .bind(restoreRunId, ownerId),
-        // A custom card with no owner is only ever the leftover of a restore
-        // that predates ownership; the user whose backup holds it takes it
-        // back rather than leaving it visible to everyone.
+        // Legacy ownerless custom cards are claimed by the restoring user.
+        // Curated fan-art printings stay shared across account restores.
         db
           .prepare(
             `UPDATE catalogue_cards SET owner_id = ?2
-             WHERE is_custom = 1 AND owner_id IS NULL AND id IN (
+             WHERE is_custom = 1 AND owner_id IS NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM card_sources source WHERE source.card_id = catalogue_cards.id
+                 AND source.provider = 'fan-art' AND source.active = 1
+             ) AND id IN (
                SELECT json_extract(j.value,'$.id') FROM ${jsonRows}
                AND c.kind='catalogue' AND json_extract(j.value,'$.is_custom') = 1
              )`,

@@ -608,6 +608,40 @@ describe('backup restore', () => {
 });
 
 describe('backups keep custom cards with their owner', () => {
+  it.each(['before', 'after'])(
+    'does not privatise shared fan art when restoring a backup taken %s publication',
+    async (timing) => {
+      const { database, db, art } = setup();
+      await seedReferencedArt(art);
+      database.exec(`
+      UPDATE catalogue_cards SET owner_id = 'owner' WHERE id = 'custom-a';
+      INSERT INTO collection_cards (owner_id,card_id,quantity,notes,revision,updated_at)
+      VALUES ('owner','custom-a',1,'My copy',1,1);
+    `);
+      const publish = () =>
+        database.exec(`
+      UPDATE catalogue_cards SET owner_id = NULL WHERE id = 'custom-a';
+      INSERT INTO card_sources
+        (provider,source_id,card_id,language,source_updated_at,checksum,active,imported_at)
+      VALUES ('fan-art','custom-a','custom-a','en',1,'${'c'.repeat(64)}',1,1);
+    `);
+      if (timing === 'after') publish();
+      const backup = await createBackup(db, art, 'owner', { backupId: 'backup_shared_fan_art' });
+      if (timing === 'before') publish();
+      await restoreBackup(db, art, 'owner', backup.id);
+      expect(
+        database
+          .prepare('SELECT owner_id,is_custom FROM catalogue_cards WHERE id=?')
+          .get('custom-a'),
+      ).toEqual({ owner_id: null, is_custom: 1 });
+      expect(
+        database
+          .prepare('SELECT quantity,notes FROM collection_cards WHERE owner_id=? AND card_id=?')
+          .get('owner', 'custom-a'),
+      ).toEqual({ quantity: 1, notes: 'My copy' });
+    },
+  );
+
   // setup()'s custom-a becomes 'owner's; 'other' gets a custom card of their
   // own, with a source and art, that 'owner' must never carry away.
   function twoUsers() {
