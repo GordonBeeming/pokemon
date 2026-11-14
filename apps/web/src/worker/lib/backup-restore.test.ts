@@ -608,6 +608,40 @@ describe('backup restore', () => {
 });
 
 describe('backups keep custom cards with their owner', () => {
+  it.each(['before', 'after'])(
+    'does not privatise shared fan art when restoring a backup taken %s publication',
+    async (timing) => {
+      const { database, db, art } = setup();
+      await seedReferencedArt(art);
+      database.exec(`
+      UPDATE catalogue_cards SET owner_id = 'owner' WHERE id = 'custom-a';
+      INSERT INTO collection_cards (owner_id,card_id,quantity,notes,revision,updated_at)
+      VALUES ('owner','custom-a',1,'My copy',1,1);
+    `);
+      const publish = () =>
+        database.exec(`
+      UPDATE catalogue_cards SET owner_id = NULL WHERE id = 'custom-a';
+      INSERT INTO card_sources
+        (provider,source_id,card_id,language,source_updated_at,checksum,active,imported_at)
+      VALUES ('fan-art','custom-a','custom-a','en',1,'${'c'.repeat(64)}',1,1);
+    `);
+      if (timing === 'after') publish();
+      const backup = await createBackup(db, art, 'owner', { backupId: 'backup_shared_fan_art' });
+      if (timing === 'before') publish();
+      await restoreBackup(db, art, 'owner', backup.id);
+      expect(
+        database
+          .prepare('SELECT owner_id,is_custom FROM catalogue_cards WHERE id=?')
+          .get('custom-a'),
+      ).toEqual({ owner_id: null, is_custom: 1 });
+      expect(
+        database
+          .prepare('SELECT quantity,notes FROM collection_cards WHERE owner_id=? AND card_id=?')
+          .get('owner', 'custom-a'),
+      ).toEqual({ quantity: 1, notes: 'My copy' });
+    },
+  );
+
   // setup()'s custom-a becomes 'owner's; 'other' gets a custom card of their
   // own, with a source and art, that 'owner' must never carry away.
   function twoUsers() {
@@ -672,7 +706,7 @@ describe('backups keep custom cards with their owner', () => {
     database: DatabaseSync,
     art: R2Bucket,
     backupId: string,
-    content: { catalogue?: unknown[]; collection?: unknown[] },
+    content: { catalogue?: unknown[]; collection?: unknown[]; sources?: unknown[] },
   ): Promise<void> {
     const body = JSON.stringify({
       version: 2,
@@ -680,7 +714,7 @@ describe('backups keep custom cards with their owner', () => {
       mutationEpoch: 0,
       createdAt: '2026-09-27T00:00:00.000Z',
       catalogue: content.catalogue ?? [],
-      sources: [],
+      sources: content.sources ?? [],
       collection: content.collection ?? [],
       binders: [],
       versions: [],
@@ -751,6 +785,79 @@ describe('backups keep custom cards with their owner', () => {
     await restoreBackup(db, art, 'owner', backup.id);
     expect(
       database.prepare('SELECT owner_id FROM catalogue_cards WHERE id = ?').get('custom-a'),
+    ).toEqual({ owner_id: 'owner' });
+  });
+
+  it('recreates a missing published printing as shared for both accounts', async () => {
+    const { database, db, art } = twoUsers();
+    await seedAllArt(art);
+    database.exec(`
+      UPDATE catalogue_cards SET owner_id = NULL WHERE id = 'custom-a';
+      INSERT INTO card_sources
+        (provider,source_id,card_id,language,source_updated_at,checksum,active,imported_at)
+      VALUES ('fan-art','custom-a','custom-a','en',1,'${'c'.repeat(64)}',1,1);
+      INSERT INTO collection_cards (owner_id,card_id,quantity,revision,updated_at)
+      VALUES ('other','custom-a',3,1,1);
+    `);
+    const parentBackup = await createBackup(db, art, 'owner', {
+      backupId: 'backup_missing_shared',
+    });
+    const otherBackup = await createBackup(db, art, 'other', { backupId: 'backup_other_shared' });
+    database.exec(`
+      DELETE FROM collection_cards WHERE card_id = 'custom-a';
+      DELETE FROM art_manifest WHERE card_id = 'custom-a';
+      DELETE FROM catalogue_search WHERE card_id = 'custom-a';
+      DELETE FROM card_sources WHERE card_id = 'custom-a';
+      DELETE FROM catalogue_cards WHERE id = 'custom-a';
+    `);
+    await restoreBackup(db, art, 'owner', parentBackup.id);
+    expect(
+      database.prepare('SELECT owner_id FROM catalogue_cards WHERE id=?').get('custom-a'),
+    ).toEqual({ owner_id: null });
+    await restoreBackup(db, art, 'other', otherBackup.id);
+    expect(
+      database.prepare('SELECT owner_id FROM catalogue_cards WHERE id=?').get('custom-a'),
+    ).toEqual({ owner_id: null });
+    expect(
+      database
+        .prepare('SELECT owner_id,quantity FROM collection_cards WHERE card_id=? ORDER BY owner_id')
+        .all('custom-a'),
+    ).toEqual([
+      { owner_id: 'other', quantity: 3 },
+      { owner_id: 'owner', quantity: 1 },
+    ]);
+  });
+
+  it('keeps a legacy custom card private even if its backup claims a fan-art source', async () => {
+    const { database, db, art } = twoUsers();
+    await seedAllArt(art);
+    const backup = await createBackup(db, art, 'owner', {
+      backupId: 'backup_legacy_source_template',
+    });
+    const rows = await backedUpRows(art, 'owner', backup.id);
+    const template = rows.catalogue?.find((row) => row.id === 'custom-a');
+    if (!template) throw new Error('Missing custom-card backup fixture');
+    await legacyBackup(database, art, 'backup_legacy_source', {
+      catalogue: [{ ...template, id: 'legacy-fan-art', owner_id: null }],
+      sources: [
+        {
+          provider: 'fan-art',
+          source_id: 'legacy-fan-art',
+          card_id: 'legacy-fan-art',
+          language: 'en',
+          source_updated_at: 1,
+          checksum: 'a'.repeat(64),
+          active: 1,
+          imported_at: 1,
+        },
+      ],
+      collection: [
+        { card_id: 'legacy-fan-art', quantity: 1, notes: null, revision: 1, updated_at: 1 },
+      ],
+    });
+    await restoreBackup(db, art, 'owner', 'backup_legacy_source');
+    expect(
+      database.prepare('SELECT owner_id FROM catalogue_cards WHERE id=?').get('legacy-fan-art'),
     ).toEqual({ owner_id: 'owner' });
   });
 

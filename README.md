@@ -22,6 +22,8 @@ Card artwork requires an explicit display context. Binder pockets show full-opac
 
 ### Backfill missing artwork
 
+For custom cards outside TCGdex, follow [Adding unofficial fan-art cards](docs/unofficial-fan-art.md). It covers labels, source images, authenticated creation, artwork uploads, and credential cleanup.
+
 `pnpm --dir apps/web art:backfill --out /absolute/run-directory` inventories all active English TCGdex-backed cards missing either artwork size and prepares verified source images without uploading them. It requires authenticated Wrangler access, `ffprobe`, and `cwebp`. Add `--source mfb-25,2021swsh-17` or `--limit 10` for a small trial.
 
 For uploads, add `--apply` and inject `POKEDEX_ART_TOKEN` through `op run` using a temporary `art:read`/`art:write` credential. Revoke it after the run. The importer tries TCGdex, product-linked TCGplayer images, the published Pokémon TCG dataset, and TCGCSV metadata. It requires an unambiguous set/card match, caches TCGCSV metadata daily, and never replaces existing artwork. Uploaded WebP bytes are read back and checksum-verified. Re-running inventories only remaining gaps.
