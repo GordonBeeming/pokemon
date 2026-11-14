@@ -71,6 +71,7 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
     (patch: Partial<CatalogueSearch>, resetPage = true) => {
       void navigate({
         search: (prev) => ({ ...prev, ...patch, page: resetPage ? 1 : (patch.page ?? prev.page) }),
+        resetScroll: !('card' in patch),
       });
     },
     [navigate],

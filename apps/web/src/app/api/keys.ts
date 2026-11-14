@@ -1,12 +1,12 @@
 import type { CatalogueSearch } from '../routes/search-params';
 
-// One factory, keyed by the same route params the URL carries, so a screen's query
-// key and its search params never drift apart.
+// Cache server data by its route filters; opening an inspector does not change
+// the gallery's search results.
 export const queryKeys = {
   session: () => ['session'] as const,
   catalogue: {
     search: (filters: CatalogueSearch, page: number) =>
-      ['catalogue', 'search', filters, page] as const,
+      ['catalogue', 'search', { ...filters, card: undefined }, page] as const,
     card: (cardId: string) => ['catalogue', 'card', cardId] as const,
     binderMatches: (cardId: string) => ['catalogue', 'card', cardId, 'binder-matches'] as const,
     // Under 'search' so collection writes patch these the same way as catalogue pages.
