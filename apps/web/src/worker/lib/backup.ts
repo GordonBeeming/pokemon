@@ -927,6 +927,18 @@ async function stageManifestRestore(
 const jsonRows =
   'backup_restore_chunks c, json_each(c.payload_json) j WHERE c.run_id = ?1 AND c.owner_id = ?2';
 
+const sharedFanArtInBackupSql = `COALESCE(json_type(j.value,'$.owner_id'), '') = 'null'
+  AND json_extract(j.value,'$.is_custom') = 1
+  AND EXISTS (
+    SELECT 1 FROM backup_restore_chunks source_chunk, json_each(source_chunk.payload_json) source_row
+    WHERE source_chunk.run_id = ?1 AND source_chunk.owner_id = ?2 AND source_chunk.kind = 'sources'
+      AND json_extract(source_row.value,'$.provider') = 'fan-art'
+      AND json_extract(source_row.value,'$.active') = 1
+      AND json_extract(source_row.value,'$.card_id') = json_extract(j.value,'$.id')
+      AND json_extract(source_row.value,'$.source_id') = json_extract(j.value,'$.id')
+      AND json_extract(source_row.value,'$.language') = json_extract(j.value,'$.language')
+  )`;
+
 // Any staged row that names a card another user owns: restoring it would put
 // that user's private card into this owner's collection, binders or art.
 const foreignCardReferenceSql = `SELECT 1 FROM ${jsonRows}
@@ -993,6 +1005,10 @@ export async function restoreBackup(
       await restoreBackupArt(art, ownerId, backupId, legacy.data.artManifest);
       await stageRestore(db, restoreRunId, ownerId, legacy.data);
     }
+    // Owner-aware manifests and their source chunks have passed checksum checks.
+    // Legacy backups cannot establish that a missing custom card was published.
+    const sharedFanArtSql =
+      manifest.success && manifest.data.version >= 8 ? sharedFanArtInBackupSql : '0';
     await runStep('restore-finalize', async () => {
       // Checked up front only to give a typed error; the same check runs again
       // inside the batch, which is what actually keeps it atomic.
@@ -1019,7 +1035,7 @@ export async function restoreBackup(
           .prepare(
             `INSERT INTO catalogue_cards (id,name,language,category,set_id,set_name,number,supertype,subtype,species,rarity,artist,release_date,pokedex_number,number_sort,is_custom,is_active,created_at,updated_at,owner_id)
            SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.name'),json_extract(j.value,'$.language'),json_extract(j.value,'$.category'),json_extract(j.value,'$.set_id'),json_extract(j.value,'$.set_name'),json_extract(j.value,'$.number'),json_extract(j.value,'$.supertype'),json_extract(j.value,'$.subtype'),json_extract(j.value,'$.species'),json_extract(j.value,'$.rarity'),json_extract(j.value,'$.artist'),NULL,json_extract(j.value,'$.pokedex_number'),json_extract(j.value,'$.number_sort'),json_extract(j.value,'$.is_custom'),json_extract(j.value,'$.is_active'),json_extract(j.value,'$.created_at'),json_extract(j.value,'$.updated_at'),
-             CASE WHEN json_extract(j.value,'$.is_custom') = 1 THEN ?2 END FROM ${jsonRows} AND c.kind='catalogue'
+             CASE WHEN json_extract(j.value,'$.is_custom') = 1 AND NOT (${sharedFanArtSql}) THEN ?2 END FROM ${jsonRows} AND c.kind='catalogue'
            ON CONFLICT(id) DO NOTHING`,
           )
           .bind(restoreRunId, ownerId),
@@ -1035,6 +1051,7 @@ export async function restoreBackup(
              ) AND id IN (
                SELECT json_extract(j.value,'$.id') FROM ${jsonRows}
                AND c.kind='catalogue' AND json_extract(j.value,'$.is_custom') = 1
+               AND NOT (${sharedFanArtSql})
              )`,
           )
           .bind(restoreRunId, ownerId),

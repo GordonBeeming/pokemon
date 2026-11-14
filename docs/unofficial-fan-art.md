@@ -111,6 +111,8 @@ For each card and each variant (`high`, then `low`):
 3. `PUT` the raw WebP bytes to the returned `uploadPath`, with `content-type: image/webp` and `authorization: Bearer <ticket token>`. The ticket token is different from the uploader credential.
 4. Read `/api/art/<cardId>/<variant>` using the signed-in session. Hash the returned bytes and compare them with the local file's hash. A successful upload response alone is insufficient.
 
+When resuming an interrupted upload, `409 art_already_exists` means that variant already has artwork. Read it back and compare its SHA-256 with the local file. If they match, keep the existing art and continue with the remaining variants. If they differ, report the mismatch and stop; do not replace existing artwork to force a successful rerun.
+
 Browser's file chooser command failed in this run with `The click opened no file chooser`, even when targeting a file input. The working transfer used a local Python process to read each file, base64-encode it, and send chunks through the CLI. This avoids operating-system argument size limits:
 
 ```python
@@ -155,7 +157,7 @@ Custom-card creation has no sharing option. The catalogue, artwork, collection, 
 
 Use [global-fan-art.sql](../apps/web/repairs/global-fan-art.sql) for the two cards recorded below. It matches their exact IDs, names, set, language, and collector numbers, requires both artwork sizes, adds an active `fan-art` source using the high-resolution artwork checksum, and clears their catalogue owner. It leaves `is_custom = 1` so catalogue sync cannot retire them. A rerun leaves already-published rows unchanged.
 
-Deploy the backup restore guard in `apps/web/src/worker/lib/backup.ts` before applying the SQL to a shared environment. Without it, restoring a user backup can claim an ownerless custom card and make it private again. The guard preserves cards with an existing active `fan-art` source, including when the backup was taken before publication. Restoring a card absent from the target database still creates a private custom card; a backup restore cannot publish a new global printing.
+Deploy the backup restore guard in `apps/web/src/worker/lib/backup.ts` before applying the SQL to a shared environment. Without it, restoring a user backup can claim an ownerless custom card and make it private again. The guard preserves cards with an existing active `fan-art` source, including when the backup was taken before publication. A checksum-verified, owner-aware backup can also recreate a missing shared card when its catalogue row explicitly has no owner and its source chunk contains the matching active `fan-art` identity. Legacy backups and private custom cards remain account-owned.
 
 Apply changes in this order:
 
@@ -177,7 +179,7 @@ For future additions, prepare a separate reviewed SQL file matching the new card
 
 ## Cards added on 14 November 2026
 
-Both cards were added to the production catalogue under the signed-in account. Their owned quantities and binder assignments were left unchanged. The global-promotion SQL is prepared separately; its presence in the repo does not mean it has been applied.
+Both cards were added to the production catalogue, then published globally with the reviewed SQL after Gordon authorised publication. Production verification found two active accounts and two visible fan-art cards for each account, with both artwork sizes intact. Owned quantities and binder assignments were left unchanged. The temporary artwork uploader credential was revoked before publication.
 
 | Card                                 | Number  | Catalogue ID                                  |
 | ------------------------------------ | ------- | --------------------------------------------- |
