@@ -88,6 +88,82 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+describe('BinderView Move card', () => {
+  it('keeps the confirmation open and explains a conflicting unplacement', async () => {
+    const binder = server.binders[0];
+    const slot = binder?.pages[0]?.[0];
+    if (!binder || !slot) throw new Error('Missing binder fixture');
+    slot.assignedCardId = 'placed-card';
+    server.overrides.push((request) => {
+      if (request.method !== 'PUT' || !request.path.endsWith('/assignment')) return undefined;
+      slot.assignedCardId = null;
+      binder.revision += 1;
+      return { status: 409, body: { ok: false, error: 'binder_revision_conflict' } };
+    });
+    await mount();
+    await step(() => pocket('0:0:0').click());
+    const open = [...container.querySelectorAll('button')].find(
+      (el) => el.textContent?.trim() === 'Move card',
+    );
+    if (!open) throw new Error('Missing Move card action');
+    await step(() => open.click());
+    const confirm = [...document.querySelectorAll('button')].find(
+      (el) => el.textContent?.trim() === 'Move card',
+    );
+    if (!confirm) throw new Error('Missing confirmation');
+    await step(() => confirm.click());
+    await waitFor(
+      () => document.body.textContent?.includes('This card is no longer placed') === true,
+    );
+    expect(confirm.disabled).toBe(true);
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(slot).toMatchObject({ entryKind: 'pokemon', pokemonNumber: 1, assignedCardId: null });
+    expect(server.count('PUT', '/assignment')).toBe(1);
+    expect(server.count('PUT', '/slot')).toBe(0);
+  });
+
+  it('only clears the assignment after confirmation, preserving a set target', async () => {
+    const slot = server.binders[0]?.pages[0]?.[0];
+    if (!slot) throw new Error('Missing binder fixture');
+    Object.assign(slot, {
+      entryKind: 'set',
+      pokemonNumber: null,
+      setId: '30th',
+      setLanguage: 'en',
+      setName: '30th Celebration',
+      assignedCardId: 'placed-card',
+    });
+    await mount();
+    await step(() => pocket('0:0:0').click());
+    const move = [...container.querySelectorAll('button')].find(
+      (el) => el.textContent?.trim() === 'Move card',
+    );
+    if (!move) throw new Error('Missing Move card action');
+    await step(() => move.click());
+    expect(document.body.textContent).toContain('30th Celebration');
+    expect(document.body.textContent).toContain('without removing your owned copy');
+    expect(server.count('PUT', '/assignment')).toBe(0);
+    const confirm = [...document.querySelectorAll('button')].find(
+      (el) => el.textContent?.trim() === 'Move card',
+    );
+    if (!confirm) throw new Error('Missing confirmation');
+    await step(() => confirm.click());
+    await waitFor(() => server.count('PUT', '/assignment') === 1);
+    expect(server.requests.find((item) => item.path.endsWith('/assignment'))?.body).toEqual({
+      at: { page: 0, row: 0, column: 0 },
+      cardId: null,
+      expectedRevision: 3,
+    });
+    expect(slot).toMatchObject({ entryKind: 'set', setId: '30th', assignedCardId: null });
+    expect(
+      server.requests.some(
+        (item) => item.method !== 'GET' && item.path.startsWith('/api/collection'),
+      ),
+    ).toBe(false);
+    expect(server.count('PUT', '/slot')).toBe(0);
+  });
+});
+
 describe('BinderView move mode', () => {
   it('picks up with m, chooses with arrows, drops with Enter using the seen revision', async () => {
     await mount();

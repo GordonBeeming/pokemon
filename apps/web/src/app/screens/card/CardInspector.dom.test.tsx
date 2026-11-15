@@ -202,7 +202,7 @@ async function flushUntil(predicate: () => boolean, attempts = 50): Promise<void
   if (!predicate()) throw new Error('flushUntil: condition never became true');
 }
 
-describe('CardInspector — eBay sold listings', () => {
+describe('CardInspector — eBay buy and sold listings', () => {
   async function renderWithPrices(showPrices: boolean): Promise<void> {
     await step(() =>
       root.render(
@@ -218,24 +218,32 @@ describe('CardInspector — eBay sold listings', () => {
     await flushUntil(() => container.textContent?.includes('Pikachu') === true);
   }
 
-  it('links to eBay Australia sold listings for this card in a new tab', async () => {
+  it('shows compact Buy and Sold links with Australia-only filtering', async () => {
     await renderWithPrices(true);
 
-    const link = Array.from(container.querySelectorAll('a')).find((item) =>
-      item.textContent?.includes('eBay AU sold listings'),
-    );
-    expect(link?.target).toBe('_blank');
-    expect(link?.rel).toBe('noopener noreferrer');
-    const url = new URL(link?.href ?? '');
-    expect(url.hostname).toBe('www.ebay.com.au');
-    expect(url.searchParams.get('_nkw')).toBe('Pikachu 025 151 -psa -cgc -bgs');
-    expect(url.searchParams.get('LH_Sold')).toBe('1');
-    expect(link?.textContent).toContain('(opens in a new tab)');
+    const row = container.querySelector('.card-inspector-ebay-links');
+    const links = Array.from(row?.querySelectorAll('a') ?? []);
+    expect(row?.textContent).toContain('eBay AU');
+    expect(row?.getAttribute('role')).toBe('group');
+    expect(row?.getAttribute('aria-label')).toBe('eBay AU listings');
+    expect(links.map((link) => link.textContent)).toEqual(['Buy', 'Sold']);
+    for (const [index, link] of links.entries()) {
+      expect(link.target).toBe('_blank');
+      expect(link.rel).toBe('noopener noreferrer');
+      expect(link.getAttribute('aria-label')).toContain('(opens in a new tab)');
+      expect(link.getAttribute('aria-label')?.startsWith(index === 0 ? 'Buy' : 'Sold')).toBe(true);
+      const url = new URL(link.href);
+      expect(url.hostname).toBe('www.ebay.com.au');
+      expect(url.searchParams.get('_nkw')).toBe('Pikachu 025 151 -psa -cgc -bgs');
+      expect(url.searchParams.get('LH_PrefLoc')).toBe('1');
+      expect(url.searchParams.get('LH_Sold')).toBe(index === 1 ? '1' : null);
+      expect(url.searchParams.get('LH_Complete')).toBe(index === 1 ? '1' : null);
+    }
   });
 
-  it('hides the link for someone whose prices are hidden', async () => {
+  it('hides both links when prices are hidden', async () => {
     await renderWithPrices(false);
 
-    expect(container.textContent).not.toContain('eBay AU sold listings');
+    expect(container.querySelector('.card-inspector-ebay-links')).toBeNull();
   });
 });

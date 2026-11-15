@@ -53,6 +53,7 @@ import {
   parseSlotId,
   placedStatus,
   pocketState,
+  pocketTargetDescription,
   pocketTitle,
   slotIdOf,
 } from './model';
@@ -74,6 +75,7 @@ import { InsertPagesPanel, MovePagePanel, movedPageOrder } from './panels/PagePa
 import { PastePanel } from './panels/PastePanel';
 import {
   BookmarkPanel,
+  MoveCardPanel,
   PageBookmarkPanel,
   PageReservePanel,
   RemovePanel,
@@ -100,6 +102,7 @@ type PanelKind =
   | 'insert'
   | 'paste'
   | 'bookmark'
+  | 'move-card'
   | 'remove'
   | 'reserve'
   | 'page-reserve'
@@ -830,6 +833,7 @@ export function BinderView({
             reserve: () => setPanel('reserve'),
             paste: () => openPanel('paste'),
             bookmark: () => setPanel('bookmark'),
+            'move-card': () => setPanel('move-card'),
             remove: () => setPanel('remove'),
           },
         })
@@ -1474,6 +1478,22 @@ export function BinderView({
                   });
                 })
               : Promise.resolve()
+          }
+          onClose={closePanel}
+        />
+      ) : null}
+      {panel === 'move-card' && selectedSlot && selected && versionId ? (
+        <MoveCardPanel
+          target={pocketTargetDescription(selectedSlot, cards)}
+          hasPlacement={Boolean(selectedSlot.assignedCardId)}
+          pending={pending}
+          error={writer.error}
+          onMove={() =>
+            run(
+              'Card unplaced. Your copy and the slot target are unchanged.',
+              (revision) => binderApi.assign(versionId, selected, null, revision),
+              selected,
+            )
           }
           onClose={closePanel}
         />

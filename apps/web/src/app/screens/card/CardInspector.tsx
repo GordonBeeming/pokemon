@@ -20,7 +20,7 @@ import { useToast } from '../../ui/Toast';
 import { BinderRow } from './BinderRow';
 import { WhereFromDialog } from './WhereFromDialog';
 import './card-inspector.css';
-import { ebaySoldSearchUrl } from '../../cards/ebay';
+import { ebayBuySearchUrl, ebaySoldSearchUrl } from '../../cards/ebay';
 import { useShowPrices } from '../../cards/PriceVisibility';
 
 const NOTES_MAX = 2000;
@@ -218,18 +218,30 @@ export function CardInspector({
               ~{card.price.amountAud === null ? 'A$ –' : formatMoney(card.price.amountAud)}
             </p>
           ) : null}
-          {/* What it actually sells for, next to the vendor estimate. Hidden with prices,
-              since sold listings are prices too. */}
+          {/* Both searches reveal prices, so they follow the price visibility setting. */}
           {showPrices ? (
-            <a
-              className="card-inspector-ebay-link"
-              href={ebaySoldSearchUrl(card)}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              eBay AU sold listings
-              <span className="sr-only"> (opens in a new tab)</span>
-            </a>
+            <div className="card-inspector-ebay-links" role="group" aria-label="eBay AU listings">
+              <span>eBay AU</span>
+              <a
+                className="card-inspector-ebay-link"
+                href={ebayBuySearchUrl(card)}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Buy on eBay AU (opens in a new tab)"
+              >
+                Buy
+              </a>
+              <span aria-hidden="true">|</span>
+              <a
+                className="card-inspector-ebay-link"
+                href={ebaySoldSearchUrl(card)}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Sold listings on eBay AU (opens in a new tab)"
+              >
+                Sold
+              </a>
+            </div>
           ) : null}
           {pokedexNumber ? (
             <button

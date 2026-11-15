@@ -250,7 +250,7 @@ function pageActions(
         ]),
     { label: 'Add blank pages here…', disabled, run: actions.onInsertPages },
     {
-      label: 'Move this page to…',
+      label: 'Move page',
       disabled: disabled || pageCount <= 1,
       run: actions.onMoveTo,
     },

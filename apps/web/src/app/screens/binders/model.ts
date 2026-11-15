@@ -144,6 +144,18 @@ export function pocketKindLabel(slot: BinderSlotView): string {
   return 'Empty pocket';
 }
 
+export function pocketTargetDescription(slot: BinderSlotView, cards: CardLookup): string {
+  if (slot.entryKind === 'exact-card' && slot.cardId) {
+    const target = cards.get(slot.cardId);
+    return target
+      ? `${target.name} · ${target.setName} · ${target.number} · ${target.language.toUpperCase()}`
+      : 'the exact card already targeted';
+  }
+  // A placed card's title hides the underlying target, which is what stays here.
+  const title = pocketTitle({ ...slot, assignedCardId: null }, cards);
+  return slot.entryKind === 'pokemon' ? `${title} (any printing)` : title;
+}
+
 export function placedStatus(slot: BinderSlotView, cards: CardLookup): string {
   if (slot.assignedCardId) {
     const placed = cards.get(slot.assignedCardId);

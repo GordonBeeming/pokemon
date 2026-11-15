@@ -12,6 +12,53 @@ function PanelError({ error }: { error: string | null }): ReactElement | null {
   ) : null;
 }
 
+export function MoveCardPanel({
+  target,
+  hasPlacement = true,
+  pending,
+  error,
+  onMove,
+  onClose,
+}: {
+  target: string;
+  hasPlacement?: boolean;
+  pending: boolean;
+  error: string | null;
+  onMove: () => Promise<boolean>;
+  onClose: () => void;
+}): ReactElement {
+  const busy = pending;
+  return (
+    <Panel title="Move card" onClose={onClose}>
+      <PanelError error={error} />
+      <p>
+        {hasPlacement
+          ? 'Are you sure you want to move this card?'
+          : 'This card is no longer placed in this slot.'}
+      </p>
+      <p className="panel-help">
+        This will unplace the card without removing your owned copy. The slot will still target{' '}
+        <strong>{target}</strong>.
+      </p>
+      <div className="panel-actions">
+        <button
+          type="button"
+          className="button-primary"
+          disabled={busy || !hasPlacement}
+          onClick={() => {
+            if (!busy && hasPlacement) void onMove();
+          }}
+        >
+          {busy ? 'Moving…' : 'Move card'}
+        </button>
+        <button type="button" disabled={busy} onClick={onClose}>
+          Cancel
+        </button>
+      </div>
+    </Panel>
+  );
+}
+
 export function BookmarkPanel({
   initialName,
   hasBookmark,

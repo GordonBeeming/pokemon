@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { BinderPageView } from '../../api/queries/binders';
+import { cardIdSchema } from '@pokedex/shared';
+import type { BinderPageView, ResolvedCard } from '../../api/queries/binders';
 import {
   capacityDescription,
   changedPockets,
   parseSlotId,
   pocketState,
+  pocketTargetDescription,
   pocketTitle,
   slotIdOf,
   trackGeometry,
@@ -40,6 +42,45 @@ describe('capacityDescription', () => {
 
 describe('pocket labels', () => {
   const base = { pageId: 'p', row: 0, column: 0, cardId: null, label: null, assignedCardId: null };
+  it('describes the original set rather than the card placed there', () => {
+    const placed: ResolvedCard = {
+      id: cardIdSchema.parse('placed'),
+      name: 'Charizard',
+      language: 'en',
+      category: 'pokemon',
+      setId: '30th',
+      setName: '30th Celebration',
+      number: '2',
+      imageLowUrl: null,
+      imageHighUrl: null,
+      collection: null,
+      price: {
+        amountAud: null,
+        nativeAmount: null,
+        nativeCurrency: null,
+        source: null,
+        sourceCapturedAt: null,
+        fxDate: null,
+      },
+    };
+    const slot = {
+      ...base,
+      entryKind: 'set' as const,
+      pokemonNumber: null,
+      setId: '30th',
+      setName: '30th Celebration',
+      assignedCardId: 'placed',
+    };
+    const cards = new Map([['placed', placed]]);
+    expect(pocketTitle(slot, cards)).toBe('Charizard');
+    expect(pocketTargetDescription(slot, cards)).toBe('Any card · 30th Celebration');
+    expect(
+      pocketTargetDescription({ ...slot, entryKind: 'pokemon', pokemonNumber: 25 }, cards),
+    ).toBe('#025 Pikachu (any printing)');
+    expect(
+      pocketTargetDescription({ ...slot, entryKind: 'exact-card', cardId: 'placed' }, cards),
+    ).toBe('Charizard · 30th Celebration · 2 · EN');
+  });
   it('names an any-printing target by number and species', () => {
     const slot = { ...base, entryKind: 'pokemon' as const, pokemonNumber: 25 };
     expect(pocketTitle(slot, new Map())).toBe('#025 Pikachu');

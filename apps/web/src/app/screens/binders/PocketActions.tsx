@@ -9,7 +9,16 @@ import { Sheet } from '../../ui/Sheet';
 import { isTarget, pocketState } from './model';
 
 export type PocketActionKey =
-  'view' | 'find' | 'move' | 'change' | 'insert' | 'reserve' | 'paste' | 'bookmark' | 'remove';
+  | 'view'
+  | 'find'
+  | 'move'
+  | 'change'
+  | 'insert'
+  | 'reserve'
+  | 'paste'
+  | 'bookmark'
+  | 'move-card'
+  | 'remove';
 
 /** Which actions a pocket offers, in the board's order. A read-only (archived) binder
  * keeps only the ones that change nothing: View card and Bookmark. */
@@ -48,6 +57,8 @@ export function pocketActionItems({
   if (editable && hasClipboard)
     items.push({ key: 'paste', label: 'Paste here', icon: 'paste', onSelect: on.paste });
   items.push({ key: 'bookmark', label: 'Bookmark', icon: 'bookmark', onSelect: on.bookmark });
+  if (editable && target && slot.assignedCardId)
+    items.push({ key: 'move-card', label: 'Move card', icon: 'move', onSelect: on['move-card'] });
   if (editable && (target || state === 'reserved'))
     items.push({
       key: 'remove',

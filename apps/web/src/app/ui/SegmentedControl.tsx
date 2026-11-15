@@ -9,11 +9,13 @@ export function SegmentedControl<Value extends string>({
   options,
   value,
   onChange,
+  disabled = false,
 }: {
   label: string;
   options: Array<{ value: Value; label: string }>;
   value: Value;
   onChange: (value: Value) => void;
+  disabled?: boolean;
 }): ReactElement {
   return (
     <RadioGroup
@@ -21,6 +23,7 @@ export function SegmentedControl<Value extends string>({
       aria-label={label}
       orientation="horizontal"
       value={value}
+      isDisabled={disabled}
       onChange={(next) => {
         const option = options.find((item) => item.value === next);
         if (option) onChange(option.value);

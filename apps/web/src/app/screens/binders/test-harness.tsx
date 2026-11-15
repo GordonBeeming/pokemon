@@ -1,3 +1,4 @@
+import { binderAssignRequestSchema } from '@pokedex/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   createMemoryHistory,
@@ -26,8 +27,12 @@ type Handler = (request: RecordedRequest) => { status: number; body: unknown } |
 export interface FakeSlot {
   row: number;
   column: number;
-  entryKind: 'empty' | 'pokemon';
+  entryKind: 'empty' | 'pokemon' | 'set';
   pokemonNumber: number | null;
+  assignedCardId?: string | null;
+  setId?: string;
+  setLanguage?: string;
+  setName?: string;
 }
 
 export interface FakeBinder {
@@ -87,7 +92,10 @@ function page(binder: FakeBinder, index: number) {
       entryKind: slot.entryKind,
       label: null,
       pokemonNumber: slot.pokemonNumber,
-      assignedCardId: null,
+      assignedCardId: slot.assignedCardId ?? null,
+      setId: slot.setId,
+      setLanguage: slot.setLanguage,
+      setName: slot.setName,
       startsNewPage: false,
     })),
   };
@@ -175,6 +183,21 @@ export class FakeServer {
           },
         };
       if (rest === '/bookmarks') return { status: 200, body: { ok: true, bookmarks: [] } };
+      if (rest === '/assignment' && request.method === 'PUT') {
+        const parsed = binderAssignRequestSchema.safeParse(request.body);
+        if (!parsed.success) return { status: 400, body: { ok: false, error: 'invalid_body' } };
+        const { at, cardId } = parsed.data;
+        const slot = binder.pages[at.page]?.find(
+          (item) => item.row === at.row && item.column === at.column,
+        );
+        if (!slot) return { status: 404, body: { ok: false, error: 'slot_not_found' } };
+        slot.assignedCardId = cardId;
+        binder.revision += 1;
+        return {
+          status: 200,
+          body: { ok: true, binder: { version: version(binder), pages: [page(binder, at.page)] } },
+        };
+      }
       if (rest === '/swap' && request.method === 'POST') {
         binder.revision += 1;
         return {
