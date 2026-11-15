@@ -378,17 +378,18 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       the page number opens the jump field and bookmarks in a sheet, and Tools holds Find, bookmarks,
       the page actions, Manage binder and Display · done when: typing an out-of-range page number
       and pressing Go is rejected rather than jumping past the last page.
-- [ ] keep · "Manage page" popover: reserve/edit label, add blank pages here, move this page to
-      page N, move earlier/later, arrange targets, remove this page (disabled if not removable or the
+- [ ] keep · "Manage page" popover: reserve/edit label, add blank pages here, move page left or
+      right by a chosen count, move earlier/later, arrange targets, remove this page (disabled if not removable or the
       only page) · done when: opening this popover on a binder's only page shows "Remove this page"
       disabled.
 - [ ] new · "Add blank pages here" on every page, reserved ones included: before or after this page,
       1 to 20 whole empty pages, and every later page moves back with its cards, labels and bookmarks
       · done when: adding two blank pages before a reserved page moves that page (and its bookmark)
       back by two.
-- [ ] new · "Move this page to…" on every page, reserved ones included, moves it straight to page N;
+- [ ] changed · "Move page" asks for Left or Right and how many pages, then shows the destination
+      before confirmation. The page keeps its cards, targets, labels and bookmarks;
       a binder whose capacity ends part-way through its last page keeps that page last and says so ·
-      done when: moving reserved page 4 to page 2 shows it as page 2.
+      done when: moving reserved page 4 left by two pages shows it as page 2.
 - [ ] keep · A bookmark jump dropdown lists every saved bookmark, including auto-generated ones for
       reserved pages · done when: reserving a page adds it to the bookmark dropdown without manually
       bookmarking anything.
@@ -419,6 +420,11 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       a focused pocket all trigger the same move, and Escape cancels an armed move · done when:
       pressing `m` on a focused target pocket, then clicking a destination, moves it exactly as
       dragging it there would.
+- [ ] new · A placed copy offers "Move card" immediately before Remove. Confirmation names the
+      slot's original target and explains that the owned copy is kept. Confirming only unplaces
+      the copy: a set target still wants that set, a Pokémon target still wants that Pokémon,
+      and an exact-card target still wants the same printing · done when: moving a card out of
+      a 30th-year set target leaves that target unfilled and the collection quantity unchanged.
 - [ ] new · The move shortcut is discoverable — the "Move" action's visible label or tooltip states
       the `m` key, not only an aria-label · done when: hovering or focusing "Move" shows the `m`
       shortcut in visible text.

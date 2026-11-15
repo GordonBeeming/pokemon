@@ -311,9 +311,10 @@ test.describe('binder pages from anywhere', () => {
 
     await openBinder(page, binder, 4);
     await page.locator('.binder-tools-trigger').tap();
-    await page.getByRole('button', { name: 'Move this page to…' }).tap();
+    await page.getByRole('button', { name: 'Move page', exact: true }).tap();
     const panel = page.getByRole('dialog', { name: 'Move page 4' });
-    await panel.getByLabel(/Move to page/).fill('2');
+    await panel.getByText('Left', { exact: true }).tap();
+    await panel.getByLabel('How many pages').fill('2');
     await panel.getByRole('button', { name: 'Move page' }).tap();
     await expectDoneAndClosed(page, 'Page 4 moved to page 2.');
     await expect(page).toHaveURL(/[?&]page=2(&|$)/u);

@@ -35,6 +35,7 @@ const handlers = (): Record<PocketActionKey, () => void> => ({
   reserve: vi.fn(),
   paste: vi.fn(),
   bookmark: vi.fn(),
+  'move-card': vi.fn(),
   remove: vi.fn(),
 });
 
@@ -56,6 +57,36 @@ function slot(overrides: Partial<BinderSlotView>): BinderSlotView {
 const exactTarget = slot({ entryKind: 'exact-card', cardId: 'card_1' });
 
 describe('pocketActionItems', () => {
+  it('offers Move card immediately before Remove only for a placed copy', () => {
+    for (const entryKind of ['set', 'pokemon', 'exact-card'] as const) {
+      const items = pocketActionItems({
+        slot: slot({ entryKind, assignedCardId: 'physical-copy' }),
+        editable: true,
+        hasCard: true,
+        hasClipboard: false,
+        on: handlers(),
+      });
+      expect(items.slice(-2).map((item) => item.label)).toEqual(['Move card', 'Remove']);
+    }
+    for (const editable of [true, false]) {
+      const items = pocketActionItems({
+        slot: exactTarget,
+        editable,
+        hasCard: true,
+        hasClipboard: false,
+        on: handlers(),
+      });
+      expect(items.some((item) => item.key === 'move-card')).toBe(false);
+    }
+    const archived = pocketActionItems({
+      slot: slot({ entryKind: 'pokemon', assignedCardId: 'physical-copy' }),
+      editable: false,
+      hasCard: true,
+      hasClipboard: false,
+      on: handlers(),
+    });
+    expect(archived.some((item) => item.key === 'move-card')).toBe(false);
+  });
   it('offers every action for a filled target, in the board order', () => {
     const items = pocketActionItems({
       slot: exactTarget,

@@ -132,7 +132,7 @@ export function movedPageOrder(pageIds: readonly string[], from: number, to: num
   return order;
 }
 
-/** "Move this page to page N": from any page, reserved or not, in one step. */
+/** Moves a whole page by a chosen distance, including its cards and reservations. */
 export function MovePagePanel({
   pageIndex,
   pageCount,
@@ -181,12 +181,24 @@ function MovePageForm({
   onMove: (to: number) => Promise<boolean>;
 }): ReactElement {
   const inputId = useId();
-  const [draft, setDraft] = useState('');
+  const [direction, setDirection] = useState<'left' | 'right'>(pageIndex === 0 ? 'right' : 'left');
+  const [draft, setDraft] = useState('1');
   const action = useOverlayAction();
   const busy = pending || action.pending;
-  const target = Number(draft);
+  const distance = Number(draft);
+  const lastMovableIndex = pageCount - (lastPagePartial ? 2 : 1);
+  const maxDistance = direction === 'left' ? pageIndex : Math.max(0, lastMovableIndex - pageIndex);
+  const target = pageIndex + (direction === 'left' ? -distance : distance);
   const problem =
-    draft === '' ? null : movePageProblem({ pageIndex, pageCount, target, lastPagePartial });
+    draft === ''
+      ? null
+      : !Number.isInteger(distance) || distance < 1
+        ? 'Enter a whole number of pages, at least 1.'
+        : maxDistance === 0
+          ? `This page cannot move ${direction}.`
+          : distance > maxDistance
+            ? `You can move up to ${maxDistance} ${maxDistance === 1 ? 'page' : 'pages'} ${direction}.`
+            : movePageProblem({ pageIndex, pageCount, target: target + 1, lastPagePartial });
   const stuck =
     lastPagePartial && pageIndex === pageCount - 1
       ? movePageProblem({ pageIndex, pageCount, target: 1, lastPagePartial })
@@ -196,8 +208,8 @@ function MovePageForm({
       className="panel-form"
       onSubmit={(event) => {
         event.preventDefault();
-        if (busy || draft === '' || problem) return;
-        void action.run(() => onMove(target - 1));
+        if (busy || draft === '' || problem || stuck) return;
+        void action.run(() => onMove(target));
       }}
     >
       {error ? (
@@ -209,18 +221,31 @@ function MovePageForm({
         <p className="panel-help">{stuck}</p>
       ) : (
         <>
+          <p>Are you sure you want to move page {pageIndex + 1}?</p>
+          <div className="panel-field">
+            <span>Direction</span>
+            <SegmentedControl<'left' | 'right'>
+              label="Move page direction"
+              disabled={busy}
+              value={direction}
+              onChange={setDirection}
+              options={[
+                { value: 'left', label: 'Left' },
+                { value: 'right', label: 'Right' },
+              ]}
+            />
+          </div>
           <label className="panel-field" htmlFor={inputId}>
-            <span>Move to page (1 to {pageCount})</span>
+            <span>How many pages</span>
             <input
               id={inputId}
               type="number"
               inputMode="numeric"
               min={1}
-              max={pageCount}
+              max={Math.max(1, maxDistance)}
               value={draft}
-              placeholder={String(pageIndex + 1)}
               aria-invalid={problem !== null}
-              aria-describedby={problem ? `${inputId}-problem` : undefined}
+              aria-describedby={problem ? `${inputId}-problem` : `${inputId}-preview`}
               disabled={busy}
               onChange={(event) => setDraft(event.target.value)}
             />
@@ -230,8 +255,14 @@ function MovePageForm({
               {problem}
             </p>
           ) : (
-            <p className="panel-help">
-              The page takes its cards, label and bookmarks with it; the pages in between shift by
+            <p id={`${inputId}-preview`} className="panel-help">
+              {draft !== '' ? (
+                <>
+                  Page {pageIndex + 1} will move {distance} {distance === 1 ? 'page' : 'pages'}{' '}
+                  {direction}, becoming page {target + 1}.{' '}
+                </>
+              ) : null}
+              Its cards, targets, labels and bookmarks move with it. The pages in between shift by
               one.
             </p>
           )}
