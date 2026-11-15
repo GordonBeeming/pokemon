@@ -208,9 +208,17 @@
   min-height: 2.75rem;
   color: var(--ink);
 }
+.card-inspector-ebay-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
 .card-inspector-ebay-link {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  min-width: 2.75rem;
   min-height: 2.75rem;
   color: var(--accent-deep);
 }
