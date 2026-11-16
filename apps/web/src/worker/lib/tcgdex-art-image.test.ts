@@ -76,3 +76,22 @@ describe('official Pokémon image identity', () => {
     },
   );
 });
+
+it('uses the official unpadded filename for printed card 001', () => {
+  expect(
+    officialPokemonArtUrl(
+      { id: 'me06-001', localId: '001', set: { id: 'me06' } },
+      'me06-001',
+      'en',
+    ),
+  ).toBe(
+    'https://assets.pokemon.com/static-assets/content-assets/cms2/img/cards/web/ME06/ME06_EN_1.png',
+  );
+  expect(
+    officialPokemonArtUrl(
+      { id: 'me06-000', localId: '000', set: { id: 'me06' } },
+      'me06-000',
+      'en',
+    ),
+  ).toBeNull();
+});
