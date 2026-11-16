@@ -65,6 +65,10 @@ Local Worker state is isolated by Wrangler despite sharing the production bindin
 
 ## Production catalogue
 
+Full catalogue syncs discover physical cards from small per-set indexes, then stage and apply the complete language together. They avoid the growing all-cards download and retain the existing source-count protection. Settings › Catalogue shows the latest scheduled or manual failure, including runs started in another tab.
+
+Missing artwork falls back from TCGdex to its linked TCGplayer product and then to the exact official English Pokémon PNG for supported Mega Evolution main sets. Cached and uploaded artwork is preserved; unavailable images remain placeholders.
+
 The production Worker exposes catalogue, pricing, FX, and backup Workflows. Start an English catalogue import by hand with:
 
 ```sh

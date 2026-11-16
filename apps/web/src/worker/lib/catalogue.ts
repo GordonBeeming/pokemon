@@ -29,7 +29,7 @@ import { groupRepresentative, rankedGroups } from './groups';
 import { getFavorites, setFavoriteKey } from './settings';
 import { base64UrlDecode, base64UrlEncode } from './crypto';
 import { escapedFtsQuery, isoFromSeconds, newId, nowSeconds, scalarCount } from './db';
-import { ApplicationError } from './log';
+import { ApplicationError, describeError } from './log';
 
 interface CardRow {
   pokedex_number: number | null;
@@ -525,21 +525,19 @@ export async function stageCatalogueCards(
         `WITH candidate(value) AS (SELECT value FROM json_each(?1))
          SELECT card.id, card.language, card.set_name, card.number, card.name
          FROM catalogue_cards card
-         JOIN candidate
-           ON card.language = json_extract(candidate.value, '$.language')
-          AND lower(card.set_name) = lower(json_extract(candidate.value, '$.setName'))
-          AND card.number = json_extract(candidate.value, '$.number')
-          AND lower(card.name) = lower(json_extract(candidate.value, '$.name'))
          WHERE card.is_custom = 0
+           AND (card.language, lower(card.set_name), card.number, lower(card.name)) IN
+             (SELECT json_extract(value, '$.language'), lower(json_extract(value, '$.setName')),
+                     json_extract(value, '$.number'), lower(json_extract(value, '$.name'))
+              FROM candidate)
          UNION ALL
          SELECT staged.card_id AS id, staged.language, staged.set_name, staged.number, staged.name
          FROM catalogue_stage_cards staged
-         JOIN candidate
-           ON staged.language = json_extract(candidate.value, '$.language')
-          AND lower(staged.set_name) = lower(json_extract(candidate.value, '$.setName'))
-          AND staged.number = json_extract(candidate.value, '$.number')
-          AND lower(staged.name) = lower(json_extract(candidate.value, '$.name'))
-         WHERE staged.run_id = ?2`,
+         WHERE staged.run_id = ?2
+           AND (staged.language, lower(staged.set_name), staged.number, lower(staged.name)) IN
+             (SELECT json_extract(value, '$.language'), lower(json_extract(value, '$.setName')),
+                     json_extract(value, '$.number'), lower(json_extract(value, '$.name'))
+              FROM candidate)`,
       )
       .bind(
         JSON.stringify(
@@ -616,6 +614,54 @@ export async function stageCatalogueCards(
         .bind(runId, JSON.stringify(chunk))
         .run();
   }
+}
+
+export async function latestCatalogueSyncRun(db: D1Database) {
+  const row = await db
+    .prepare(
+      `SELECT id, status, started_at, completed_at, refusal_reason FROM sync_runs
+     WHERE provider='tcgdex' AND language='en' AND complete_source=1
+     ORDER BY started_at DESC, id DESC LIMIT 1`,
+    )
+    .first<{
+      id: string;
+      status: string;
+      started_at: number;
+      completed_at: number | null;
+      refusal_reason: string | null;
+    }>();
+  if (!row) return null;
+  const reason = row.refusal_reason ?? '';
+  return {
+    workflowId: row.id.startsWith('sync_') ? row.id.slice(5) : null,
+    status: row.status,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    failure: /overloaded|resources consumed/iu.test(reason)
+      ? 'database_busy'
+      : /timeout|aborted/iu.test(reason)
+        ? 'provider_timeout'
+        : /drop|reject/iu.test(reason)
+          ? 'source_rejected'
+          : 'sync_failed',
+  };
+}
+
+export async function catalogueSyncHealth(
+  db: D1Database,
+  workflowStatus: (id: string) => Promise<string>,
+) {
+  const latest = await latestCatalogueSyncRun(db);
+  if (latest?.workflowId && latest.status === 'running') {
+    try {
+      latest.status = await workflowStatus(latest.workflowId);
+    } catch (error) {
+      if (!/instance.not_found|not found|does not exist/iu.test(describeError(error))) throw error;
+      latest.status = 'failed';
+      latest.failure = 'sync_failed';
+    }
+  }
+  return latest;
 }
 
 export async function latestFullEnglishCatalogueSync(db: D1Database): Promise<number | null> {

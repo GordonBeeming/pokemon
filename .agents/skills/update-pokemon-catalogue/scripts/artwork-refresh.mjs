@@ -257,11 +257,15 @@ try {
             chunks.push(chunk);
           }
           const bytes = Buffer.concat(chunks);
-          // The art route serves TCGdex WebP, or a TCGplayer JPEG when TCGdex has none.
+          // Cached artwork can be TCGdex WebP, TCGplayer JPEG, or an official Pokémon PNG.
           const webp =
             bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP';
           const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-          if (!webp && !jpeg) throw new Error('Artwork is not WebP or JPEG');
+          const png =
+            bytes.length >= 33 &&
+            bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) &&
+            bytes.toString('ascii', 12, 16) === 'IHDR';
+          if (!webp && !jpeg && !png) throw new Error('Artwork is not WebP, JPEG or PNG');
           log({
             ...card,
             ok: true,

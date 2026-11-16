@@ -153,6 +153,30 @@ export function useCatalogueLastSynced() {
   });
 }
 
+const catalogueHealthEnvelope = z.object({
+  ok: z.literal(true),
+  latest: z
+    .object({
+      status: z.string(),
+      workflowId: z.string().nullable(),
+      startedAt: z.number(),
+      completedAt: z.number().nullable(),
+      failure: z.string(),
+    })
+    .nullable(),
+});
+
+export function useCatalogueSyncHealth() {
+  return useQuery({
+    queryKey: ['settings', 'catalogue-sync-health'] as const,
+    queryFn: ({ signal }) =>
+      apiFetch('/api/catalogue/sync-status', catalogueHealthEnvelope, { signal }).then(
+        (body) => body.latest,
+      ),
+    refetchInterval: 15_000,
+  });
+}
+
 const syncStartEnvelope = z
   .object({ ok: z.literal(true), workflowId: z.string().min(1) })
   .passthrough();

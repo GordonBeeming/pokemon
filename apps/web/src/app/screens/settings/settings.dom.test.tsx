@@ -225,3 +225,65 @@ describe('CatalogueSyncTab prices', () => {
     expect(requests.some((request) => request.path.startsWith('/api/prices/refresh/'))).toBe(false);
   });
 });
+
+describe('scheduled catalogue failure visibility', () => {
+  it('shows a scheduled failure even in a fresh tab with no remembered manual workflow', async () => {
+    sessionStorage.clear();
+    stubFetch((_method, path) => ({
+      status: 200,
+      body:
+        path === '/api/catalogue/sync-status'
+          ? {
+              ok: true,
+              latest: {
+                status: 'failed',
+                workflowId: 'catalogue-weekly',
+                startedAt: 1,
+                completedAt: 2,
+                failure: 'database_busy',
+              },
+            }
+          : { ok: true, freshness: { catalogue: { lastSuccessAt: 1 } } },
+    }));
+    await render(<CatalogueSyncTab />);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'catalogue database was too busy',
+    );
+    expect(container.textContent).toContain('New cards may be missing');
+    expect(
+      [...container.querySelectorAll('button')].find((b) => b.textContent?.includes('Sync now'))
+        ?.disabled,
+    ).toBe(false);
+  });
+});
+
+describe('catalogue progress recovery', () => {
+  it('reports a completed recovered workflow once while health still says running', async () => {
+    sessionStorage.clear();
+    stubFetch((_method, path) => ({
+      status: 200,
+      body:
+        path === '/api/catalogue/sync-status'
+          ? {
+              ok: true,
+              latest: {
+                status: 'running',
+                workflowId: 'wf-recovered',
+                startedAt: 1,
+                completedAt: null,
+                failure: 'sync_failed',
+              },
+            }
+          : path === '/api/catalogue/full-sync/wf-recovered'
+            ? { ok: true, status: 'complete' }
+            : { ok: true, freshness: { catalogue: { lastSuccessAt: 1 } } },
+    }));
+    await render(<CatalogueSyncTab />);
+    await flush(30);
+    expect(document.body.textContent?.match(/The catalogue sync finished\./gu)).toHaveLength(1);
+    expect(requests.filter((r) => r.path === '/api/catalogue/full-sync/wf-recovered')).toHaveLength(
+      1,
+    );
+    expect(sessionStorage.getItem('pokedex:catalogue-sync-workflow')).toBeNull();
+  });
+});

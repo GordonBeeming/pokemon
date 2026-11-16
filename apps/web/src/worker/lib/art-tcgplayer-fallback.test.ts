@@ -144,3 +144,43 @@ describe('TCGplayer art fallback', () => {
     expect(response).toBeNull();
   });
 });
+
+describe('official Pokémon artwork fallback', () => {
+  it.each(['low', 'high'] as const)(
+    'caches the exact English Delta Reign PNG for %s when TCGdex has no image or product link',
+    async (variant) => {
+      const db = setup();
+      await db.prepare("UPDATE card_sources SET source_id='me06-106'").run();
+      const art = fakeR2();
+      const bytes = Uint8Array.from(
+        Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDv8AAAAASUVORK5CYII=',
+          'base64',
+        ),
+      );
+      const fetcher = vi.fn((input: RequestInfo) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (url.includes('api.tcgdex.net'))
+          return Promise.resolve(
+            Response.json({ id: 'me06-106', localId: '106', set: { id: 'me06' } }),
+          );
+        if (
+          url ===
+          'https://assets.pokemon.com/static-assets/content-assets/cms2/img/cards/web/ME06/ME06_EN_106.png'
+        )
+          return Promise.resolve(new Response(bytes));
+        throw new Error(`unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal('fetch', fetcher);
+      const response = await getArtResponse(db, art, 'owner', 'card', variant, request());
+      expect(response?.status).toBe(200);
+      expect(response?.headers.get('content-type')).toBe('image/png');
+      expect(new Uint8Array(await response!.arrayBuffer())).toEqual(bytes);
+      const count = fetcher.mock.calls.length;
+      expect((await getArtResponse(db, art, 'owner', 'card', variant, request()))?.status).toBe(
+        200,
+      );
+      expect(fetcher).toHaveBeenCalledTimes(count);
+    },
+  );
+});

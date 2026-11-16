@@ -7,6 +7,8 @@ import {
   beginStagedCatalogueRun,
   catalogueSyncLanguage,
   latestFullEnglishCatalogueSync,
+  latestCatalogueSyncRun,
+  catalogueSyncHealth,
   resolveStagedCardId,
   resolveCatalogueCards,
   stageCatalogueCards,
@@ -129,6 +131,24 @@ describe('catalogue cloud invariants', () => {
     `);
 
     await expect(latestFullEnglishCatalogueSync(sqliteD1(database))).resolves.toBe(100);
+    database.exec(`INSERT INTO sync_runs(id,provider,language,started_at,completed_at,status,complete_source,refusal_reason)
+      VALUES('sync_weekly','tcgdex','en',5,6,'failed',1,'D1 DB is overloaded. Too many resources consumed within a 10 second window.');`);
+    await expect(latestCatalogueSyncRun(sqliteD1(database))).resolves.toEqual({
+      workflowId: 'weekly',
+      status: 'failed',
+      startedAt: 5,
+      completedAt: 6,
+      failure: 'database_busy',
+    });
+    database.exec("UPDATE sync_runs SET status='running' WHERE id='sync_weekly'");
+    await expect(
+      catalogueSyncHealth(sqliteD1(database), () =>
+        Promise.reject(new Error('instance.not_found')),
+      ),
+    ).resolves.toMatchObject({ status: 'failed', failure: 'sync_failed' });
+    await expect(
+      catalogueSyncHealth(sqliteD1(database), () => Promise.reject(new Error('network timeout'))),
+    ).rejects.toThrow('network timeout');
   });
 
   it('builds bounded FTS prefixes without exposing FTS operators', () => {

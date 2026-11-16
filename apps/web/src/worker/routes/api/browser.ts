@@ -36,6 +36,7 @@ import {
 } from '../../lib/binders';
 import { getTcgdexPreviewArtResponse } from '../../lib/art';
 import {
+  catalogueSyncHealth,
   applyStagedCatalogueRun,
   beginStagedCatalogueRun,
   createCustomCard,
@@ -391,6 +392,17 @@ browserApiRoutes.post('/catalogue/national/discover', async (c) => {
       meta: { name: parsed.data.name, imported: result.imported },
     });
     return c.json({ ok: true, ...result });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.get('/catalogue/sync-status', async (c) => {
+  try {
+    const latest = await catalogueSyncHealth(
+      c.env.DB,
+      async (id) => (await (await c.env.CATALOGUE_SYNC.get(id)).status()).status,
+    );
+    return c.json({ ok: true, latest });
   } catch (error) {
     return apiFailure(c, error);
   }

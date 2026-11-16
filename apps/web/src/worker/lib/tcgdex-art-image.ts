@@ -79,3 +79,26 @@ export function tcgplayerProductId(payload: unknown): number | null {
   }
   return null;
 }
+
+// Official English main-series filenames preserve both the set and collector
+// number. Do not guess a language, gallery, promo, or another printing.
+export function officialPokemonArtUrl(
+  payload: unknown,
+  sourceId: string,
+  language: string,
+): string | null {
+  const parsed = imageCardSchema.safeParse(payload);
+  if (!parsed.success || language !== 'en') return null;
+  const { id, set, localId } = parsed.data;
+  if (
+    !set ||
+    !/^me\d{2}$/u.test(set.id) ||
+    !localId ||
+    !/^\d{3}$/u.test(localId) ||
+    id !== sourceId ||
+    sourceId !== `${set.id}-${localId}`
+  )
+    return null;
+  const code = set.id.toUpperCase();
+  return `https://assets.pokemon.com/static-assets/content-assets/cms2/img/cards/web/${code}/${code}_EN_${localId}.png`;
+}

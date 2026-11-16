@@ -633,6 +633,11 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] new · Card frame colours: per-type presets, a custom colour picker, "Reset to defaults", and a
       contrast warning below 4.5:1 against white · done when: choosing a poor-contrast custom colour
       shows the warning, and "Reset to defaults" restores every type's shipped colour.
+- [ ] changed · Full catalogue sync discovers physical cards through per-set indexes and keeps
+      letter-numbered cards; staging matches physical identities without repeated nested catalogue
+      scans. Scheduled and manual failures remain visible in Settings across tabs.
+- [ ] changed · Missing Mega Evolution main-set English artwork can use the exact official Pokémon
+      PNG after TCGdex and linked TCGplayer artwork, with both cached sizes preserving existing art.
 - [ ] new · "Sync now" triggers a catalogue sync from TCGdex, with the last-synced date shown · done
       when: pressing it starts a sync and the "Last synced" date updates once it completes.
 - [ ] new · A scheduled, infrastructure-level backup runs automatically with no user-facing control ·

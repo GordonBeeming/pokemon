@@ -1,6 +1,6 @@
 import { createHash, type Hash } from 'node:crypto';
 import { nowSeconds } from './db';
-import { tcgdexArtImageBase, tcgplayerProductId } from './tcgdex-art-image';
+import { officialPokemonArtUrl, tcgdexArtImageBase, tcgplayerProductId } from './tcgdex-art-image';
 import { ApplicationError, describeError, logWarn } from './log';
 
 const MAX_ART_BYTES = 15 * 1024 * 1024;
@@ -81,6 +81,19 @@ export function tcgplayerArtObjectKey(
 
 export function isJpeg(value: Uint8Array): boolean {
   return value.byteLength > 3 && value[0] === 0xff && value[1] === 0xd8 && value[2] === 0xff;
+}
+
+function officialArtObjectKey(cardId: string, variant: ArtVariant, checksum: string): string {
+  if (!/^[a-f0-9]{64}$/u.test(checksum)) throw new ApplicationError('invalid_art_checksum', 400);
+  return `cards/${encodeURIComponent(cardId)}/${variant}/${checksum}.png`;
+}
+
+function isPng(value: Uint8Array): boolean {
+  return (
+    value.byteLength >= 33 &&
+    [137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => value[index] === byte) &&
+    ascii(value, 12, 4) === 'IHDR'
+  );
 }
 
 async function hashToken(token: string): Promise<string> {
@@ -673,6 +686,12 @@ async function cacheTcgdexArt(
       );
       if (bytes && isJpeg(bytes))
         return storeCachedArt(db, art, cardId, variant, bytes, 'image/jpeg', tcgplayerArtObjectKey);
+    }
+    const officialUrl = officialPokemonArtUrl(payload, source.source_id, source.language);
+    if (officialUrl) {
+      const bytes = await fetchImageBytes(officialUrl, { accept: 'image/png' });
+      if (bytes && isPng(bytes))
+        return storeCachedArt(db, art, cardId, variant, bytes, 'image/png', officialArtObjectKey);
     }
     return null;
   } catch (error) {
