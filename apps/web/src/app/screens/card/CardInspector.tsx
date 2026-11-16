@@ -41,7 +41,7 @@ export type CardInspectorContext =
 export interface CardInspectorProps {
   cardId: string;
   onClose: () => void;
-  /** Set when opened from outside the Catalogue; adds "View all {species}". */
+  /** Origin used to expand the matching binder and close its parent panel on navigation. */
   context?: CardInspectorContext;
   /** Not part of the spec's minimal 3-prop contract, but additive and optional: lets
    * an embedding chrome (Catalogue's overlay, the standalone /card/$cardId page) know
@@ -260,17 +260,36 @@ export function CardInspector({
               Use as Pokédex image
             </button>
           ) : null}
-          {context ? (
-            // Opened from outside the Catalogue: the way into every printing of it.
+          {pokedexNumber || context ? (
             <Link
               className="card-inspector-view-all"
               to="/catalogue"
               search={catalogueSearch.parse(
                 pokedexNumber ? { dex: pokedexNumber } : { q: speciesName },
               )}
-              onClick={onClose}
+              onClick={(event) => {
+                if (
+                  event.metaKey ||
+                  event.ctrlKey ||
+                  event.shiftKey ||
+                  event.altKey ||
+                  event.button !== 0
+                )
+                  return;
+                if (dirty || saveState === 'saving' || saveState === 'error') {
+                  event.preventDefault();
+                  toast(
+                    'error',
+                    'Notes are still saving. Wait a moment, or fix the save error, then try again.',
+                  );
+                  return;
+                }
+                // The new Catalogue search closes its own inspector. Calling its
+                // close navigation (or standalone history.back) here would race it.
+                if (context) onClose();
+              }}
             >
-              View all {speciesName}
+              View all {speciesName} cards
             </Link>
           ) : null}
         </div>

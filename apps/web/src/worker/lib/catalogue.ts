@@ -1480,8 +1480,17 @@ export async function searchCards(
     values.push(...spellings);
   }
   if (filters.pokedexNumber !== undefined) {
-    where.push(`c.pokedex_number = ?${values.length + 1}`);
+    const numberParameter = values.length + 1;
+    const species = NATIONAL_POKEDEX.find((entry) => entry.number === filters.pokedexNumber);
     values.push(filters.pokedexNumber);
+    if (species) {
+      // Multi-Pokémon printings retain the first dex number in catalogue metadata.
+      // An exact name phrase also finds the partner, without Mew matching Mewtwo.
+      where.push(`(c.pokedex_number = ?${numberParameter} OR
+        (c.category = 'pokemon' AND instr(c.name, '&') > 0 AND c.id IN
+          (SELECT card_id FROM catalogue_search WHERE catalogue_search MATCH ?${values.length + 1})))`);
+      values.push(`name : "${species.name.replaceAll('"', '""')}"`);
+    } else where.push(`c.pokedex_number = ?${numberParameter}`);
   }
   if (filters.region) {
     const range = regionDexRange(filters.region);
