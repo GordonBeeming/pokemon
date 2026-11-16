@@ -9,6 +9,7 @@ import {
   latestFullEnglishCatalogueSync,
   latestCatalogueSyncRun,
   catalogueSyncHealth,
+  failCatalogueSyncRun,
   resolveStagedCardId,
   resolveCatalogueCards,
   stageCatalogueCards,
@@ -132,7 +133,7 @@ describe('catalogue cloud invariants', () => {
 
     await expect(latestFullEnglishCatalogueSync(sqliteD1(database))).resolves.toBe(100);
     database.exec(`INSERT INTO sync_runs(id,provider,language,started_at,completed_at,status,complete_source,refusal_reason)
-      VALUES('sync_weekly','tcgdex','en',5,6,'failed',1,'D1 DB is overloaded. Too many resources consumed within a 10 second window.');`);
+      VALUES('workflow_weekly','tcgdex','en',5,6,'failed',1,'D1 DB is overloaded. Too many resources consumed within a 10 second window.');`);
     await expect(latestCatalogueSyncRun(sqliteD1(database))).resolves.toEqual({
       workflowId: 'weekly',
       status: 'failed',
@@ -140,7 +141,7 @@ describe('catalogue cloud invariants', () => {
       completedAt: 6,
       failure: 'database_busy',
     });
-    database.exec("UPDATE sync_runs SET status='running' WHERE id='sync_weekly'");
+    database.exec("UPDATE sync_runs SET status='running' WHERE id='workflow_weekly'");
     await expect(
       catalogueSyncHealth(sqliteD1(database), () =>
         Promise.reject(new Error('instance.not_found')),
@@ -149,6 +150,31 @@ describe('catalogue cloud invariants', () => {
     await expect(
       catalogueSyncHealth(sqliteD1(database), () => Promise.reject(new Error('network timeout'))),
     ).rejects.toThrow('network timeout');
+    database.exec(
+      "UPDATE sync_runs SET status='complete', imported_count=42 WHERE id='workflow_weekly'",
+    );
+    await expect(
+      catalogueSyncHealth(sqliteD1(database), () => Promise.resolve('errored')),
+    ).resolves.toMatchObject({ status: 'errored' });
+    await expect(
+      catalogueSyncHealth(sqliteD1(database), () =>
+        Promise.reject(new Error('instance.not_found')),
+      ),
+    ).resolves.toMatchObject({ status: 'complete' });
+    await failCatalogueSyncRun(sqliteD1(database), 'workflow_weekly', 'set codes failed');
+    expect(
+      database
+        .prepare("SELECT status, imported_count FROM sync_runs WHERE id='workflow_weekly'")
+        .get(),
+    ).toEqual({ status: 'failed', imported_count: 42 });
+    database.exec(
+      "INSERT INTO sync_runs(id,provider,language,started_at,status,complete_source) VALUES('sync_ordinary-import','tcgdex','en',9999999999,'running',1)",
+    );
+    await expect(
+      catalogueSyncHealth(sqliteD1(database), () =>
+        Promise.reject(new Error('must not look up an import as a workflow')),
+      ),
+    ).resolves.toMatchObject({ status: 'running', workflowId: null });
   });
 
   it('builds bounded FTS prefixes without exposing FTS operators', () => {

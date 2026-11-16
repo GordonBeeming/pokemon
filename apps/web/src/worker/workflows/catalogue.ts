@@ -7,6 +7,7 @@ import {
 import { languageSchema, type LanguageCode } from '@pokedex/shared';
 import { z } from 'zod';
 import {
+  failCatalogueSyncRun,
   applyStagedCatalogueRun,
   beginStagedCatalogueRun,
   catalogueSyncLanguage,
@@ -228,7 +229,7 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
     step: WorkflowStep,
   ): Promise<void> {
     const language = scheduledLanguage(event);
-    const runId = `sync_${event.instanceId}`;
+    const runId = `workflow_${event.instanceId}`;
     const startedAt = Date.now();
     let currentStep = 'begin-catalogue-run';
     try {
@@ -274,12 +275,12 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
         applyStagedCatalogueRun(this.env.DB, runId, event.payload.allowDestructiveDrop ?? false),
       );
       currentStep = 'sync-set-codes';
-      await step.do('sync-set-codes', async () => {
+      await step.do('sync-set-codes', FETCH_STEP_CONFIG, async () => {
         await syncSetAbbreviations(this.env.DB, language, setAbbreviations);
         return null;
       });
       currentStep = 'cleanup-catalogue-run';
-      await step.do('cleanup-catalogue-run', async () => {
+      await step.do('cleanup-catalogue-run', FETCH_STEP_CONFIG, async () => {
         if (event.payload.objectKey?.startsWith('staged/tcgdex/'))
           await this.env.ART.delete(event.payload.objectKey);
         await this.env.DB.prepare(
@@ -315,14 +316,7 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
           actorId: event.payload.actorId,
           requestId: event.payload.requestId,
         },
-        async () => {
-          await this.env.DB.prepare(
-            `UPDATE sync_runs SET completed_at = ?1, status = 'failed', refusal_reason = ?2
-           WHERE id = ?3 AND status = 'running'`,
-          )
-            .bind(nowSeconds(), message, runId)
-            .run();
-        },
+        () => failCatalogueSyncRun(this.env.DB, runId, message),
       );
       throw error;
     }

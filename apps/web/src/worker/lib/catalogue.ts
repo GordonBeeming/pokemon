@@ -1,3 +1,4 @@
+import { catalogueWorkflowId } from './catalogue-workflow-id';
 import {
   cardIdSchema,
   FRAME_TYPE_RAW_NAMES,
@@ -616,6 +617,22 @@ export async function stageCatalogueCards(
   }
 }
 
+export async function failCatalogueSyncRun(
+  db: D1Database,
+  runId: string,
+  message: string,
+): Promise<void> {
+  // Applying cards is atomic, but a later set-code or cleanup step can still fail.
+  // Preserve the committed cards and mark the overall Workflow outcome accurately.
+  await db
+    .prepare(
+      `UPDATE sync_runs SET completed_at=?1, status='failed', refusal_reason=?2
+    WHERE id=?3 AND status IN ('running','complete')`,
+    )
+    .bind(nowSeconds(), message, runId)
+    .run();
+}
+
 export async function latestCatalogueSyncRun(db: D1Database) {
   const row = await db
     .prepare(
@@ -633,7 +650,7 @@ export async function latestCatalogueSyncRun(db: D1Database) {
   if (!row) return null;
   const reason = row.refusal_reason ?? '';
   return {
-    workflowId: row.id.startsWith('sync_') ? row.id.slice(5) : null,
+    workflowId: catalogueWorkflowId(row.id),
     status: row.status,
     startedAt: row.started_at,
     completedAt: row.completed_at,
@@ -652,13 +669,15 @@ export async function catalogueSyncHealth(
   workflowStatus: (id: string) => Promise<string>,
 ) {
   const latest = await latestCatalogueSyncRun(db);
-  if (latest?.workflowId && latest.status === 'running') {
+  if (latest?.workflowId && ['running', 'complete'].includes(latest.status)) {
     try {
       latest.status = await workflowStatus(latest.workflowId);
     } catch (error) {
       if (!/instance.not_found|not found|does not exist/iu.test(describeError(error))) throw error;
-      latest.status = 'failed';
-      latest.failure = 'sync_failed';
+      if (latest.status !== 'complete') {
+        latest.status = 'failed';
+        latest.failure = 'sync_failed';
+      }
     }
   }
   return latest;

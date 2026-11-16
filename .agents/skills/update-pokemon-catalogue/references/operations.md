@@ -28,7 +28,7 @@ pnpm --dir apps/web exec wrangler workflows trigger pokedex-catalogue-sync '{"la
 pnpm --dir apps/web exec wrangler workflows instances describe pokedex-catalogue-sync '<run-id>' --config wrangler.jsonc --env-file /dev/null --no-step-output
 ```
 
-The full-sync D1 row is `sync_<run-id>`. Poll at a sensible interval and keep progress visible. The command can produce many step rows; redirect to a log and summarize status and the last successful step. Use server start/end timestamps if the CLI's displayed duration is inconsistent.
+New full-sync Workflow rows use `workflow_<run-id>`. Legacy scheduled/API rows use `sync_catalogue-…`; ordinary `sync_<uuid>` staged imports are not Workflow instances. Poll at a sensible interval and keep progress visible. The command can produce many step rows; redirect to a log and summarize status and the last successful step. Use server start/end timestamps if the CLI's displayed duration is inconsistent.
 
 Each backup protects one user's collection/binder/custom-card state; provider catalogue data is rebuildable. Do not describe it as a full database export.
 

@@ -1,3 +1,4 @@
+import { catalogueWorkflowId } from './catalogue-workflow-id';
 import { runScheduledBackups } from './backup';
 import { describeError, logError, logInfo } from './log';
 
@@ -81,11 +82,13 @@ export async function runningCatalogueSync(
       `SELECT id FROM sync_runs
        WHERE provider = 'tcgdex' AND language = 'en' AND complete_source = 1
          AND status = 'running'
+         AND (id GLOB 'workflow_*' OR id GLOB 'sync_catalogue-*')
        ORDER BY started_at DESC LIMIT 1`,
     )
     .first<{ id: string }>();
   if (!running) return null;
-  const workflowId = running.id.replace(/^sync_/u, '');
+  const workflowId = catalogueWorkflowId(running.id);
+  if (!workflowId) return null;
   const status = await workflowStatus(workflowId);
   if (status !== 'errored' && status !== 'terminated') return workflowId;
   await db

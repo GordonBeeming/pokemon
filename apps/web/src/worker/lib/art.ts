@@ -88,12 +88,29 @@ function officialArtObjectKey(cardId: string, variant: ArtVariant, checksum: str
   return `cards/${encodeURIComponent(cardId)}/${variant}/${checksum}.png`;
 }
 
-function isPng(value: Uint8Array): boolean {
-  return (
-    value.byteLength >= 33 &&
-    [137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => value[index] === byte) &&
-    ascii(value, 12, 4) === 'IHDR'
-  );
+export function isPng(value: Uint8Array): boolean {
+  if (
+    value.byteLength < 33 ||
+    ![137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => value[index] === byte)
+  )
+    return false;
+  const view = new DataView(value.buffer, value.byteOffset, value.byteLength);
+  let offset = 8;
+  let imageData = false;
+  while (offset + 12 <= value.byteLength) {
+    const length = view.getUint32(offset);
+    const end = offset + 12 + length;
+    if (end > value.byteLength) return false;
+    const kind = ascii(value, offset + 4, 4);
+    if (offset === 8) {
+      if (kind !== 'IHDR' || length !== 13 || !view.getUint32(16) || !view.getUint32(20))
+        return false;
+    } else if (kind === 'IHDR') return false;
+    if (kind === 'IDAT' && length > 0) imageData = true;
+    if (kind === 'IEND') return length === 0 && imageData && end === value.byteLength;
+    offset = end;
+  }
+  return false;
 }
 
 async function hashToken(token: string): Promise<string> {

@@ -110,3 +110,20 @@ describe('runningCatalogueSync', () => {
     );
   });
 });
+
+it('tracks reserved Workflow runs without mistaking ordinary staged imports for Workflows', async () => {
+  const { raw, db } = setup();
+  raw.exec(`INSERT INTO sync_runs(id,provider,language,started_at,status,complete_source)
+    VALUES ('workflow_recovery','tcgdex','en',1,'running',1),('sync_ordinary','tcgdex','en',2,'running',1)`);
+  const lookedUp: string[] = [];
+  expect(
+    await runningCatalogueSync(db, (id) => {
+      lookedUp.push(id);
+      return Promise.resolve('running');
+    }),
+  ).toBe('recovery');
+  expect(lookedUp).toEqual(['recovery']);
+  expect(raw.prepare("SELECT status FROM sync_runs WHERE id='sync_ordinary'").get()).toEqual({
+    status: 'running',
+  });
+});

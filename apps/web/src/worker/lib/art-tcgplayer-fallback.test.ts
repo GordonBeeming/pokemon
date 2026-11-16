@@ -184,3 +184,30 @@ describe('official Pokémon artwork fallback', () => {
     },
   );
 });
+
+it('does not persist a truncated official PNG as valid cached art', async () => {
+  const db = setup();
+  await db.prepare("UPDATE card_sources SET source_id='me06-106'").run();
+  const art = fakeR2();
+  const truncated = Uint8Array.from(
+    Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDv8AAAAASUVORK5CYII=',
+      'base64',
+    ),
+  ).subarray(0, 33);
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((input: RequestInfo) =>
+      Promise.resolve(
+        typeof input === 'string' && input.includes('api.tcgdex.net')
+          ? Response.json({ id: 'me06-106', localId: '106', set: { id: 'me06' } })
+          : new Response(truncated),
+      ),
+    ),
+  );
+  expect(await getArtResponse(db, art, 'owner', 'card', 'low', request())).toBeNull();
+  expect(art.objects.size).toBe(0);
+  expect(await db.prepare('SELECT COUNT(*) AS count FROM art_manifest').first()).toEqual({
+    count: 0,
+  });
+});
