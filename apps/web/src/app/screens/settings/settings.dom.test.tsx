@@ -321,3 +321,46 @@ describe('subsequent scheduled catalogue run', () => {
     expect(document.body.textContent?.match(/The catalogue sync finished\./gu)).toHaveLength(2);
   });
 });
+
+it('refreshes a failed progress query when Sync now resumes the same Workflow id', async () => {
+  sessionStorage.setItem('pokedex:catalogue-sync-workflow', 'wf-resume');
+  let resumed = false;
+  stubFetch((method, path) => {
+    if (method === 'POST' && path === '/api/catalogue/full-sync') {
+      resumed = true;
+      return { status: 202, body: { ok: true, workflowId: 'wf-resume', resumed: true } };
+    }
+    if (path === '/api/catalogue/full-sync/wf-resume')
+      return resumed
+        ? { status: 202, body: { ok: true, status: 'running' } }
+        : { status: 503, body: { ok: false, error: 'catalogue_sync_failed' } };
+    if (path === '/api/catalogue/sync-status')
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          latest: {
+            status: 'failed',
+            workflowId: 'wf-resume',
+            startedAt: 1,
+            completedAt: 2,
+            failure: 'sync_failed',
+          },
+        },
+      };
+    return { status: 200, body: { ok: true, freshness: { catalogue: { lastSuccessAt: 1 } } } };
+  });
+  await render(<CatalogueSyncTab />);
+  await flush(15);
+  const button = [...container.querySelectorAll('button')].find(
+    (b) => b.textContent?.trim() === 'Sync now',
+  );
+  expect(button?.disabled).toBe(false);
+  await step(() => button?.click());
+  await flush(20);
+  expect(resumed).toBe(true);
+  expect(
+    requests.filter((r) => r.path === '/api/catalogue/full-sync/wf-resume').length,
+  ).toBeGreaterThanOrEqual(2);
+  expect(container.textContent).toContain('Syncing cards from TCGdex');
+});

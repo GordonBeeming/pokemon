@@ -36,7 +36,9 @@ Each backup protects one user's collection/binder/custom-card state; provider ca
 
 A code deployment can reset `CatalogueFetcher` during a request. The workflow may resume and advance its steps while `sync_runs` remains marked failed by the interrupted execution. Always compare both before reporting failure or triggering another import.
 
-For this specific mismatch, first verify that the same live instance is running and has completed steps after the recorded failure, that no newer full English sync exists, and that nothing has yet been applied. Preserve the failed row's status, timestamp, and reason in the run report/audit trail. A guarded update of that exact row from `failed` to `running`, clearing its failed-at timestamp and refusal reason, can reconcile the replay. Guard on the observed values and zero source/import counts; require exactly one changed row. Add a `catalogue.sync_tracking_reconciled` audit event. If these checks do not hold, stop to investigate instead of resetting status.
+For an unapplied tracking failure, use Settings › Catalogue › Sync now (or its normal admin `POST /api/catalogue/full-sync`). The app checks the real Workflow outcome, requires the latest full run with zero source/import counts and no apply claim or competing run, and preserves the old failure in `catalogue.sync_tracking_recovered` audit metadata. It restarts the same instance from `stage-en-0`, retaining all earlier fetch checkpoints. The response has `resumed: true` and the original Workflow id. Keep monitoring that instance rather than starting a second full download. A 30-second acknowledgement grace lets the engine finish accepting the restart without another poll or request retiring it prematurely.
+
+Execution errors are diagnostic until the Workflow engine confirms its outcome. Staging replays can restore safe, unapplied tracking automatically. Applied or superseded runs are never reopened by this recovery path.
 
 Never mark the row complete yourself. The workflow's successful apply must set its true completion timestamp.
 

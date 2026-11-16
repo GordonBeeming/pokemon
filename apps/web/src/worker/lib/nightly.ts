@@ -1,3 +1,4 @@
+import { catalogueRestartPending } from './catalogue-recovery';
 import { catalogueWorkflowId } from './catalogue-workflow-id';
 import { runScheduledBackups } from './backup';
 import { describeError, logError, logInfo } from './log';
@@ -97,11 +98,12 @@ export async function runningCatalogueSync(
     if (running.status === 'complete') return null;
     status = 'terminated';
   }
+  if (status === 'errored' && (await catalogueRestartPending(db, running.id))) return workflowId;
   if (status === 'complete') return null;
   if (status !== 'errored' && status !== 'terminated') return workflowId;
   await db
     .prepare(
-      `UPDATE sync_runs SET completed_at = ?1, status = 'failed', refusal_reason = ?2
+      `UPDATE sync_runs SET completed_at = ?1, status = 'failed', refusal_reason = COALESCE(refusal_reason, ?2)
        WHERE id = ?3 AND status IN ('running','complete')`,
     )
     .bind(Math.floor(Date.now() / 1000), `workflow_${status}`, running.id)

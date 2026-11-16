@@ -135,12 +135,31 @@ describe('catalogue cloud invariants', () => {
     database.exec(`INSERT INTO sync_runs(id,provider,language,started_at,completed_at,status,complete_source,refusal_reason)
       VALUES('workflow_weekly','tcgdex','en',5,6,'failed',1,'D1 DB is overloaded. Too many resources consumed within a 10 second window.');`);
     await expect(latestCatalogueSyncRun(sqliteD1(database))).resolves.toEqual({
+      runId: 'workflow_weekly',
       workflowId: 'weekly',
       status: 'failed',
       startedAt: 5,
       completedAt: 6,
       failure: 'database_busy',
     });
+    await expect(
+      catalogueSyncHealth(sqliteD1(database), () => Promise.resolve('running')),
+    ).resolves.toMatchObject({ status: 'running' });
+    expect(
+      database.prepare("SELECT status FROM sync_runs WHERE id='workflow_weekly'").get(),
+    ).toEqual({ status: 'running' });
+    await expect(
+      catalogueSyncHealth(sqliteD1(database), () => Promise.resolve('errored')),
+    ).resolves.toMatchObject({ status: 'queued' });
+    expect(
+      database.prepare("SELECT status FROM sync_runs WHERE id='workflow_weekly'").get(),
+    ).toEqual({ status: 'running' });
+    database.exec('UPDATE audit SET created_at=0');
+
+    database.exec("UPDATE sync_runs SET status='failed' WHERE id='workflow_weekly'");
+    await expect(
+      catalogueSyncHealth(sqliteD1(database), () => Promise.resolve('complete')),
+    ).resolves.toMatchObject({ status: 'failed' });
     database.exec("UPDATE sync_runs SET status='running' WHERE id='workflow_weekly'");
     await expect(
       catalogueSyncHealth(sqliteD1(database), () =>
@@ -156,6 +175,10 @@ describe('catalogue cloud invariants', () => {
     await expect(
       catalogueSyncHealth(sqliteD1(database), () => Promise.resolve('errored')),
     ).resolves.toMatchObject({ status: 'errored' });
+    expect(
+      database.prepare("SELECT status FROM sync_runs WHERE id='workflow_weekly'").get(),
+    ).toEqual({ status: 'failed' });
+    database.exec("UPDATE sync_runs SET status='complete' WHERE id='workflow_weekly'");
     await expect(
       catalogueSyncHealth(sqliteD1(database), () =>
         Promise.reject(new Error('instance.not_found')),
