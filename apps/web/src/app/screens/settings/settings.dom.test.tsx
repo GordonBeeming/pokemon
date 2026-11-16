@@ -43,7 +43,7 @@ function stubFetch(answer: (method: string, path: string) => Answer): void {
   );
 }
 
-async function render(node: ReactNode): Promise<void> {
+async function render(node: ReactNode): Promise<QueryClient> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   await step(() =>
     root.render(
@@ -53,6 +53,7 @@ async function render(node: ReactNode): Promise<void> {
     ),
   );
   await flush();
+  return client;
 }
 
 async function flush(times = 10): Promise<void> {
@@ -285,5 +286,38 @@ describe('catalogue progress recovery', () => {
       1,
     );
     expect(sessionStorage.getItem('pokedex:catalogue-sync-workflow')).toBeNull();
+  });
+});
+
+describe('subsequent scheduled catalogue run', () => {
+  it('adopts a different run after completing the first without replaying the old completion', async () => {
+    sessionStorage.clear();
+    let latest = 'first';
+    stubFetch((_method, path) => ({
+      status: 200,
+      body:
+        path === '/api/catalogue/sync-status'
+          ? {
+              ok: true,
+              latest: {
+                status: 'running',
+                workflowId: latest,
+                startedAt: latest === 'first' ? 1 : 2,
+                completedAt: null,
+                failure: 'sync_failed',
+              },
+            }
+          : path.startsWith('/api/catalogue/full-sync/')
+            ? { ok: true, status: 'complete' }
+            : { ok: true, freshness: { catalogue: { lastSuccessAt: 1 } } },
+    }));
+    const client = await render(<CatalogueSyncTab />);
+    await flush(15);
+    latest = 'second';
+    await client.invalidateQueries({ queryKey: ['settings', 'catalogue-sync-health'] });
+    await flush(20);
+    expect(requests.filter((r) => r.path === '/api/catalogue/full-sync/first')).toHaveLength(1);
+    expect(requests.filter((r) => r.path === '/api/catalogue/full-sync/second')).toHaveLength(1);
+    expect(document.body.textContent?.match(/The catalogue sync finished\./gu)).toHaveLength(2);
   });
 });

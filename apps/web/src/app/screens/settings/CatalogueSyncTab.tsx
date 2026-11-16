@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { ApiError } from '../../api/client';
 import {
   startCatalogueSync,
@@ -49,27 +49,31 @@ export function CatalogueSyncTab(): ReactElement {
   const [workflowId, setWorkflowId] = useState<string | null>(readWorkflow);
   const [starting, setStarting] = useState(false);
   const progress = useCatalogueSyncProgress(workflowId);
+  const completedWorkflows = useRef(new Set<string>());
 
   useEffect(() => {
     if (
-      !workflowId &&
+      (!workflowId || progress.data === 'complete' || progress.isError) &&
       health.data?.workflowId &&
+      health.data.workflowId !== workflowId &&
+      !completedWorkflows.current.has(health.data.workflowId) &&
       ['queued', 'running', 'waiting', 'paused'].includes(health.data.status)
     ) {
       writeWorkflow(health.data.workflowId);
       setWorkflowId(health.data.workflowId);
     }
-  }, [workflowId, health.data]);
+  }, [workflowId, health.data, progress.data, progress.isError]);
 
   useEffect(() => {
     if (progress.data === 'complete') {
+      if (workflowId) completedWorkflows.current.add(workflowId);
       writeWorkflow(null);
       void queryClient.invalidateQueries({ queryKey: ['settings', 'catalogue-last-synced'] });
       void queryClient.invalidateQueries({ queryKey: ['catalogue'] });
       void queryClient.invalidateQueries({ queryKey: ['settings', 'catalogue-sync-health'] });
       toast('success', 'The catalogue sync finished.');
     }
-  }, [progress.data, queryClient, toast]);
+  }, [progress.data, queryClient, toast, workflowId]);
 
   useEffect(() => {
     if (progress.isError) writeWorkflow(null);
@@ -175,7 +179,7 @@ function PriceRefreshCard(): ReactElement {
     void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     toast('success', 'Prices are up to date.');
     setWorkflowId(null);
-  }, [progress.data, queryClient, toast]);
+  }, [progress.data, queryClient, toast, workflowId]);
 
   async function start(): Promise<void> {
     setStarting(true);
