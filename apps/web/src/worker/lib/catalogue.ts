@@ -1,3 +1,4 @@
+import { catalogueWorkflowId } from './catalogue-workflow-id';
 import {
   cardIdSchema,
   FRAME_TYPE_RAW_NAMES,
@@ -29,7 +30,7 @@ import { groupRepresentative, rankedGroups } from './groups';
 import { getFavorites, setFavoriteKey } from './settings';
 import { base64UrlDecode, base64UrlEncode } from './crypto';
 import { escapedFtsQuery, isoFromSeconds, newId, nowSeconds, scalarCount } from './db';
-import { ApplicationError } from './log';
+import { ApplicationError, describeError } from './log';
 
 interface CardRow {
   pokedex_number: number | null;
@@ -525,21 +526,19 @@ export async function stageCatalogueCards(
         `WITH candidate(value) AS (SELECT value FROM json_each(?1))
          SELECT card.id, card.language, card.set_name, card.number, card.name
          FROM catalogue_cards card
-         JOIN candidate
-           ON card.language = json_extract(candidate.value, '$.language')
-          AND lower(card.set_name) = lower(json_extract(candidate.value, '$.setName'))
-          AND card.number = json_extract(candidate.value, '$.number')
-          AND lower(card.name) = lower(json_extract(candidate.value, '$.name'))
          WHERE card.is_custom = 0
+           AND (card.language, lower(card.set_name), card.number, lower(card.name)) IN
+             (SELECT json_extract(value, '$.language'), lower(json_extract(value, '$.setName')),
+                     json_extract(value, '$.number'), lower(json_extract(value, '$.name'))
+              FROM candidate)
          UNION ALL
          SELECT staged.card_id AS id, staged.language, staged.set_name, staged.number, staged.name
          FROM catalogue_stage_cards staged
-         JOIN candidate
-           ON staged.language = json_extract(candidate.value, '$.language')
-          AND lower(staged.set_name) = lower(json_extract(candidate.value, '$.setName'))
-          AND staged.number = json_extract(candidate.value, '$.number')
-          AND lower(staged.name) = lower(json_extract(candidate.value, '$.name'))
-         WHERE staged.run_id = ?2`,
+         WHERE staged.run_id = ?2
+           AND (staged.language, lower(staged.set_name), staged.number, lower(staged.name)) IN
+             (SELECT json_extract(value, '$.language'), lower(json_extract(value, '$.setName')),
+                     json_extract(value, '$.number'), lower(json_extract(value, '$.name'))
+              FROM candidate)`,
       )
       .bind(
         JSON.stringify(
@@ -616,6 +615,72 @@ export async function stageCatalogueCards(
         .bind(runId, JSON.stringify(chunk))
         .run();
   }
+}
+
+export async function failCatalogueSyncRun(
+  db: D1Database,
+  runId: string,
+  message: string,
+): Promise<void> {
+  // Applying cards is atomic, but a later set-code or cleanup step can still fail.
+  // Preserve the committed cards and mark the overall Workflow outcome accurately.
+  await db
+    .prepare(
+      `UPDATE sync_runs SET completed_at=?1, status='failed', refusal_reason=?2
+    WHERE id=?3 AND status IN ('running','complete')`,
+    )
+    .bind(nowSeconds(), message, runId)
+    .run();
+}
+
+export async function latestCatalogueSyncRun(db: D1Database) {
+  const row = await db
+    .prepare(
+      `SELECT id, status, started_at, completed_at, refusal_reason FROM sync_runs
+     WHERE provider='tcgdex' AND language='en' AND complete_source=1
+     ORDER BY started_at DESC, id DESC LIMIT 1`,
+    )
+    .first<{
+      id: string;
+      status: string;
+      started_at: number;
+      completed_at: number | null;
+      refusal_reason: string | null;
+    }>();
+  if (!row) return null;
+  const reason = row.refusal_reason ?? '';
+  return {
+    workflowId: catalogueWorkflowId(row.id),
+    status: row.status,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    failure: /overloaded|resources consumed/iu.test(reason)
+      ? 'database_busy'
+      : /timeout|aborted/iu.test(reason)
+        ? 'provider_timeout'
+        : /drop|reject/iu.test(reason)
+          ? 'source_rejected'
+          : 'sync_failed',
+  };
+}
+
+export async function catalogueSyncHealth(
+  db: D1Database,
+  workflowStatus: (id: string) => Promise<string>,
+) {
+  const latest = await latestCatalogueSyncRun(db);
+  if (latest?.workflowId && ['running', 'complete'].includes(latest.status)) {
+    try {
+      latest.status = await workflowStatus(latest.workflowId);
+    } catch (error) {
+      if (!/instance.not_found|not found|does not exist/iu.test(describeError(error))) throw error;
+      if (latest.status !== 'complete') {
+        latest.status = 'failed';
+        latest.failure = 'sync_failed';
+      }
+    }
+  }
+  return latest;
 }
 
 export async function latestFullEnglishCatalogueSync(db: D1Database): Promise<number | null> {
@@ -1415,8 +1480,17 @@ export async function searchCards(
     values.push(...spellings);
   }
   if (filters.pokedexNumber !== undefined) {
-    where.push(`c.pokedex_number = ?${values.length + 1}`);
+    const numberParameter = values.length + 1;
+    const species = NATIONAL_POKEDEX.find((entry) => entry.number === filters.pokedexNumber);
     values.push(filters.pokedexNumber);
+    if (species) {
+      // Multi-Pokémon printings retain the first dex number in catalogue metadata.
+      // An exact name phrase also finds the partner, without Mew matching Mewtwo.
+      where.push(`(c.pokedex_number = ?${numberParameter} OR
+        (c.category = 'pokemon' AND instr(c.name, '&') > 0 AND c.id IN
+          (SELECT card_id FROM catalogue_search WHERE catalogue_search MATCH ?${values.length + 1})))`);
+      values.push(`name : "${species.name.replaceAll('"', '""')}"`);
+    } else where.push(`c.pokedex_number = ?${numberParameter}`);
   }
   if (filters.region) {
     const range = regionDexRange(filters.region);

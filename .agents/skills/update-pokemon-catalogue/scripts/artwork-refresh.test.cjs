@@ -46,7 +46,7 @@ for (const name of ['op', 'pnpm']) {
 const preload = path.join(dir, 'fetch.mjs');
 fs.writeFileSync(
   preload,
-  `import{createHash}from'node:crypto';const bytes=process.env.MOCK_JPEG?Buffer.concat([Buffer.from([0xff,0xd8,0xff,0xe0]),Buffer.from('jpegfixture')]):Buffer.from('RIFF0000WEBPfixture'+(process.env.MOCK_CHANGE?'changed':''));globalThis.fetch=async(url)=>{if(process.env.MOCK_AUTH_FAIL)return new Response('',{status:401});if(String(url).includes('/manifest'))return Response.json({entries:['card-a','card-b'].flatMap(cardId=>['high','low'].map(variant=>({cardId,variant,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length}))),cursor:null});return new Response(bytes,{headers:{'content-type':'image/webp'}})};`,
+  `import{createHash}from'node:crypto';let bytes=process.env.MOCK_PNG?Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aDv8AAAAASUVORK5CYII=','base64'):process.env.MOCK_JPEG?Buffer.concat([Buffer.from([0xff,0xd8,0xff,0xe0]),Buffer.from('jpegfixture')]):Buffer.from('RIFF0000WEBPfixture'+(process.env.MOCK_CHANGE?'changed':''));if(process.env.MOCK_PNG_TRUNCATED)bytes=bytes.subarray(0,33);globalThis.fetch=async(url)=>{if(process.env.MOCK_AUTH_FAIL)return new Response('',{status:401});if(String(url).includes('/manifest'))return Response.json({entries:['card-a','card-b'].flatMap(cardId=>['high','low'].map(variant=>({cardId,variant,sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length}))),cursor:null});return new Response(bytes,{headers:{'content-type':'image/webp'}})};`,
 );
 let env = { ...process.env, PATH: bin + ':' + process.env.PATH, MOCK_DIR: dir };
 // A shell that already picked an admin must not decide the admin-selection cases.
@@ -105,6 +105,26 @@ assert.equal(JSON.parse(fs.readFileSync(path.join(failedDir, 'progress.json'))).
 r = run('revoke');
 assert.equal(r.status, 0, r.stderr);
 assert(JSON.parse(fs.readFileSync(path.join(runDir, 'access.json'))).revokedAt);
+
+// Official Pokémon PNGs are cached and verified like the existing formats.
+const pngDir = path.join(dir, 'png');
+fs.mkdirSync(pngDir);
+fs.copyFileSync(path.join(runDir, 'access.json'), path.join(pngDir, 'access.json'));
+r = run('warm', undefined, pngDir, { MOCK_PNG: '1' });
+assert.equal(r.status, 0, r.stderr);
+r = run('verify', undefined, pngDir, { MOCK_PNG: '1' });
+assert.equal(r.status, 0, r.stderr);
+
+// Header-only responses must not be certified, even with a matching manifest hash.
+const truncatedDir = path.join(dir, 'truncated-png');
+fs.mkdirSync(truncatedDir);
+fs.copyFileSync(path.join(runDir, 'access.json'), path.join(truncatedDir, 'access.json'));
+r = run('warm', undefined, truncatedDir, { MOCK_PNG: '1', MOCK_PNG_TRUNCATED: '1' });
+assert.equal(r.status, 0, r.stderr);
+assert.equal(JSON.parse(r.stdout.trim().split('\n').at(-1)).failed, 4);
+assert.equal(JSON.parse(r.stdout.trim().split('\n').at(-1)).succeeded, 0);
+r = run('verify', undefined, truncatedDir, { MOCK_PNG: '1', MOCK_PNG_TRUNCATED: '1' });
+assert.notEqual(r.status, 0, r.stderr);
 
 // A TCGplayer JPEG served by the art route counts as cached artwork.
 const jpegDir = path.join(dir, 'jpeg');

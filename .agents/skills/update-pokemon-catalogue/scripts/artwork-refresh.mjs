@@ -1,7 +1,32 @@
+import { Buffer } from 'node:buffer';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { resolve, join } from 'node:path';
+
+function validPng(bytes) {
+  if (
+    bytes.length < 33 ||
+    ![137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => bytes[index] === byte)
+  )
+    return false;
+  let offset = 8,
+    imageData = false;
+  while (offset + 12 <= bytes.length) {
+    const length = bytes.readUInt32BE(offset),
+      end = offset + 12 + length;
+    if (end > bytes.length) return false;
+    const kind = bytes.toString('ascii', offset + 4, offset + 8);
+    if (offset === 8) {
+      if (kind !== 'IHDR' || length !== 13 || !bytes.readUInt32BE(16) || !bytes.readUInt32BE(20))
+        return false;
+    } else if (kind === 'IHDR') return false;
+    if (kind === 'IDAT' && length > 0) imageData = true;
+    if (kind === 'IEND') return length === 0 && imageData && end === bytes.length;
+    offset = end;
+  }
+  return false;
+}
 
 const [command, repoArg, runArg, limitArg] = process.argv.slice(2);
 if (!['provision', 'warm', 'verify', 'revoke'].includes(command) || !repoArg || !runArg) {
@@ -257,11 +282,12 @@ try {
             chunks.push(chunk);
           }
           const bytes = Buffer.concat(chunks);
-          // The art route serves TCGdex WebP, or a TCGplayer JPEG when TCGdex has none.
+          // Cached artwork can be TCGdex WebP, TCGplayer JPEG, or an official Pokémon PNG.
           const webp =
             bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP';
           const jpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
-          if (!webp && !jpeg) throw new Error('Artwork is not WebP or JPEG');
+          const png = validPng(bytes);
+          if (!webp && !jpeg && !png) throw new Error('Artwork is not WebP, JPEG or PNG');
           log({
             ...card,
             ok: true,

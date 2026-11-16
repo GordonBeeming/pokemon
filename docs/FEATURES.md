@@ -402,6 +402,10 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] keep · An unsubmitted "go to page" value is discarded when switching to a different binder via
       a direct link · done when: typing "45" in the page-jump field without pressing Go, then opening
       a different binder by URL, shows an empty jump field, not the leftover "45".
+- [ ] changed · Binder search shows full-opacity artwork only for copies placed in that binder
+      version. Other artwork stays at 45% opacity, including owned copies placed elsewhere, while
+      ownership captions stay accurate · done when: an open target previews an owned printing faded
+      with "Owned · not in this binder", and a placed copy stays at full opacity.
 - [ ] keep · Selecting a pocket opens pocket tools whose available actions depend on its state
       (target / reserved sleeve / empty / archived read-only) · done when: selecting an empty pocket
       offers "Insert targets here" and "Reserve sleeve", while a filled target pocket instead offers
@@ -629,6 +633,14 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] new · Card frame colours: per-type presets, a custom colour picker, "Reset to defaults", and a
       contrast warning below 4.5:1 against white · done when: choosing a poor-contrast custom colour
       shows the warning, and "Reset to defaults" restores every type's shipped colour.
+- [ ] changed · Every Pokémon inspector offers "View all {Pokémon} cards", including when opened
+      from Catalogue. The species gallery resets the old search filters, includes named partner
+      Pokémon on multi-Pokémon cards, and keeps unsaved notes open before navigation.
+- [ ] changed · Full catalogue sync discovers physical cards through per-set indexes and keeps
+      letter-numbered cards; staging matches physical identities without repeated nested catalogue
+      scans. Scheduled and manual failures remain visible in Settings across tabs.
+- [ ] changed · Missing Mega Evolution main-set English artwork can use the exact official Pokémon
+      PNG after TCGdex and linked TCGplayer artwork, with both cached sizes preserving existing art.
 - [ ] new · "Sync now" triggers a catalogue sync from TCGdex, with the last-synced date shown · done
       when: pressing it starts a sync and the "Last synced" date updates once it completes.
 - [ ] new · A scheduled, infrastructure-level backup runs automatically with no user-facing control ·

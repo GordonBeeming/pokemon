@@ -1,6 +1,14 @@
 // @vitest-environment happy-dom
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act } from 'react';
+import { act, type ReactNode } from 'react';
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  Outlet,
+  RouterProvider,
+} from '@tanstack/react-router';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PriceVisibilityContextForTests } from '../../cards/PriceVisibility';
@@ -99,10 +107,29 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+let router: ReturnType<typeof inspectorRouter>;
+function inspectorRouter(node: ReactNode) {
+  const rootRoute = createRootRoute({ component: () => <Outlet /> });
+  const index = createRoute({ getParentRoute: () => rootRoute, path: '/', component: () => node });
+  const catalogue = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/catalogue',
+    component: () => <div>All Pokémon cards</div>,
+  });
+  return createRouter({
+    routeTree: rootRoute.addChildren([index, catalogue]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  });
+}
+function renderInRouter(node: ReactNode): void {
+  router = inspectorRouter(node);
+  root.render(<RouterProvider router={router} />);
+}
+
 describe('CardInspector — 0 copies', () => {
   it('shows "Add first copy" instead of a quantity counter, and never fades the art', async () => {
     await step(() =>
-      root.render(
+      renderInRouter(
         <QueryClientProvider client={queryClient}>
           <ToastProvider>
             <CardInspector cardId="card-1" onClose={vi.fn()} />
@@ -163,7 +190,7 @@ describe('CardInspector — a card that already has a saved note', () => {
     );
     const dirtyChanges: boolean[] = [];
     await step(() =>
-      root.render(
+      renderInRouter(
         <QueryClientProvider client={queryClient}>
           <ToastProvider>
             <CardInspector
@@ -205,7 +232,7 @@ async function flushUntil(predicate: () => boolean, attempts = 50): Promise<void
 describe('CardInspector — eBay buy and sold listings', () => {
   async function renderWithPrices(showPrices: boolean): Promise<void> {
     await step(() =>
-      root.render(
+      renderInRouter(
         <QueryClientProvider client={queryClient}>
           <ToastProvider>
             <PriceVisibilityContextForTests value={showPrices}>
@@ -246,4 +273,72 @@ describe('CardInspector — eBay buy and sold listings', () => {
 
     expect(container.querySelector('.card-inspector-ebay-links')).toBeNull();
   });
+});
+
+describe('CardInspector species gallery from Catalogue', () => {
+  it.each(['Mimikyu ex', 'Team Rocket’s Mimikyu'])(
+    'offers all Mimikyu cards from %s without an outside context',
+    async (name) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((path: string) =>
+          Promise.resolve(
+            jsonResponse(
+              path.startsWith('/api/catalogue/')
+                ? { ...ZERO_COPY_CARD, card: { ...ZERO_COPY_CARD.card, name, pokedexNumber: 778 } }
+                : { ok: true, binders: [] },
+            ),
+          ),
+        ),
+      );
+      const onClose = vi.fn();
+      await step(() =>
+        renderInRouter(
+          <QueryClientProvider client={queryClient}>
+            <ToastProvider>
+              <CardInspector cardId="card-1" onClose={onClose} />
+            </ToastProvider>
+          </QueryClientProvider>,
+        ),
+      );
+      await flushUntil(() => container.textContent?.includes(name) === true);
+      const link = container.querySelector<HTMLAnchorElement>('.card-inspector-view-all');
+      expect(link?.textContent).toBe('View all Mimikyu cards');
+      expect(new URL(link!.href).searchParams.get('dex')).toBe('778');
+      expect(new URL(link!.href).searchParams.get('q')).toBe('');
+      expect(new URL(link!.href).searchParams.get('owned')).toBe('all');
+      await step(() => link?.click());
+      await flushUntil(() => container.textContent?.includes('All Pokémon cards') === true);
+      expect(router.state.location.pathname).toBe('/catalogue');
+      expect(onClose).not.toHaveBeenCalled();
+    },
+  );
+});
+
+it('keeps an unsaved note open when the species gallery link is clicked', async () => {
+  const dirty: boolean[] = [];
+  await step(() =>
+    renderInRouter(
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <CardInspector
+            cardId="card-1"
+            onClose={vi.fn()}
+            onDirtyChange={(value) => dirty.push(value)}
+          />
+        </ToastProvider>
+      </QueryClientProvider>,
+    ),
+  );
+  await flushUntil(() => container.querySelector('textarea') !== null);
+  const textarea = container.querySelector<HTMLTextAreaElement>('textarea')!;
+  await step(() => {
+    Reflect.set(HTMLTextAreaElement.prototype, 'value', 'An unsaved note', textarea);
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await flushUntil(() => dirty.includes(true));
+  await step(() => container.querySelector<HTMLAnchorElement>('.card-inspector-view-all')?.click());
+  expect(router.state.location.pathname).toBe('/');
+  expect(textarea.value).toBe('An unsaved note');
+  expect(document.body.textContent).toContain('Notes are still saving');
 });

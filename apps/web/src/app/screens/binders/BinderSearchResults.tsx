@@ -23,8 +23,7 @@ const MAX_PRINTINGS = 40;
  * "any printing" card without the lookup. */
 const LOOKED_UP_SPECIES = 12;
 
-/** How strongly a card draws: in this binder at full strength, owned but not in the
- * binder a step back, anything else faded the way the catalogue fades what you lack. */
+/** Ownership and placement stay distinct in captions; only placed copies get full art. */
 type Tier = 'binder' | 'owned' | 'missing';
 
 interface Tile {
@@ -250,6 +249,7 @@ export function BinderSearchResults({
                       card={tile.frame.card}
                       variant={tile.frame.variant}
                       state={tile.frame.tier === 'missing' ? 'unowned' : 'owned'}
+                      dimArt={tile.frame.tier !== 'binder'}
                       palette={palette}
                     />
                   ) : (

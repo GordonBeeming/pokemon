@@ -97,6 +97,7 @@ let resolveFails: boolean;
 let printingCards: unknown[];
 let printingTotal: number | undefined;
 let requests: string[];
+let resolvedCards: unknown[];
 
 function json(body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -122,6 +123,7 @@ beforeEach(() => {
   printingCards = [ownedPrinting, missingPrinting];
   printingTotal = 5;
   requests = [];
+  resolvedCards = [placed, wanted];
   vi.stubGlobal(
     'fetch',
     vi.fn((path: string) => {
@@ -135,7 +137,7 @@ beforeEach(() => {
                 status: 500,
                 headers: { 'content-type': 'application/json' },
               })
-            : json({ ok: true, cards: [placed, wanted] }),
+            : json({ ok: true, cards: resolvedCards }),
         );
       if (path.startsWith('/api/catalogue/search'))
         return Promise.resolve(
@@ -196,7 +198,35 @@ function tiles(): Array<{ label: string; tier: string; art: string }> {
 }
 
 describe('BinderSearchResults', () => {
-  it('draws what the binder holds first, then what you own, then the rest faded', async () => {
+  it.each([
+    ['pokemon', true],
+    ['pokemon', false],
+    ['exact-card', true],
+    ['exact-card', false],
+  ] as const)(
+    'fades an owned %s preview outside this binder (image: %s)',
+    async (kind, hasImage) => {
+      const preview = {
+        ...ownedPrinting,
+        imageLowUrl: hasImage ? 'https://example.test/card.webp' : null,
+      };
+      resolvedCards = [placed, preview];
+      printingCards = [preview];
+      searchMatches = [
+        matches[0],
+        kind === 'pokemon' ? matches[2] : { ...matches[1], targetCardId: preview.id },
+      ];
+      await render();
+      const inBinder = container.querySelector<HTMLElement>('[data-tier="binder"] .card-frame-art');
+      const elsewhere = container.querySelector<HTMLElement>('[data-tier="owned"] .card-frame-art');
+      expect(inBinder?.style.opacity).toBe('1');
+      expect(elsewhere?.style.opacity).toBe('0.45');
+      expect(tiles()[1]?.label).toContain('Owned · not in this binder');
+      expect(tiles()[1]?.art).toMatch(/, owned$/);
+    },
+  );
+
+  it('distinguishes placed copies, owned previews and missing cards', async () => {
     const onJump = vi.fn();
     await render(onJump);
 
@@ -210,7 +240,7 @@ describe('BinderSearchResults', () => {
     expect(drawn[1]?.label).toMatch(/Great Encounters · 15\. Not owned$/);
     expect(drawn[1]?.tier).toBe('missing');
     expect(drawn[1]?.art).toMatch(/not owned/);
-    // The open Claydol pocket shows the printing you own, a step back from the binder's.
+    // Ownership remains accurate even though this printing is not placed here.
     expect(drawn[2]?.label).toMatch(
       /^Go to Page 2 · row 2, pocket 1: Claydol · Ancient Origins · 33\. Owned · not in this binder$/,
     );

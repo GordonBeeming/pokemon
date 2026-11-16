@@ -7,6 +7,7 @@ import {
 import { languageSchema, type LanguageCode } from '@pokedex/shared';
 import { z } from 'zod';
 import {
+  failCatalogueSyncRun,
   applyStagedCatalogueRun,
   beginStagedCatalogueRun,
   catalogueSyncLanguage,
@@ -19,6 +20,7 @@ import {
 import { nowSeconds } from '../lib/db';
 import { describeError, logInfo } from '../lib/log';
 import { recordWorkflowFailure } from '../lib/workflow-failure';
+import { catalogueSetIds, catalogueSetDetail } from './catalogue-source';
 import { CATALOGUE_FETCH_CHUNK_SIZE, catalogueRequestChunks } from './catalogue-batching';
 
 const LIST_MAX_BYTES = 25 * 1024 * 1024;
@@ -33,19 +35,6 @@ const FETCH_STEP_CONFIG = {
   timeout: '5 minutes',
 } as const;
 
-const cardBriefsSchema = z
-  .array(z.object({ id: z.string().trim().min(1).max(256) }).passthrough())
-  .max(50_000);
-const setSchema = z
-  .object({
-    id: z.string().trim().min(1),
-    releaseDate: z.string().date().nullable().optional(),
-    abbreviation: z
-      .object({ official: z.string().trim().min(1).max(16) })
-      .partial()
-      .optional(),
-  })
-  .passthrough();
 const batchIdsSchema = z
   .array(z.string().trim().min(1).max(256))
   .min(1)
@@ -140,6 +129,7 @@ function scheduledLanguage(event: Readonly<WorkflowEvent<CatalogueWorkflowPayloa
 }
 
 interface SetMeta {
+  cardIds: string[];
   id: string;
   releaseDate: string | null;
   abbreviation: string | null;
@@ -168,18 +158,13 @@ export class CatalogueFetcher extends DurableObject<CloudflareEnv> {
     const language = languageSchema.parse(languageInput);
     const ids = batchIdsSchema.parse(idsInput);
     return mapConcurrent(ids, OUTBOUND_CONCURRENCY, async (id) => {
-      const parsed = setSchema.safeParse(
+      return catalogueSetDetail(
         await fetchTcgdex(
           `${encodeURIComponent(language)}/sets/${encodeURIComponent(id)}`,
           DETAIL_MAX_BYTES,
         ),
+        id,
       );
-      if (!parsed.success) throw new Error('tcgdex_set_invalid');
-      return {
-        id: parsed.data.id,
-        releaseDate: parsed.data.releaseDate ?? null,
-        abbreviation: parsed.data.abbreviation?.official ?? null,
-      };
     });
   }
 }
@@ -194,13 +179,20 @@ async function fetchLanguageCards(
   step: WorkflowStep,
   fetcher: CatalogueFetcherRpc,
 ): Promise<FetchedLanguageCards> {
-  const briefs = await step.do(`list-${language}-cards`, FETCH_STEP_CONFIG, async () => {
-    const parsed = cardBriefsSchema.safeParse(
-      await fetchTcgdex(`${encodeURIComponent(language)}/cards`, LIST_MAX_BYTES),
+  // The all-cards response grows without bound and now times out. Each set
+  // is small and checkpointed, so a retry never downloads the whole catalogue.
+  const setIds = await step.do(`list-${language}-sets`, FETCH_STEP_CONFIG, async () =>
+    catalogueSetIds(await fetchTcgdex(`${encodeURIComponent(language)}/sets`, LIST_MAX_BYTES)),
+  );
+  const sets: SetMeta[] = [];
+  for (const [page, ids] of catalogueRequestChunks(setIds).entries()) {
+    sets.push(
+      ...(await step.do(`set-index-${language}-${page}`, FETCH_STEP_CONFIG, () =>
+        fetcher.fetchSets(language, ids),
+      )),
     );
-    if (!parsed.success) throw new Error('tcgdex_card_list_invalid');
-    return parsed.data.map((card) => card.id);
-  });
+  }
+  const briefs = [...new Set(sets.flatMap((set) => set.cardIds))];
   const cards: ImportedCard[] = [];
   for (const [page, ids] of catalogueRequestChunks(briefs).entries()) {
     const transformed = await step.do(`detail-${language}-${page}`, FETCH_STEP_CONFIG, () =>
@@ -208,20 +200,10 @@ async function fetchLanguageCards(
     );
     cards.push(...transformed);
   }
-
-  const setIds = [...new Set(cards.map((card) => card.setId))].sort();
-  const releaseDates = new Map<string, string | null>();
-  const setAbbreviations: Array<{ setId: string; abbreviation: string }> = [];
-  for (const [page, ids] of catalogueRequestChunks(setIds).entries()) {
-    const sets = await step.do(`sets-${language}-${page}`, FETCH_STEP_CONFIG, () =>
-      fetcher.fetchSets(language, ids),
-    );
-    for (const set of sets) {
-      releaseDates.set(set.id, set.releaseDate);
-      if (set.abbreviation)
-        setAbbreviations.push({ setId: set.id, abbreviation: set.abbreviation });
-    }
-  }
+  const releaseDates = new Map(sets.map((set) => [set.id, set.releaseDate]));
+  const setAbbreviations = sets.flatMap((set) =>
+    set.abbreviation ? [{ setId: set.id, abbreviation: set.abbreviation }] : [],
+  );
   return {
     cards: await Promise.all(
       cards.map((card) => setImportedCardReleaseDate(card, releaseDates.get(card.setId) ?? null)),
@@ -247,7 +229,7 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
     step: WorkflowStep,
   ): Promise<void> {
     const language = scheduledLanguage(event);
-    const runId = `sync_${event.instanceId}`;
+    const runId = `workflow_${event.instanceId}`;
     const startedAt = Date.now();
     let currentStep = 'begin-catalogue-run';
     try {
@@ -293,12 +275,12 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
         applyStagedCatalogueRun(this.env.DB, runId, event.payload.allowDestructiveDrop ?? false),
       );
       currentStep = 'sync-set-codes';
-      await step.do('sync-set-codes', async () => {
+      await step.do('sync-set-codes', FETCH_STEP_CONFIG, async () => {
         await syncSetAbbreviations(this.env.DB, language, setAbbreviations);
         return null;
       });
       currentStep = 'cleanup-catalogue-run';
-      await step.do('cleanup-catalogue-run', async () => {
+      await step.do('cleanup-catalogue-run', FETCH_STEP_CONFIG, async () => {
         if (event.payload.objectKey?.startsWith('staged/tcgdex/'))
           await this.env.ART.delete(event.payload.objectKey);
         await this.env.DB.prepare(
@@ -334,14 +316,7 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
           actorId: event.payload.actorId,
           requestId: event.payload.requestId,
         },
-        async () => {
-          await this.env.DB.prepare(
-            `UPDATE sync_runs SET completed_at = ?1, status = 'failed', refusal_reason = ?2
-           WHERE id = ?3 AND status = 'running'`,
-          )
-            .bind(nowSeconds(), message, runId)
-            .run();
-        },
+        () => failCatalogueSyncRun(this.env.DB, runId, message),
       );
       throw error;
     }

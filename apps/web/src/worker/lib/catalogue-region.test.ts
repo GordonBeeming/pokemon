@@ -37,3 +37,31 @@ describe('catalogue region metadata', () => {
     expect(await getCardDetail(db, 'owner', 'card-1')).not.toHaveProperty('pokedexNumber');
   });
 });
+
+it('includes partner Pokémon printings without mixing up Mew and Mewtwo or exposing private cards', async () => {
+  const raw = new DatabaseSync(':memory:');
+  databases.push(raw);
+  applyAllMigrations(raw);
+  raw.exec(`INSERT INTO users(id,label,created_at) VALUES('owner','Owner',1),('other','Other',1);
+    INSERT INTO catalogue_cards(id,name,language,category,set_id,set_name,number,pokedex_number,owner_id,created_at,updated_at) VALUES
+    ('mimikyu','Mimikyu ex','en','pokemon','test','Test','1',778,NULL,1,1),
+    ('gengar-mimikyu','Gengar & Mimikyu-GX','en','pokemon','test','Test','2',94,NULL,1,1),
+    ('mew','Mew','en','pokemon','test','Test','3',151,NULL,1,1),
+    ('mewtwo','Mewtwo','en','pokemon','test','Test','4',150,NULL,1,1),
+    ('mewtwo-mew','Mewtwo & Mew-GX','en','pokemon','test','Test','5',150,NULL,1,1),
+    ('mewtwo-darkrai','Mewtwo & Darkrai','en','pokemon','test','Test','6',150,NULL,1,1),
+    ('private-mew','Pikachu & Mew','en','pokemon','test','Test','7',25,'other',1,1);
+    INSERT INTO catalogue_search(card_id,name,set_name,number,species,rarity,artist)
+      SELECT id,name,set_name,number,name,'','' FROM catalogue_cards;`);
+  const db = sqliteD1(raw);
+  expect(
+    (await searchCards(db, 'owner', { limit: 50, offset: 0, pokedexNumber: 778 })).cards
+      .map((c) => c.id)
+      .sort(),
+  ).toEqual(['gengar-mimikyu', 'mimikyu']);
+  expect(
+    (await searchCards(db, 'owner', { limit: 50, offset: 0, pokedexNumber: 151 })).cards
+      .map((c) => c.id)
+      .sort(),
+  ).toEqual(['mew', 'mewtwo-mew']);
+});

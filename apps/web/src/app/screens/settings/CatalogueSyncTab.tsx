@@ -1,10 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { ApiError } from '../../api/client';
 import {
   startCatalogueSync,
   startPriceRefresh,
   useCatalogueLastSynced,
+  useCatalogueSyncHealth,
   useCatalogueSyncProgress,
   usePriceRefreshProgress,
 } from '../../api/queries/settings';
@@ -44,19 +45,35 @@ export function CatalogueSyncTab(): ReactElement {
   const queryClient = useQueryClient();
   const toast = useToast();
   const lastSynced = useCatalogueLastSynced();
+  const health = useCatalogueSyncHealth();
   const [workflowId, setWorkflowId] = useState<string | null>(readWorkflow);
   const [starting, setStarting] = useState(false);
   const progress = useCatalogueSyncProgress(workflowId);
+  const completedWorkflows = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (
+      (!workflowId || progress.data === 'complete' || progress.isError) &&
+      health.data?.workflowId &&
+      health.data.workflowId !== workflowId &&
+      !completedWorkflows.current.has(health.data.workflowId) &&
+      ['queued', 'running', 'waiting', 'paused'].includes(health.data.status)
+    ) {
+      writeWorkflow(health.data.workflowId);
+      setWorkflowId(health.data.workflowId);
+    }
+  }, [workflowId, health.data, progress.data, progress.isError]);
 
   useEffect(() => {
     if (progress.data === 'complete') {
+      if (workflowId) completedWorkflows.current.add(workflowId);
       writeWorkflow(null);
       void queryClient.invalidateQueries({ queryKey: ['settings', 'catalogue-last-synced'] });
       void queryClient.invalidateQueries({ queryKey: ['catalogue'] });
+      void queryClient.invalidateQueries({ queryKey: ['settings', 'catalogue-sync-health'] });
       toast('success', 'The catalogue sync finished.');
-      setWorkflowId(null);
     }
-  }, [progress.data, queryClient, toast]);
+  }, [progress.data, queryClient, toast, workflowId]);
 
   useEffect(() => {
     if (progress.isError) writeWorkflow(null);
@@ -102,6 +119,24 @@ export function CatalogueSyncTab(): ReactElement {
           . New sets and cards appear for everyone. It also runs by itself every Sunday at 3am
           Brisbane time.
         </p>
+        {!running &&
+        health.data &&
+        ['failed', 'rejected', 'errored', 'terminated'].includes(health.data.status) ? (
+          <p role="alert" className="panel-error">
+            The latest automatic or manual catalogue sync failed.{' '}
+            {health.data.failure === 'database_busy'
+              ? 'The catalogue database was too busy.'
+              : health.data.failure === 'provider_timeout'
+                ? 'TCGdex did not respond in time.'
+                : 'The catalogue could not be refreshed.'}{' '}
+            Existing cards were kept. New cards may be missing; use Sync now to retry.
+          </p>
+        ) : null}
+        {health.isError ? (
+          <p role="alert" className="panel-error">
+            The latest sync status could not be read.
+          </p>
+        ) : null}
         {running ? (
           <p role="status" className="sync-progress">
             <span className="sync-spinner" aria-hidden="true" />
@@ -144,7 +179,7 @@ function PriceRefreshCard(): ReactElement {
     void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     toast('success', 'Prices are up to date.');
     setWorkflowId(null);
-  }, [progress.data, queryClient, toast]);
+  }, [progress.data, queryClient, toast, workflowId]);
 
   async function start(): Promise<void> {
     setStarting(true);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { tcgdexArtImageBase } from './tcgdex-art-image';
+import { officialPokemonArtUrl, tcgdexArtImageBase } from './tcgdex-art-image';
 
 describe('TCGdex artwork identity', () => {
   it.each([
@@ -52,4 +52,27 @@ describe('TCGdex artwork identity', () => {
   ])('rejects an unsafe or malformed image base %s', (image) => {
     expect(tcgdexArtImageBase({ image }, 'base1-1', 'en')).toBeNull();
   });
+});
+
+describe('official Pokémon image identity', () => {
+  it.each(['104', '106'])('resolves the exact ME06 %s printing', (number) => {
+    expect(
+      officialPokemonArtUrl(
+        { id: `me06-${number}`, localId: number, set: { id: 'me06' } },
+        `me06-${number}`,
+        'en',
+      ),
+    ).toContain(`ME06_EN_${number}.png`);
+  });
+  it.each([
+    [{ id: 'me06-106', localId: '104', set: { id: 'me06' } }, 'me06-106', 'en'],
+    [{ id: 'me06-106', localId: '106', set: { id: 'me06' } }, 'me06-106', 'ja'],
+    [{ id: 'mep-106', localId: '106', set: { id: 'mep' } }, 'mep-106', 'en'],
+    [{ id: 'me06-../106', localId: '../106', set: { id: 'me06' } }, 'me06-../106', 'en'],
+  ])(
+    'rejects mismatched identities, languages, promos and path input',
+    (payload, source, language) => {
+      expect(officialPokemonArtUrl(payload, source, language)).toBeNull();
+    },
+  );
 });
