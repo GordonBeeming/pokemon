@@ -342,3 +342,39 @@ it('keeps an unsaved note open when the species gallery link is clicked', async 
   expect(textarea.value).toBe('An unsaved note');
   expect(document.body.textContent).toContain('Notes are still saving');
 });
+
+it('offers the canonical gallery from Pokémon fan art with no stored dex number', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((path: string) =>
+      Promise.resolve(
+        jsonResponse(
+          path.startsWith('/api/catalogue/')
+            ? {
+                ...ZERO_COPY_CARD,
+                card: {
+                  ...ZERO_COPY_CARD.card,
+                  name: 'Mimikyu ex (Unofficial fan art)',
+                  pokedexNumber: null,
+                },
+              }
+            : { ok: true, binders: [] },
+        ),
+      ),
+    ),
+  );
+  await step(() =>
+    renderInRouter(
+      <QueryClientProvider client={queryClient}>
+        <ToastProvider>
+          <CardInspector cardId="card-1" onClose={vi.fn()} />
+        </ToastProvider>
+      </QueryClientProvider>,
+    ),
+  );
+  await flushUntil(() => container.textContent?.includes('Unofficial fan art') === true);
+  const link = container.querySelector<HTMLAnchorElement>('.card-inspector-view-all');
+  expect(link?.textContent).toBe('View all Mimikyu cards');
+  expect(new URL(link!.href).searchParams.get('dex')).toBe('778');
+  expect(container.textContent).not.toContain('Use as Pokédex image');
+});

@@ -2,6 +2,7 @@ import {
   DEFAULT_FRAME_PALETTE,
   formatDexNumber,
   NATIONAL_POKEDEX,
+  pokedexNumberFromCardName,
   RARITY_LABELS,
   regionForDex,
 } from '@pokedex/shared';
@@ -151,8 +152,10 @@ export function CardInspector({
   );
   const loose = Math.max(0, quantity - placedIn.length);
   const contextBinderId = context && 'binderId' in context ? context.binderId : null;
-  const speciesName = pokedexNumber
-    ? (NATIONAL_POKEDEX.find((entry) => entry.number === pokedexNumber)?.name ?? card.name)
+  const galleryNumber =
+    pokedexNumber ?? (card.category === 'pokemon' ? pokedexNumberFromCardName(card.name) : null);
+  const speciesName = galleryNumber
+    ? (NATIONAL_POKEDEX.find((entry) => entry.number === galleryNumber)?.name ?? card.name)
     : card.name;
 
   return (
@@ -260,12 +263,12 @@ export function CardInspector({
               Use as Pokédex image
             </button>
           ) : null}
-          {pokedexNumber || context ? (
+          {galleryNumber || context ? (
             <Link
               className="card-inspector-view-all"
               to="/catalogue"
               search={catalogueSearch.parse(
-                pokedexNumber ? { dex: pokedexNumber } : { q: speciesName },
+                galleryNumber ? { dex: galleryNumber } : { q: speciesName },
               )}
               onClick={(event) => {
                 if (
