@@ -99,6 +99,8 @@ export function officialPokemonArtUrl(
     sourceId !== `${set.id}-${localId}`
   )
     return null;
+  const assetNumber = Number(localId);
+  if (assetNumber === 0) return null;
   const code = set.id.toUpperCase();
-  return `https://assets.pokemon.com/static-assets/content-assets/cms2/img/cards/web/${code}/${code}_EN_${localId}.png`;
+  return `https://assets.pokemon.com/static-assets/content-assets/cms2/img/cards/web/${code}/${code}_EN_${assetNumber}.png`;
 }
