@@ -81,6 +81,7 @@ describe('CardFrame', () => {
       root.render(<CardFrame card={pikachu} state="unowned" forceSolid onView={vi.fn()} />),
     );
     expect(frameEl()?.style.borderStyle).toBe('solid');
+    expect(container.querySelector<HTMLImageElement>('.card-frame-art')?.style.opacity).toBe('1');
   });
 
   it('draws an any-card pocket as the name with an Any pill, no art, set or number', async () => {

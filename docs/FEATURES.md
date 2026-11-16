@@ -402,6 +402,10 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] keep · An unsubmitted "go to page" value is discarded when switching to a different binder via
       a direct link · done when: typing "45" in the page-jump field without pressing Go, then opening
       a different binder by URL, shows an empty jump field, not the leftover "45".
+- [ ] changed · Binder search shows full-opacity artwork only for copies placed in that binder
+      version. Other artwork stays at 45% opacity, including owned copies placed elsewhere, while
+      ownership captions stay accurate · done when: an open target previews an owned printing faded
+      with "Owned · not in this binder", and a placed copy stays at full opacity.
 - [ ] keep · Selecting a pocket opens pocket tools whose available actions depend on its state
       (target / reserved sleeve / empty / archived read-only) · done when: selecting an empty pocket
       offers "Insert targets here" and "Reserve sleeve", while a filled target pocket instead offers

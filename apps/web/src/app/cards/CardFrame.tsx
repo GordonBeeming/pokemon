@@ -62,6 +62,8 @@ export interface CardFrameProps {
   selected?: boolean;
   /** The card inspector always shows full colour, even for a card that isn't owned. */
   forceSolid?: boolean;
+  /** Placement can fade artwork independently of the ownership label and frame. */
+  dimArt?: boolean;
   /** A fully-resolved palette (DEFAULT_FRAME_PALETTE merged with the owner's overrides). */
   palette?: Record<FrameType, string>;
   className?: string;
@@ -76,6 +78,7 @@ export function CardFrame({
   onView,
   selected = false,
   forceSolid = false,
+  dimArt,
   palette = DEFAULT_FRAME_PALETTE,
   className = '',
 }: CardFrameProps): ReactElement {
@@ -101,6 +104,7 @@ export function CardFrame({
   const fitAlong = fit && fit.url === imageUrl ? fit.along : undefined;
 
   const isSolid = forceSolid || state !== 'unowned';
+  const artOpacity = (dimArt ?? !isSolid) ? 0.45 : 1;
   const textColor = isSolid ? onSolid : ink;
   const region = card.pokedexNumber ? regionForDex(card.pokedexNumber) : null;
   const rarity = card.rarityKey ? RARITY_VISUALS[card.rarityKey] : null;
@@ -143,7 +147,7 @@ export function CardFrame({
             });
         }}
         onError={() => setFailedUrl(imageUrl)}
-        style={{ opacity: isSolid ? 1 : 0.45 }}
+        style={{ opacity: artOpacity }}
       />
     </span>
   ) : (
@@ -154,7 +158,7 @@ export function CardFrame({
         color: placeholderTextColor,
         // An any-card pocket is words, not a picture: the pale dashed frame already says
         // "not filled", and fading the words too left them hard to read.
-        opacity: isSolid || variant === 'any' ? 1 : 0.45,
+        opacity: variant === 'any' ? 1 : artOpacity,
       }}
     >
       <span>{card.name}</span>
