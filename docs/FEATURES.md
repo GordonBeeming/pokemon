@@ -634,7 +634,8 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       contrast warning below 4.5:1 against white · done when: choosing a poor-contrast custom colour
       shows the warning, and "Reset to defaults" restores every type's shipped colour.
 - [ ] changed · Every Pokémon inspector offers "View all {Pokémon} cards", including when opened
-      from Catalogue. The species gallery resets the old search filters, includes named partner
+      from Catalogue and Pokémon fan art without stored dex metadata. The species gallery resets
+      the old search filters, includes named partner
       Pokémon on multi-Pokémon cards, and keeps unsaved notes open before navigation.
 - [ ] changed · Full catalogue sync discovers physical cards through per-set indexes and keeps
       letter-numbered cards; staging matches physical identities without repeated nested catalogue

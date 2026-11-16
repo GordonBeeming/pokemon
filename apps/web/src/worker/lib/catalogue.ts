@@ -1484,12 +1484,28 @@ export async function searchCards(
     const species = NATIONAL_POKEDEX.find((entry) => entry.number === filters.pokedexNumber);
     values.push(filters.pokedexNumber);
     if (species) {
+      const phrase = `name : "${species.name.replaceAll('"', '""')}"`;
+      // Custom Pokémon printings can predate dex metadata. Resolve exact names
+      // after the indexed lookup so Porygon-Z does not become Porygon, for example.
+      const unindexed = await db
+        .prepare(
+          `SELECT c.id, c.name FROM catalogue_cards c
+         WHERE c.pokedex_number IS NULL AND c.category='pokemon' AND c.is_active=1
+           AND (c.owner_id IS NULL OR c.owner_id=?1)
+           AND c.id IN (SELECT card_id FROM catalogue_search WHERE catalogue_search MATCH ?2)`,
+        )
+        .bind(ownerId, phrase)
+        .all<{ id: string; name: string }>();
+      const inferred = unindexed.results
+        .filter((card) => pokedexNumberFromCardName(card.name) === filters.pokedexNumber)
+        .map((card) => card.id);
       // Multi-Pokémon printings retain the first dex number in catalogue metadata.
       // An exact name phrase also finds the partner, without Mew matching Mewtwo.
       where.push(`(c.pokedex_number = ?${numberParameter} OR
         (c.category = 'pokemon' AND instr(c.name, '&') > 0 AND c.id IN
-          (SELECT card_id FROM catalogue_search WHERE catalogue_search MATCH ?${values.length + 1})))`);
-      values.push(`name : "${species.name.replaceAll('"', '""')}"`);
+          (SELECT card_id FROM catalogue_search WHERE catalogue_search MATCH ?${values.length + 1})) OR
+        c.id IN (SELECT value FROM json_each(?${values.length + 2})))`);
+      values.push(phrase, JSON.stringify(inferred));
     } else where.push(`c.pokedex_number = ?${numberParameter}`);
   }
   if (filters.region) {
