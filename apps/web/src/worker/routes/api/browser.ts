@@ -1,3 +1,4 @@
+import { catalogueRestartPending, resumeCachedCatalogueSync } from '../../lib/catalogue-recovery';
 import { binderDestinationsQuerySchema } from './contracts';
 import { deleteBinderBody } from './contracts';
 import { Hono } from 'hono';
@@ -396,7 +397,7 @@ browserApiRoutes.post('/catalogue/national/discover', async (c) => {
     return apiFailure(c, error);
   }
 });
-browserApiRoutes.get('/catalogue/sync-status', async (c) => {
+browserApiRoutes.get('/catalogue/sync-status', requireAdmin, async (c) => {
   try {
     const latest = await catalogueSyncHealth(
       c.env.DB,
@@ -415,6 +416,10 @@ browserApiRoutes.post('/catalogue/full-sync', requireAdmin, async (c) => {
     );
     if (running) return c.json({ ok: true, workflowId: running }, 202);
     const ownerId = sessionOwner(c);
+    const resumed = await resumeCachedCatalogueSync(c.env.DB, ownerId, (id) =>
+      c.env.CATALOGUE_SYNC.get(id),
+    );
+    if (resumed) return c.json({ ok: true, ...resumed }, 202);
     const rate = await c.env.AUTH_COORDINATOR.getByName(`catalogue:${ownerId}`).rateLimit(
       'full-sync',
       2,
@@ -442,8 +447,15 @@ browserApiRoutes.post('/catalogue/full-sync', requireAdmin, async (c) => {
 });
 browserApiRoutes.get('/catalogue/full-sync/:id', async (c) => {
   try {
-    const workflow = await c.env.CATALOGUE_SYNC.get(c.req.param('id'));
+    const workflowId = c.req.param('id');
+    const workflow = await c.env.CATALOGUE_SYNC.get(workflowId);
     const status = await workflow.status();
+    if (
+      status.status === 'errored' &&
+      ((await catalogueRestartPending(c.env.DB, `workflow_${workflowId}`)) ||
+        (await catalogueRestartPending(c.env.DB, `sync_${workflowId}`)))
+    )
+      return c.json({ ok: true, status: 'queued' }, 202);
     if (status.status === 'errored' || status.status === 'terminated')
       return c.json({ ok: false, error: 'catalogue_sync_failed' }, 503);
     return c.json({ ok: true, status: status.status }, status.status === 'complete' ? 200 : 202);

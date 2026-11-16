@@ -85,6 +85,7 @@ export function CatalogueSyncTab(): ReactElement {
       const id = await startCatalogueSync();
       writeWorkflow(id);
       setWorkflowId(id);
+      await queryClient.resetQueries({ queryKey: ['settings', 'catalogue-sync', id], exact: true });
     } catch (cause) {
       toast(
         'error',

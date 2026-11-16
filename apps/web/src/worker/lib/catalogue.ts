@@ -1,3 +1,4 @@
+import { catalogueRestartPending, restoreUnappliedCatalogueRun } from './catalogue-recovery';
 import { catalogueWorkflowId } from './catalogue-workflow-id';
 import {
   cardIdSchema,
@@ -626,7 +627,7 @@ export async function failCatalogueSyncRun(
   // Preserve the committed cards and mark the overall Workflow outcome accurately.
   await db
     .prepare(
-      `UPDATE sync_runs SET completed_at=?1, status='failed', refusal_reason=?2
+      `UPDATE sync_runs SET completed_at=?1, status='failed', refusal_reason=COALESCE(refusal_reason,?2)
     WHERE id=?3 AND status IN ('running','complete')`,
     )
     .bind(nowSeconds(), message, runId)
@@ -650,6 +651,7 @@ export async function latestCatalogueSyncRun(db: D1Database) {
   if (!row) return null;
   const reason = row.refusal_reason ?? '';
   return {
+    runId: row.id,
     workflowId: catalogueWorkflowId(row.id),
     status: row.status,
     startedAt: row.started_at,
@@ -668,10 +670,32 @@ export async function catalogueSyncHealth(
   db: D1Database,
   workflowStatus: (id: string) => Promise<string>,
 ) {
-  const latest = await latestCatalogueSyncRun(db);
-  if (latest?.workflowId && ['running', 'complete'].includes(latest.status)) {
+  const run = await latestCatalogueSyncRun(db);
+  if (!run) return null;
+  const { runId, ...latest } = run;
+  if (latest.workflowId && ['running', 'complete', 'failed'].includes(latest.status)) {
     try {
-      latest.status = await workflowStatus(latest.workflowId);
+      const engineStatus = await workflowStatus(latest.workflowId);
+      if (engineStatus === 'errored' && (await catalogueRestartPending(db, runId)))
+        return { ...latest, status: 'queued' };
+      if (
+        latest.status === 'failed' &&
+        ['queued', 'running', 'waiting', 'paused', 'waitingForPause'].includes(engineStatus)
+      ) {
+        try {
+          await restoreUnappliedCatalogueRun(db, runId, null);
+        } catch (error) {
+          // Superseded or already-applied tracking is not safe to reopen.
+          if (!(error instanceof ApplicationError && error.status === 409)) throw error;
+        }
+      }
+      if (
+        ['errored', 'terminated'].includes(engineStatus) &&
+        ['running', 'complete'].includes(latest.status)
+      ) {
+        await failCatalogueSyncRun(db, runId, `workflow_${engineStatus}`);
+      }
+      if (latest.status !== 'failed' || engineStatus !== 'complete') latest.status = engineStatus;
     } catch (error) {
       if (!/instance.not_found|not found|does not exist/iu.test(describeError(error))) throw error;
       if (latest.status !== 'complete') {

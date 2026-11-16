@@ -637,6 +637,9 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       from Catalogue and Pokémon fan art without stored dex metadata. The species gallery resets
       the old search filters, includes named partner
       Pokémon on multi-Pokémon cards, and keeps unsaved notes open before navigation.
+- [ ] changed · Catalogue execution replays retain active tracking. Sync now can resume a fully
+      fetched, unapplied tracking failure from its staging checkpoint, preserving the original error
+      in the audit and refreshing a cached progress error when the Workflow id stays the same.
 - [ ] changed · Full catalogue sync discovers physical cards through per-set indexes and keeps
       letter-numbered cards; staging matches physical identities without repeated nested catalogue
       scans. Scheduled and manual failures remain visible in Settings across tabs.

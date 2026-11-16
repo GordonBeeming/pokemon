@@ -1,4 +1,8 @@
 import {
+  recordCatalogueExecutionError,
+  restoreUnappliedCatalogueRun,
+} from '../lib/catalogue-recovery';
+import {
   DurableObject,
   WorkflowEntrypoint,
   type WorkflowEvent,
@@ -7,7 +11,6 @@ import {
 import { languageSchema, type LanguageCode } from '@pokedex/shared';
 import { z } from 'zod';
 import {
-  failCatalogueSyncRun,
   applyStagedCatalogueRun,
   beginStagedCatalogueRun,
   catalogueSyncLanguage,
@@ -266,14 +269,20 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
         const chunk = cards.slice(offset, offset + CATALOGUE_STAGE_CHUNK_SIZE);
         currentStep = `stage-${language}-${page}`;
         await step.do(`stage-${language}-${page}`, async () => {
+          await restoreUnappliedCatalogueRun(this.env.DB, runId, event.payload.actorId ?? null);
           await stageCatalogueCards(this.env.DB, runId, chunk);
           return chunk.length;
         });
       }
       currentStep = 'apply-catalogue-run';
-      const applied = await step.do('apply-catalogue-run', async () =>
-        applyStagedCatalogueRun(this.env.DB, runId, event.payload.allowDestructiveDrop ?? false),
-      );
+      const applied = await step.do('apply-catalogue-run', async () => {
+        await restoreUnappliedCatalogueRun(this.env.DB, runId, event.payload.actorId ?? null);
+        return applyStagedCatalogueRun(
+          this.env.DB,
+          runId,
+          event.payload.allowDestructiveDrop ?? false,
+        );
+      });
       currentStep = 'sync-set-codes';
       await step.do('sync-set-codes', FETCH_STEP_CONFIG, async () => {
         await syncSetAbbreviations(this.env.DB, language, setAbbreviations);
@@ -305,7 +314,7 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
       const message = describeError(error);
       await recordWorkflowFailure(
         {
-          evt: 'workflow.catalogue.failed',
+          evt: 'workflow.catalogue.execution_error',
           workflowInstanceId: event.instanceId,
           runId,
           language,
@@ -316,7 +325,7 @@ export class CatalogueSyncWorkflow extends WorkflowEntrypoint<
           actorId: event.payload.actorId,
           requestId: event.payload.requestId,
         },
-        () => failCatalogueSyncRun(this.env.DB, runId, message),
+        () => recordCatalogueExecutionError(this.env.DB, runId, message),
       );
       throw error;
     }

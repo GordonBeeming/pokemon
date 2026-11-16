@@ -1,3 +1,4 @@
+import { restoreUnappliedCatalogueRun } from './catalogue-recovery';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyAllMigrations, sqliteD1 } from './d1-test-helper';
@@ -150,4 +151,17 @@ it('does not overlap a Workflow whose cards applied but trailing steps are still
   expect(raw.prepare("SELECT status FROM sync_runs WHERE id='workflow_after-apply'").get()).toEqual(
     { status: 'failed' },
   );
+});
+
+it('keeps a pending restart active until its acknowledgement grace expires', async () => {
+  const { raw, db } = setup();
+  raw.exec(
+    "INSERT INTO sync_runs(id,provider,language,started_at,completed_at,status,complete_source) VALUES('workflow_restarting','tcgdex','en',1,2,'failed',1)",
+  );
+  await restoreUnappliedCatalogueRun(db, 'workflow_restarting', 'owner');
+  expect(await runningCatalogueSync(db, () => Promise.resolve('errored'))).toBe('restarting');
+  expect(raw.prepare('SELECT status FROM sync_runs').get()).toEqual({ status: 'running' });
+  raw.exec('UPDATE audit SET created_at=0');
+  expect(await runningCatalogueSync(db, () => Promise.resolve('errored'))).toBeNull();
+  expect(raw.prepare('SELECT status FROM sync_runs').get()).toEqual({ status: 'failed' });
 });
