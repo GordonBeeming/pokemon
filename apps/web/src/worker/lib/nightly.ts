@@ -79,22 +79,30 @@ export async function runningCatalogueSync(
 ): Promise<string | null> {
   const running = await db
     .prepare(
-      `SELECT id FROM sync_runs
+      `SELECT id, status FROM sync_runs
        WHERE provider = 'tcgdex' AND language = 'en' AND complete_source = 1
-         AND status = 'running'
+         AND status IN ('running','complete')
          AND (id GLOB 'workflow_*' OR id GLOB 'sync_catalogue-*')
        ORDER BY started_at DESC LIMIT 1`,
     )
-    .first<{ id: string }>();
+    .first<{ id: string; status: string }>();
   if (!running) return null;
   const workflowId = catalogueWorkflowId(running.id);
   if (!workflowId) return null;
-  const status = await workflowStatus(workflowId);
+  let status: string;
+  try {
+    status = await workflowStatus(workflowId);
+  } catch (error) {
+    if (!/instance.not_found|not found|does not exist/iu.test(describeError(error))) throw error;
+    if (running.status === 'complete') return null;
+    status = 'terminated';
+  }
+  if (status === 'complete') return null;
   if (status !== 'errored' && status !== 'terminated') return workflowId;
   await db
     .prepare(
       `UPDATE sync_runs SET completed_at = ?1, status = 'failed', refusal_reason = ?2
-       WHERE id = ?3 AND status = 'running'`,
+       WHERE id = ?3 AND status IN ('running','complete')`,
     )
     .bind(Math.floor(Date.now() / 1000), `workflow_${status}`, running.id)
     .run();
