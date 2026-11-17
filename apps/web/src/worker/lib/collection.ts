@@ -1,3 +1,4 @@
+import { activitySnapshot, activityChanges } from './binder-activity';
 import {
   cardIdSchema,
   collectionStateSchema,
@@ -728,9 +729,11 @@ async function removePocketCopy(
   // another owner's binder would blank *their* slot.
   const pocket = await removablePocket(db, ownerId, cardId, slotId);
   if (!pocket) throw new CollectionDomainError('collection_remove_slot_not_found');
+  const activityId = newId('activity');
   try {
     await db.batch([
       removablePocketAssertion(db, ownerId, cardId, pocket),
+      activitySnapshot(db, pocket.versionId, activityId),
       collectionRevisionAssertion(db, ownerId, cardId, current),
       db
         .prepare(
@@ -752,6 +755,7 @@ async function removePocketCopy(
            VALUES (?1, ?2, ?3, -1, ?4, ?5, ?6)`,
         )
         .bind(newId('event'), ownerId, cardId, source, slotId, now),
+      ...activityChanges(db, pocket.versionId, activityId),
     ]);
   } catch (error) {
     const latest = await removablePocket(db, ownerId, cardId, slotId);

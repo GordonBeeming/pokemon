@@ -1,3 +1,5 @@
+import { binderActivityQuerySchema } from '@pokedex/shared';
+import { getBinderActivity, createBinderCheckpoint } from '../../lib/binder-activity';
 import { catalogueRestartPending, resumeCachedCatalogueSync } from '../../lib/catalogue-recovery';
 import { binderDestinationsQuerySchema } from './contracts';
 import { deleteBinderBody } from './contracts';
@@ -1603,6 +1605,30 @@ browserApiRoutes.get('/binders/versions/:id/destinations', async (c) => {
       parsed.data.cardId,
     );
     return c.json({ ok: true, destinations });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.get('/binders/:id/activity', async (c) => {
+  try {
+    const ownerId = sessionOwner(c);
+    const parsed = binderActivityQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_filter' }, 400);
+    return c.json({
+      ok: true,
+      activity: await getBinderActivity(c.env.DB, ownerId, c.req.param('id'), parsed.data),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+browserApiRoutes.post('/binders/:id/checkpoints', async (c) => {
+  try {
+    return c.json({
+      ok: true,
+      checkpointId: await createBinderCheckpoint(c.env.DB, sessionOwner(c), c.req.param('id')),
+    });
   } catch (error) {
     return apiFailure(c, error);
   }

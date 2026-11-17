@@ -1270,3 +1270,84 @@ an action at the end */
 .binder-sheet .binder-display-controls {
   padding: 0;
 }
+
+.binder-activity {
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.binder-activity-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 1rem 0;
+}
+.binder-activity-heading h2 {
+  margin: 0;
+}
+.binder-activity-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 1rem;
+}
+.binder-activity-filters label {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.binder-activity-filters select,
+.binder-activity-filters input {
+  width: 100%;
+  min-width: 0;
+}
+.binder-activity-regions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem 1rem;
+  margin: 1rem 0;
+}
+.binder-activity-regions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.binder-activity-regions input {
+  width: auto;
+}
+.binder-activity-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.binder-activity-grid {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
+  gap: 1rem;
+}
+.binder-activity-grid li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.binder-activity-grid .card-art {
+  width: 100%;
+  aspect-ratio: 245 / 342;
+}
+.activity-kind {
+  font-weight: 700;
+}
+.activity-kind-removed {
+  color: var(--danger);
+}
+@media print {
+  .binder-activity {
+    display: none;
+  }
+}

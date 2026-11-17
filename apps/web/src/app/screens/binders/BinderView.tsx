@@ -1,3 +1,4 @@
+import { BinderActivity } from './BinderActivity';
 import {
   type BinderBookmark,
   type BinderDisplayPatchRequest,
@@ -1028,6 +1029,7 @@ export function BinderView({
           </div>
         )}
       </header>
+      <BinderActivity key={binderId} binderId={binderId} revision={version?.revision ?? 0} />
       {/* On a phone, finding a card and jumping to a bookmark are how you move around a
           big binder, so they stay on screen rather than behind the Tools sheet. */}
       {phone ? (

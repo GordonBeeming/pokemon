@@ -3,7 +3,7 @@ import { newId, nowSeconds } from './db';
 import { ApplicationError, describeError, logError, logInfo } from './log';
 
 const LEGACY_BACKUP_VERSION = 2 as const;
-const BACKUP_VERSION = 8 as const;
+const BACKUP_VERSION = 9 as const;
 const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 const MAX_BACKUP_CHUNK_BYTES = 1_500_000;
 const MAX_BACKUP_MANIFEST_BYTES = 1_000_000;
@@ -166,6 +166,29 @@ const collectionEventRow = z
   })
   .strict();
 
+const activityRow = z
+  .object({
+    id: z.number().int().positive().safe(),
+    binder_id: z.string(),
+    version_id: z.string(),
+    version_number: z.number().int().positive(),
+    kind: z.enum(['added', 'removed']),
+    card_id: z.string(),
+    page: z.number().int().nonnegative(),
+    row_index: z.number().int().nonnegative(),
+    column_index: z.number().int().nonnegative(),
+    created_at: z.number().int().nonnegative(),
+  })
+  .strict();
+const checkpointRow = z
+  .object({
+    id: z.string(),
+    binder_id: z.string(),
+    after_id: z.number().int().nonnegative().safe(),
+    created_at: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const backupBundleSchema = z
   .object({
     version: z.literal(LEGACY_BACKUP_VERSION),
@@ -195,6 +218,8 @@ const backupKindSchema = z.enum([
   'pages',
   'slots',
   'bookmarks',
+  'activity',
+  'checkpoints',
   'art_manifest',
   'user_settings',
   'collection_events',
@@ -220,6 +245,7 @@ const backupManifestSchema = z
       z.literal(5),
       z.literal(6),
       z.literal(7),
+      z.literal(8),
       z.literal(BACKUP_VERSION),
     ]),
     ownerId: z.string().min(1),
@@ -264,6 +290,8 @@ const backupRowSchemas = {
   pages: pageRow,
   slots: slotRow,
   bookmarks: bookmarkRow,
+  activity: activityRow,
+  checkpoints: checkpointRow,
   art_manifest: artRow,
   user_settings: userSettingRow,
   collection_events: collectionEventRow,
@@ -287,6 +315,7 @@ const backupQueries: readonly BackupQuery[] = [
      FROM catalogue_cards c LEFT JOIN catalogue_sets set_meta ON set_meta.set_id=c.set_id AND set_meta.language=c.language
      WHERE c.rowid > ?2 AND (c.owner_id IS NULL OR c.owner_id = ?1)
        AND ((c.is_custom = 1 AND c.owner_id = ?1)
+       OR EXISTS (SELECT 1 FROM binder_activity e JOIN binders b ON b.id = e.binder_id WHERE b.owner_id = ?1 AND e.card_id = c.id)
        OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
        OR EXISTS (SELECT 1 FROM species_representatives representative
          WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
@@ -302,7 +331,8 @@ const backupQueries: readonly BackupQuery[] = [
      FROM card_sources s WHERE s.rowid > ?2 AND EXISTS (
        SELECT 1 FROM catalogue_cards c WHERE c.id = s.card_id
          AND (c.owner_id IS NULL OR c.owner_id = ?1) AND ((c.is_custom = 1 AND c.owner_id = ?1)
-         OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
+         OR EXISTS (SELECT 1 FROM binder_activity e JOIN binders b ON b.id = e.binder_id WHERE b.owner_id = ?1 AND e.card_id = c.id)
+       OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
          OR EXISTS (SELECT 1 FROM species_representatives representative
            WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
          OR EXISTS (SELECT 1 FROM binder_slots bs JOIN binder_pages p ON p.id = bs.binder_page_id
@@ -362,12 +392,25 @@ const backupQueries: readonly BackupQuery[] = [
      WHERE b.owner_id = ?1 AND bm.rowid > ?2 ORDER BY bm.rowid LIMIT ?3`,
   },
   {
+    kind: 'activity',
+    sql: `SELECT e.id AS backup_cursor, e.id, e.binder_id, e.version_id, e.version_number, e.kind, e.card_id,
+      e.page, e.row_index, e.column_index, e.created_at FROM binder_activity e JOIN binders b ON b.id = e.binder_id
+      WHERE b.owner_id = ?1 AND e.id > ?2 ORDER BY e.id LIMIT ?3`,
+  },
+  {
+    kind: 'checkpoints',
+    sql: `SELECT cp.rowid AS backup_cursor, cp.id, cp.binder_id, cp.after_id, cp.created_at
+      FROM binder_checkpoints cp JOIN binders b ON b.id = cp.binder_id
+      WHERE b.owner_id = ?1 AND cp.rowid > ?2 ORDER BY cp.rowid LIMIT ?3`,
+  },
+  {
     kind: 'art_manifest',
     sql: `SELECT m.rowid AS backup_cursor, m.card_id, m.variant, m.object_key, NULL AS backup_object_key,
       m.sha256, m.bytes, m.version, m.updated_at, c.is_custom AS backup_is_custom
      FROM art_manifest m JOIN catalogue_cards c ON c.id = m.card_id
      WHERE m.rowid > ?2 AND (c.owner_id IS NULL OR c.owner_id = ?1)
        AND ((c.is_custom = 1 AND c.owner_id = ?1)
+       OR EXISTS (SELECT 1 FROM binder_activity e JOIN binders b ON b.id = e.binder_id WHERE b.owner_id = ?1 AND e.card_id = c.id)
        OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
        OR EXISTS (SELECT 1 FROM species_representatives representative
          WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
@@ -942,7 +985,7 @@ const sharedFanArtInBackupSql = `COALESCE(json_type(j.value,'$.owner_id'), '') =
 // Any staged row that names a card another user owns: restoring it would put
 // that user's private card into this owner's collection, binders or art.
 const foreignCardReferenceSql = `SELECT 1 FROM ${jsonRows}
-  AND c.kind IN ('catalogue','sources','collection','species_representatives','slots','art_manifest','collection_events')
+  AND c.kind IN ('catalogue','sources','collection','species_representatives','slots','art_manifest','collection_events','activity')
   AND EXISTS (
     SELECT 1 FROM catalogue_cards card
     WHERE card.owner_id IS NOT NULL AND card.owner_id <> ?2
@@ -1165,6 +1208,28 @@ export async function restoreBackup(
             `INSERT INTO binder_bookmarks (id,binder_page_id,row_index,column_index,name,created_at)
            SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.binder_page_id'),json_extract(j.value,'$.row_index'),json_extract(j.value,'$.column_index'),json_extract(j.value,'$.name'),json_extract(j.value,'$.created_at') FROM ${jsonRows} AND c.kind='bookmarks'
            ON CONFLICT(id) DO NOTHING`,
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `SELECT CASE WHEN NOT EXISTS (
+          SELECT 1 FROM ${jsonRows} AND c.kind IN ('activity','checkpoints')
+          AND NOT EXISTS (SELECT 1 FROM binders b WHERE b.id = json_extract(j.value,'$.binder_id') AND b.owner_id = ?2)
+        ) THEN 1 ELSE json_extract('backup_invalid', '$') END AS valid`,
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO binder_activity (id,binder_id,version_id,version_number,kind,card_id,page,row_index,column_index,created_at)
+          SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.binder_id'),json_extract(j.value,'$.version_id'),json_extract(j.value,'$.version_number'),json_extract(j.value,'$.kind'),json_extract(j.value,'$.card_id'),json_extract(j.value,'$.page'),json_extract(j.value,'$.row_index'),json_extract(j.value,'$.column_index'),json_extract(j.value,'$.created_at') FROM ${jsonRows} AND c.kind='activity'
+          AND EXISTS (SELECT 1 FROM binders b WHERE b.id = json_extract(j.value,'$.binder_id') AND b.owner_id = ?2)`,
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO binder_checkpoints (id,binder_id,after_id,created_at)
+          SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.binder_id'),json_extract(j.value,'$.after_id'),json_extract(j.value,'$.created_at') FROM ${jsonRows} AND c.kind='checkpoints'
+          AND EXISTS (SELECT 1 FROM binders b WHERE b.id = json_extract(j.value,'$.binder_id') AND b.owner_id = ?2)`,
           )
           .bind(restoreRunId, ownerId),
         db

@@ -193,6 +193,48 @@ async function seedReferencedArt(art: R2Bucket): Promise<void> {
 }
 
 describe('backup restore', () => {
+  it('rejects activity referencing another account private card', async () => {
+    const { database, db, art } = setup();
+    await seedReferencedArt(art);
+    database.exec(`INSERT INTO users(id,label,created_at) VALUES('other','Other',1);
+      INSERT INTO catalogue_cards(id,name,language,category,set_id,set_name,number,is_custom,owner_id,created_at,updated_at)
+      VALUES('foreign-card','Private card','en','pokemon','custom','Custom','1',1,'other',1,1);
+      INSERT INTO binder_activity(binder_id,version_id,version_number,kind,card_id,page,row_index,column_index,created_at)
+      VALUES('binder-1','version-1',1,'added','foreign-card',0,0,0,1);`);
+    await createBackup(db, art, 'owner', { backupId: 'backup_foreign_activity' });
+    await expect(restoreBackup(db, art, 'owner', 'backup_foreign_activity')).rejects.toMatchObject({
+      code: 'backup_owner_mismatch',
+    });
+    expect(
+      database.prepare("SELECT owner_id FROM catalogue_cards WHERE id='foreign-card'").get(),
+    ).toEqual({ owner_id: 'other' });
+  });
+
+  it('round trips activity, checkpoint boundaries and cards referenced only by history', async () => {
+    const { database, db, art } = setup();
+    await seedReferencedArt(art);
+    database.exec(`UPDATE binder_slots SET card_id = NULL, entry_kind = 'empty';
+      INSERT INTO binder_activity(id,binder_id,version_id,version_number,kind,card_id,page,row_index,column_index,created_at)
+      VALUES (100,'binder-1','version-1',1,'removed','card-binder',0,0,0,10);
+      INSERT INTO binder_checkpoints VALUES ('cp','binder-1',100,11);`);
+    await createBackup(db, art, 'owner', { backupId: 'backup_activity' });
+    database.exec('DELETE FROM binder_activity; DELETE FROM binder_checkpoints;');
+    await restoreBackup(db, art, 'owner', 'backup_activity');
+    expect(database.prepare('SELECT id,kind,card_id FROM binder_activity').all()).toEqual([
+      { id: 100, kind: 'removed', card_id: 'card-binder' },
+    ]);
+    expect(database.prepare('SELECT id,after_id FROM binder_checkpoints').all()).toEqual([
+      { id: 'cp', after_id: 100 },
+    ]);
+    expect(
+      database.prepare("SELECT name FROM catalogue_cards WHERE id='card-binder'").get(),
+    ).toEqual({ name: 'Binder card' });
+    await restoreBackup(db, art, 'owner', 'backup_activity');
+    expect(database.prepare('SELECT COUNT(*) AS count FROM binder_activity').get()).toEqual({
+      count: 1,
+    });
+  });
+
   it('backs up set dates and restores them into sets without putting dates on cards', async () => {
     const { database, db, art } = setup();
     await seedReferencedArt(art);

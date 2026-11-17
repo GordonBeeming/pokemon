@@ -103,6 +103,11 @@ describe('removeCollectionCopy', () => {
       .prepare("SELECT COUNT(*) AS count FROM binder_slots WHERE assigned_card_id = 'card-1'")
       .first<{ count: number }>();
     expect(assigned?.count).toBe(0);
+    const history = await db.prepare('SELECT kind,card_id FROM binder_activity ORDER BY id').all();
+    expect(history.results).toEqual([
+      { kind: 'added', card_id: 'card-1' },
+      { kind: 'removed', card_id: 'card-1' },
+    ]);
   });
 
   it('refuses a pocket removal for a slot that is not actually assigned to this card', async () => {
@@ -147,6 +152,8 @@ describe('removeCollectionCopy', () => {
     const { slotId } = await binderWithAssignedPocket(db);
     const state = await removeCollectionCopy(db, 'owner', 'card-1', { source: 'miscount', slotId });
     expect(state.quantity).toBe(0);
+    const history = await db.prepare('SELECT kind FROM binder_activity ORDER BY id').all();
+    expect(history.results).toEqual([{ kind: 'added' }, { kind: 'removed' }]);
   });
 
   it('never lets quantity drop below zero', async () => {

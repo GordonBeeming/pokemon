@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { activitySnapshot, activityChanges } from './binder-activity';
 import {
   type BinderAssignmentCandidate,
   binderAssignmentCandidatesSchema,
@@ -405,7 +406,13 @@ async function runVersionBatch(
   statements: D1PreparedStatement[],
 ): Promise<void> {
   try {
-    await db.batch([versionAssertion(db, ownerId, versionId, revision, draftOnly), ...statements]);
+    const mutationId = newId('activity');
+    await db.batch([
+      versionAssertion(db, ownerId, versionId, revision, draftOnly),
+      activitySnapshot(db, versionId, mutationId),
+      ...statements,
+      ...activityChanges(db, versionId, mutationId),
+    ]);
   } catch (error) {
     const current = await readVersion(db, ownerId, versionId);
     if (draftOnly && current.status !== 'draft')

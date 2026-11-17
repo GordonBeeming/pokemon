@@ -1,3 +1,5 @@
+import { binderActivityQuerySchema } from '@pokedex/shared';
+import { getBinderActivity, createBinderCheckpoint } from '../../lib/binder-activity';
 import { binderDestinationsQuerySchema } from './contracts';
 import { deleteBinderBody } from './contracts';
 import { Hono } from 'hono';
@@ -619,6 +621,34 @@ desktopApiRoutes.get('/desktop/binders/versions/:id/destinations', async (c) => 
       await desktopOwner(c, 'binders:write'),
     ).binderInsertDestinations(c.req.param('id'), parsed.data.cardId);
     return c.json({ ok: true, destinations });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+desktopApiRoutes.get('/desktop/binders/:id/activity', async (c) => {
+  try {
+    const ownerId = await desktopOwner(c, 'binders:write');
+    const parsed = binderActivityQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_filter' }, 400);
+    return c.json({
+      ok: true,
+      activity: await getBinderActivity(c.env.DB, ownerId, c.req.param('id'), parsed.data),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+desktopApiRoutes.post('/desktop/binders/:id/checkpoints', async (c) => {
+  try {
+    return c.json({
+      ok: true,
+      checkpointId: await createBinderCheckpoint(
+        c.env.DB,
+        await desktopOwner(c, 'binders:write'),
+        c.req.param('id'),
+      ),
+    });
   } catch (error) {
     return apiFailure(c, error);
   }
