@@ -14,3 +14,16 @@ leaving it only in the local checkout.
 
 Keep unrelated local changes intact and out of the batch's commit. The remaining
 global rules, including secret handling and commit signing, still apply.
+
+## Responsive usability checks
+
+Every UI test plan and acceptance check must cover phone, tablet, and desktop.
+For each batch affecting the UI or user flows, verify representative phone and
+tablet sizes in both portrait and landscape, alongside desktop. Exercise the
+affected tasks, including navigation, forms, dialogs, scrolling, and touch-sized
+controls; check for clipping, unwanted horizontal overflow, and unreachable
+actions. Automated UI tests must run the affected tasks at phone and tablet sizes
+in portrait and landscape, as well as desktop, and assert that content fits and
+actions remain reachable. Capture before-and-after screenshots at the affected
+sizes, and fix usability failures on every supported layout before committing
+and deploying.
