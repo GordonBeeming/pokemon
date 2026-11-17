@@ -1,7 +1,7 @@
 import type { BinderPastePreview, BinderPasteRequest, BinderSlotLocation } from '@pokedex/shared';
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { binderApi } from '../../../api/queries/binders';
-import type { CardClipboard } from '../../catalogue/card-clipboard';
+import { clearCardClipboard, type CardClipboard } from '../../catalogue/card-clipboard';
 import { binderErrorMessage } from '../model';
 import { Panel } from './Panel';
 
@@ -177,6 +177,18 @@ export function PastePanel({
       </ol>
       {count > LISTED_CARDS ? <p>And {count - LISTED_CARDS} more copied cards.</p> : null}
       <footer className="panel-footer">
+        <button
+          type="button"
+          className="button-text paste-clear"
+          disabled={saving}
+          onClick={() => {
+            if (savingRef.current) return;
+            clearCardClipboard();
+            onClose();
+          }}
+        >
+          Clear copied cards
+        </button>
         {saving ? (
           <p role="status">
             Saving {count} {noun} to the binder…

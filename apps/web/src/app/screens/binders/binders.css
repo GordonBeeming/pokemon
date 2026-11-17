@@ -1272,10 +1272,7 @@ an action at the end */
 }
 
 .binder-activity {
-  padding: 1rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--surface);
+  min-width: 0;
 }
 .binder-activity-heading {
   display: flex;
@@ -1283,14 +1280,14 @@ an action at the end */
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  margin: 1rem 0;
+  margin: 0 0 1rem;
 }
-.binder-activity-heading h2 {
+.binder-activity-heading p {
   margin: 0;
 }
 .binder-activity-filters {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
   gap: 1rem;
 }
 .binder-activity-filters label {
@@ -1336,10 +1333,6 @@ an action at the end */
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.binder-activity-grid .card-art {
-  width: 100%;
-  aspect-ratio: 245 / 342;
-}
 .activity-kind {
   font-weight: 700;
 }
@@ -1350,4 +1343,8 @@ an action at the end */
   .binder-activity {
     display: none;
   }
+}
+
+.binder-panel .paste-clear {
+  margin-right: auto;
 }

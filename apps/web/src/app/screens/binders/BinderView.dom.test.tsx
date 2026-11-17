@@ -1,5 +1,11 @@
 // @vitest-environment happy-dom
 import { act, useState, type ReactElement } from 'react';
+import { cardIdSchema } from '@pokedex/shared';
+import {
+  copyCardsToClipboard,
+  clearCardClipboard,
+  readCardClipboard,
+} from '../catalogue/card-clipboard';
 import type { Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BinderSearch } from '../../routes/search-params';
@@ -85,7 +91,80 @@ afterEach(async () => {
   await step(() => root?.unmount());
   root = undefined;
   container.remove();
+  clearCardClipboard();
   vi.unstubAllGlobals();
+});
+
+it('keeps activity in the toolbar and copied cards available without banners', async () => {
+  copyCardsToClipboard([
+    { id: cardIdSchema.parse('copied-card'), name: 'Squirtle', setName: 'Base', number: '63' },
+  ]);
+  await mount();
+  const activity = Array.from(container.querySelectorAll('.binder-toolbar button')).find(
+    (button) => button.textContent === 'Activity',
+  );
+  expect(activity).toBeDefined();
+  expect(container.querySelector('.binder-activity')).toBeNull();
+  expect(
+    Array.from(container.querySelectorAll('.binder-banner')).some((banner) =>
+      banner.textContent?.includes('Clear copied'),
+    ),
+  ).toBe(false);
+  expect(readCardClipboard()?.cards).toHaveLength(1);
+  await step(() => pocket('0:0:0').click());
+  expect(container.textContent).toContain('Paste here');
+  const paste = Array.from(container.querySelectorAll('button')).find(
+    (button) => button.textContent?.trim() === 'Paste here',
+  );
+  if (!paste) throw new Error('Missing paste action');
+  await step(() => paste.click());
+  await waitFor(() => document.querySelector('[role="dialog"] .paste-clear') !== null);
+  const clear = document.querySelector<HTMLButtonElement>('[role="dialog"] .paste-clear');
+  if (!clear) throw new Error('Missing clipboard clear action');
+  await step(() => clear.click());
+  expect(readCardClipboard()).toBeNull();
+  await waitFor(() => document.querySelector('[role="dialog"]') === null);
+});
+
+it('opens activity as a dialog, blocks binder page shortcuts and returns focus on close', async () => {
+  server.overrides.push((request) =>
+    request.path.endsWith('/activity')
+      ? {
+          status: 200,
+          body: {
+            ok: true,
+            activity: {
+              selectedBatch: 'beginning',
+              batches: [{ id: 'beginning', createdAt: null, count: 0 }],
+              total: 0,
+              events: [],
+            },
+          },
+        }
+      : undefined,
+  );
+  await mount();
+  const activity = Array.from(
+    container.querySelectorAll<HTMLButtonElement>('.binder-toolbar button'),
+  ).find((button) => button.textContent === 'Activity');
+  if (!activity) throw new Error('Missing activity trigger');
+  await step(() => {
+    activity.focus();
+    activity.click();
+  });
+  await waitFor(() => document.querySelector('[role="dialog"]') !== null);
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Binder activity');
+  await step(() =>
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true })),
+  );
+  expect(currentSearch.page).toBe(1);
+  const close = document.querySelector<HTMLButtonElement>(
+    '[role="dialog"] button[aria-label="Close"]',
+  );
+  if (!close) throw new Error('Missing dialog close');
+  await step(() => close.click());
+  await waitFor(() => document.querySelector('[role="dialog"]') === null);
+  await waitFor(() => document.activeElement === activity);
 });
 
 describe('BinderView Move card', () => {

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from 'react';
+import { act, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import type { BinderActivityResult } from '@pokedex/shared';
@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../api/queries/binder-activity', async (original) => ({
   ...(await original<typeof import('../../api/queries/binder-activity')>()),
   api: { binderActivity: mocks.read, createBinderCheckpoint: mocks.checkpoint },
+}));
+vi.mock('./panels/Panel', () => ({
+  Panel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 let root: Root;
 let container: HTMLDivElement;
@@ -69,13 +72,10 @@ function button(text: string) {
   return match;
 }
 async function open() {
-  act(() => root.render(<BinderActivity binderId="b" revision={1} />));
-  act(() => button('Recent placements & checkpoints').click());
+  act(() => root.render(<BinderActivity binderId="b" revision={1} onClose={() => undefined} />));
   await settle();
 }
-it('loads only when opened, supports multiple regions, sorts and checkpoint navigation', async () => {
-  act(() => root.render(<BinderActivity binderId="b" revision={1} />));
-  expect(mocks.read).not.toHaveBeenCalled();
+it('supports multiple regions, sorts and checkpoint navigation', async () => {
   await open();
   expect(container.textContent).toContain('Squirtle');
   expect(container.textContent).toContain('AEST');

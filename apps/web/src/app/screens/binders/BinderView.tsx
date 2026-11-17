@@ -44,7 +44,7 @@ import { Sheet } from '../../ui/Sheet';
 import { SidePanel } from '../../ui/SidePanel';
 import { useRouteAnnounce, useToast } from '../../ui/Toast';
 import { CardInspector } from '../card/CardInspector';
-import { clearCardClipboard, useCardClipboard } from '../catalogue/card-clipboard';
+import { useCardClipboard } from '../catalogue/card-clipboard';
 import {
   anyFrameCard,
   binderErrorMessage,
@@ -97,6 +97,7 @@ export interface BinderViewProps {
 }
 
 type PanelKind =
+  | 'activity'
   | 'view'
   | 'find'
   | 'change'
@@ -977,6 +978,9 @@ export function BinderView({
         </div>
         {phone ? (
           <div className="binder-header-actions">
+            <button type="button" aria-haspopup="dialog" onClick={() => setPanel('activity')}>
+              Activity
+            </button>
             <button
               type="button"
               className="button-icon binder-tools-trigger"
@@ -1022,6 +1026,9 @@ export function BinderView({
             >
               {() => displayControls}
             </MenuButton>
+            <button type="button" aria-haspopup="dialog" onClick={() => setPanel('activity')}>
+              Activity
+            </button>
             <button type="button" onClick={() => setPanel('manage')}>
               <Icon name="settings" />
               Manage binder
@@ -1029,7 +1036,14 @@ export function BinderView({
           </div>
         )}
       </header>
-      <BinderActivity key={binderId} binderId={binderId} revision={version?.revision ?? 0} />
+      {panel === 'activity' ? (
+        <BinderActivity
+          key={binderId}
+          binderId={binderId}
+          revision={version?.revision ?? 0}
+          onClose={() => setPanel(null)}
+        />
+      ) : null}
       {/* On a phone, finding a card and jumping to a bookmark are how you move around a
           big binder, so they stay on screen rather than behind the Tools sheet. */}
       {phone ? (
@@ -1094,17 +1108,6 @@ export function BinderView({
         <p className="binder-banner binder-banner-warning" role="alert">
           {writer.error}
         </p>
-      ) : null}
-      {clipboard ? (
-        <div className="binder-banner" role="status">
-          <span>
-            {clipboard.cards.length} {clipboard.cards.length === 1 ? 'card' : 'cards'} copied.
-            Select a pocket and choose “Paste here”.
-          </span>
-          <button type="button" className="button-text" onClick={clearCardClipboard}>
-            Clear copied cards
-          </button>
-        </div>
       ) : null}
       {inactiveHere.length > 0 ? (
         <div className="binder-banner binder-banner-warning" role="status">
