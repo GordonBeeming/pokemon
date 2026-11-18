@@ -68,6 +68,8 @@ async function* visibleTrainerCards(db: D1Database, ownerId: string, characterKe
   const cursorParameter = values.length + 1;
   let cursor = '';
   while (true) {
+    // Migration 002 supplies the card index. Production otherwise chooses a
+    // provider-only index and scans every TCGdex source once per trainer.
     const rows = await db
       .prepare(
         `SELECT c.id,c.name,c.number,c.set_name,c.rarity,
@@ -76,7 +78,7 @@ async function* visibleTrainerCards(db: D1Database, ownerId: string, characterKe
     FROM catalogue_cards c
     LEFT JOIN collection_cards cc ON cc.card_id=c.id AND cc.owner_id=?1
     LEFT JOIN art_manifest art ON art.card_id=c.id AND art.variant='low'
-    LEFT JOIN card_sources source ON source.card_id=c.id AND source.provider='tcgdex'
+    LEFT JOIN card_sources source INDEXED BY idx_card_sources_card ON source.card_id=c.id AND source.provider='tcgdex'
     WHERE c.is_active=1 AND c.category='trainer' AND c.language='en'
       AND (c.owner_id IS NULL OR c.owner_id=?1) ${candidateFilter}
     AND c.id>?${cursorParameter}

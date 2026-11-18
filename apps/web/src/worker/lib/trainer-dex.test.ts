@@ -130,3 +130,19 @@ it('keeps all matches across bounded card-read pages', async () => {
   expect(gallery.total).toBe(1102);
   expect(gallery.cards).toHaveLength(100);
 });
+
+it('looks up each trainer source by card instead of scanning all provider rows', async () => {
+  const { raw, db } = setup();
+  const queries: string[] = [];
+  const prepare = db.prepare.bind(db);
+  db.prepare = (query: string) => {
+    queries.push(query);
+    return prepare(query);
+  };
+  await listTrainerDex(db, 'a');
+  const query = queries.find((sql) => sql.includes('json_group_array'));
+  expect(query).toBeDefined();
+  const plan = raw.prepare(`EXPLAIN QUERY PLAN ${query}`).all('a', '') as { detail: string }[];
+  expect(plan.some((row) => /SEARCH source .*\(card_id=\?\)/.test(row.detail))).toBe(true);
+  expect(plan.some((row) => /SEARCH source .*\(provider=\?\)/.test(row.detail))).toBe(false);
+});
