@@ -1554,3 +1554,25 @@ an action at the end */
     width: 100%;
   }
 }
+.pocket-order-badge {
+  position: absolute;
+  top: 1.8rem;
+  left: 0.4rem;
+  z-index: 2;
+  background: #fff3cc;
+  color: #713f12;
+  border: 1px solid #b7791f;
+  border-radius: var(--radius-pill);
+  padding: 0.15rem 0.45rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  pointer-events: none;
+}
+.activity-kind-ordered {
+  background: #fff3cc;
+  color: #713f12;
+}
+.activity-kind-received {
+  background: var(--accent-soft-bg);
+  color: var(--accent-deep);
+}

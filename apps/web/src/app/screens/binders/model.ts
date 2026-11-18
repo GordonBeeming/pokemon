@@ -65,9 +65,10 @@ export function parseSlotId(
   return { pageId: match[1], row: Number(match[2]), column: Number(match[3]) };
 }
 
-export type PocketState = 'placed' | 'reserved' | 'empty' | 'target';
+export type PocketState = 'ordered' | 'placed' | 'reserved' | 'empty' | 'target';
 
 export function pocketState(slot: BinderSlotView): PocketState {
+  if (slot.orderedCardId) return 'ordered';
   if (slot.assignedCardId) return 'placed';
   if (slot.entryKind === 'reserved') return 'reserved';
   if (slot.entryKind === 'empty' || (!slot.entryKind && !slot.cardId)) return 'empty';
@@ -110,8 +111,8 @@ export function setTargetName(slot: BinderSlotView): string {
 
 /** "#0025 Pikachu", the exact card's name, the reservation label, or "Empty pocket". */
 export function pocketTitle(slot: BinderSlotView, cards: CardLookup): string {
-  if (slot.assignedCardId) {
-    const placed = cards.get(slot.assignedCardId);
+  if (slot.assignedCardId || slot.orderedCardId) {
+    const placed = cards.get(slot.assignedCardId ?? slot.orderedCardId ?? '');
     const dex = placed?.pokedexNumber ?? slot.pokemonNumber;
     if (placed) return dex ? `${formatDexNumber(dex)} ${placed.name}` : placed.name;
   }
@@ -157,6 +158,8 @@ export function pocketTargetDescription(slot: BinderSlotView, cards: CardLookup)
 }
 
 export function placedStatus(slot: BinderSlotView, cards: CardLookup): string {
+  if (slot.orderedCardId)
+    return `Ordered: ${cards.get(slot.orderedCardId)?.name ?? 'incoming card'}`;
   if (slot.assignedCardId) {
     const placed = cards.get(slot.assignedCardId);
     return `Placed: ${placed ? placed.name : 'owned copy'}`;
@@ -248,6 +251,7 @@ export function cardIdsOnPages(pages: readonly BinderPageView[]): string[] {
     for (const slot of page.slots) {
       if (slot.cardId) ids.add(slot.cardId);
       if (slot.assignedCardId) ids.add(slot.assignedCardId);
+      if (slot.orderedCardId) ids.add(slot.orderedCardId);
     }
   return [...ids];
 }
@@ -361,6 +365,10 @@ const ERROR_MESSAGES: Record<string, string> = {
     'The copied cards do not fit before the next reserved page or the end of this section. Choose another pocket, fewer cards, or grow the binder.',
   binder_paste_confirmation_required: 'Confirm replacement of the occupied targets before pasting.',
   binder_bookmark_reserved_page: 'Use Manage page to change a reserved-page bookmark.',
+  binder_order_active_only: 'Order status can only be changed in the active binder.',
+  binder_order_not_found: 'This order changed elsewhere. Reload and try again.',
+  binder_order_copy_unavailable:
+    'The owned copy for this order is no longer available. Add a copy or unplace it elsewhere, then mark received.',
   binder_assignment_quantity_exceeded:
     'You have no free copy of this card: none owned, or every copy is already placed. Use Find cards to add a copy and place it.',
   binder_assignment_incompatible: 'That copy does not fit this target.',

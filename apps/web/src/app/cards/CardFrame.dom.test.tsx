@@ -177,3 +177,10 @@ async function step(action: () => unknown): Promise<void> {
     await Promise.resolve();
   });
 }
+it('labels incoming orders without claiming they are owned', async () => {
+  await step(() => root.render(<CardFrame card={pikachu} state="ordered" />));
+  expect(container.querySelector('.card-frame-order-badge')?.textContent).toBe('Ordered');
+  expect(frameEl()?.getAttribute('aria-label')).toContain('ordered, awaiting arrival');
+  expect(frameEl()?.getAttribute('aria-label')).not.toContain('owned');
+  expect(frameEl()?.style.borderStyle).toBe('solid');
+});

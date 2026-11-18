@@ -112,6 +112,7 @@ export function applyAllMigrations(database: DatabaseSync): void {
     '030_binder_activity.sql',
     '031_wanted_cards.sql',
     '032_trainer_directory_lookup.sql',
+    '033_binder_orders.sql',
   ])
     database.exec(readFileSync(new URL(name, directory), 'utf8'));
 }

@@ -421,6 +421,13 @@ function mutate(versionId: string, suffix: string, method: string, body: unknown
 }
 
 export const binderApi = {
+  orderStatus: (
+    versionId: string,
+    at: BinderSlotLocation,
+    cardId: string,
+    status: 'ordered' | 'received' | 'cancelled',
+    expectedRevision: number,
+  ) => mutate(versionId, '/order', 'PUT', { at, cardId, status, expectedRevision }),
   /** Marks every owned-but-unplaced pocket as placed; returns how many it marked. */
   assignOwned: (versionId: string, expectedRevision: number) =>
     assignOwned(versionId, expectedRevision, true),

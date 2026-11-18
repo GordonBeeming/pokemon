@@ -17,6 +17,20 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 
 ---
 
+## Binder orders and Wanted
+
+- Ordered cards cover their pocket targets while awaiting arrival. They keep the target's
+  position and show an Ordered badge without adding an owned copy.
+- Pocket actions can mark a card ordered or received. Receiving an incoming order adds and
+  places one copy together. Switching an existing received copy back and forth preserves its
+  owned count; an unavailable owned copy must be replaced or freed before it can be received.
+- Activity's Ordered filter lists outstanding orders across checkpoints and offers Mark received.
+  Orders stay attached when targets move, pages are arranged, or a binder draft is cloned.
+- Wishlist mode in a binder adds directly to that binder. Wanted cards open the same side
+  inspector used by binders. Their footers show the list name and a subtle Remove control.
+- Gallery and Wanted pages show 48 cards. Wanted's placement filters include On order;
+  wants remain until explicitly removed.
+
 ## Shell & navigation
 
 - [ ] dropped · The desktop scanner (macOS Tauri app) · dropped because the collection workflow
@@ -131,8 +145,8 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] keep · A live "Showing X to Y of Z cards." status, a card gallery grid with a clear selected
       state, and an empty state "No cards match this search." · done when: an unmatched search shows
       that empty-state text instead of an empty grid.
-- [ ] keep · Pagination at 50 cards per page, using the same component as National Pokédex · done
-      when: paging past 50 results loads the next page without resetting the search bar.
+- [ ] keep · Pagination at 48 cards per page, using the same component as National Pokédex · done
+      when: paging past 48 results loads the next page without resetting the search bar.
 - [ ] changed · Catalogue results follow the one fading rule: an unowned card gets the pale, dashed
       frame with its art faded, an owned one is solid; the card inspector never fades and states
       ownership in words · done when: an unowned card in the gallery shows the pale dashed frame
@@ -245,8 +259,8 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] keep · The Copy menu's "Release-date order" copies the same result set sorted oldest-first,
       independent of the on-screen sort · done when: copying release-date order for a set copies its
       earliest print first regardless of the visible sort.
-- [ ] keep · The Copy menu's "This page" copies only the 50 loaded cards, and is shown only when
-      there are more than 50 total results · done when: a 40-result search's Copy menu doesn't show
+- [ ] keep · The Copy menu's "This page" copies only the 48 loaded cards, and is shown only when
+      there are more than 48 total results · done when: a 40-result search's Copy menu doesn't show
       "This page", but a 120-result search's does.
 - [ ] keep · Copy menu items are disabled while busy, while copying, at 0 results, above 2,000
       results, or before the first search resolves; each disabled item says why, and the cap message
@@ -394,7 +408,7 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       reserved pages · done when: reserving a page adds it to the bookmark dropdown without manually
       bookmarking anything.
 - [ ] keep · Binder space search: a debounced text search across every page, results show
-      label/page/row·column/placed state, paginated 50 at a time, and clicking a result jumps to and
+      label/page/row·column/placed state, paginated 48 at a time, and clicking a result jumps to and
       focuses that pocket. The results list sits under the field, never wider than it or the screen,
       and closes on a pick, Escape or a tap outside; a pick closes the list before the jump · done
       when: searching a reservation label jumps straight to its page with that pocket focused, and no
@@ -739,14 +753,14 @@ readability. Citations use each inventory document's own section/subsection head
 | Catalogue: species indexing status line + 6h cache + retry                 | Catalogue: species indexing status line               |
 | Catalogue: "Copy displayed order"                                          | Clipboard & bulk actions: copy displayed order        |
 | Catalogue: "Copy release-date order"                                       | Clipboard & bulk actions: copy release-date order     |
-| Catalogue: "Copy this page" (>50 results only)                             | Clipboard & bulk actions: copy this page              |
+| Catalogue: "Copy this page" (>48 results only)                             | Clipboard & bulk actions: copy this page              |
 | Catalogue: copy tools disabled conditions                                  | Clipboard & bulk actions: copy disabled conditions    |
 | Catalogue: clipboard shared/localStorage/cross-tab                         | Clipboard & bulk actions: shared clipboard, cross-tab |
 | Catalogue: post-copy confirmation + "Open binders"                         | Clipboard & bulk actions: post-copy confirmation      |
 | Catalogue: "Add a card that is not in TCGdex"                              | Catalogue: add custom card                            |
 | Catalogue: "Add these results to a binder" bulk disclosure                 | Clipboard & bulk actions: bulk add to binder          |
 | Catalogue: live "Showing X to Y of Z" status, gallery, empty state         | Catalogue: live status + gallery + empty state        |
-| Catalogue: pagination (50/page)                                            | Catalogue: pagination 50/page                         |
+| Catalogue: pagination (48/page)                                            | Catalogue: pagination 48/page                         |
 | Catalogue: detail lightbox (position of total, high-res art)               | Card inspector: modal detail view                     |
 | Catalogue: Prev/Next chevrons + arrow-key shortcuts, wraparound            | Card inspector: prev/next + arrow keys                |
 | Catalogue: Escape closes through save gate                                 | Card inspector: escape/outside-click                  |
@@ -768,7 +782,7 @@ readability. Citations use each inventory document's own section/subsection head
 | National Pokédex: "Find a Pokémon" search, resets page 0                   | National Pokédex: search matches name/region/number   |
 | National Pokédex: RegionPicker combobox, live counts                       | National Pokédex: region picker with live counts      |
 | National Pokédex: SegmentedControl, resets page 0                          | National Pokédex: ownership segmented control         |
-| National Pokédex: live status + 50/page grid + representative/preview art  | National Pokédex: live status + header progress       |
+| National Pokédex: live status + 48/page grid + representative/preview art  | National Pokédex: live status + header progress       |
 | National Pokédex: row click → openSpecies, stash focus/scroll              | National Pokédex: open species → gallery              |
 | National Pokédex: rows disabled during discovery                           | National Pokédex: rows disabled during discovery      |
 | National Pokédex: on-mount scroll/focus restoration                        | National Pokédex: state survives leave/return         |

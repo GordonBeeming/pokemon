@@ -182,6 +182,17 @@ export function RemovePanel({
       }}
     >
       <PanelError error={error ?? (remove.isError ? binderErrorMessage(remove.error) : null)} />
+      {slot.orderedCardId ? (
+        <section className="panel-section">
+          <h3>Cancel the ordered card</h3>
+          <p className="panel-help">
+            Keep this pocket targeting <strong>{target}</strong>. Your owned copies stay unchanged.
+          </p>
+          <button type="button" disabled={busy} className="button-primary" onClick={onUnassign}>
+            Cancel order · keep target
+          </button>
+        </section>
+      ) : null}
       {slot.assignedCardId ? (
         <section className="panel-section">
           <h3>Remove the placed card</h3>
@@ -214,10 +225,7 @@ export function RemovePanel({
             onClick={() => {
               if (removeCopy) {
                 if (canRemoveCopy)
-                  void remove
-                    .mutateAsync({ source: 'pocket', slotId })
-                    .then(onCopyRemoved)
-                    .catch(() => {});
+                  remove.mutate({ source: 'pocket', slotId }, { onSuccess: onCopyRemoved });
               } else onUnassign();
             }}
           >
@@ -392,6 +400,32 @@ export function PageReservePanel({
           ) : null}
         </div>
       </form>
+    </Panel>
+  );
+}
+
+export function MarkOrderedPanel({
+  pending,
+  error,
+  onConfirm,
+  onClose,
+}: {
+  pending: boolean;
+  error: string | null;
+  onConfirm: () => void;
+  onClose: () => void;
+}): ReactElement {
+  return (
+    <Panel title="Mark this card ordered?" onClose={onClose}>
+      <PanelError error={error} />
+      <p className="panel-help">
+        This pocket will show Ordered instead of received. Your owned copy count stays unchanged.
+        Cancelling the order later clears this placement and leaves your copy available in the
+        collection.
+      </p>
+      <button type="button" className="button-primary" disabled={pending} onClick={onConfirm}>
+        Mark ordered
+      </button>
     </Panel>
   );
 }

@@ -34,7 +34,11 @@ export async function dashboardBinderProgress(
       name: binder.name,
       targets: summary.targets,
       placed: summary.placed,
-      percent: summary.targets > 0 ? Math.round((summary.placed / summary.targets) * 100) : 0,
+      ...(summary.ordered ? { ordered: summary.ordered } : {}),
+      percent:
+        summary.targets > 0
+          ? Math.round(((summary.placed + summary.ordered) / summary.targets) * 100)
+          : 0,
     });
   }
   return rows;

@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactElement } from 'react';
 import type { BinderActivityResult } from '@pokedex/shared';
 import { api } from '../../api/queries/binder-activity';
+import { binderApi, type BinderMutation } from '../../api/queries/binders';
 import { CardFrame } from '../../cards/CardFrame';
 import { Icon } from '../../ui/icons';
 import { binderErrorMessage as userMessage, frameCardFrom } from './model';
@@ -17,10 +18,12 @@ export function BinderActivity({
   binderId,
   revision,
   onOpenCard,
+  onMutation,
 }: {
   binderId: string;
   revision: number;
   onOpenCard?: (cardId: string) => void;
+  onMutation?: (mutation: BinderMutation) => void;
 }): ReactElement {
   const [batch, setBatch] = useState('');
   const [query, setQuery] = useState('');
@@ -34,6 +37,30 @@ export function BinderActivity({
   const [checkpointError, setCheckpointError] = useState('');
   const [refresh, setRefresh] = useState(0);
   const [status, setStatus] = useState('');
+  const [receiving, setReceiving] = useState<number | null>(null);
+  const [orderError, setOrderError] = useState('');
+  async function receive(event: BinderActivityResult['events'][number]) {
+    if (receiving !== null || event.versionRevision == null) return;
+    setReceiving(event.id);
+    setOrderError('');
+    try {
+      const mutation = await binderApi.orderStatus(
+        event.versionId,
+        { page: event.page, row: event.row, column: event.column },
+        event.cardId,
+        'received',
+        event.versionRevision,
+      );
+      onMutation?.(mutation);
+      setStatus(`${event.name} received and placed.`);
+      setRefresh((n) => n + 1);
+    } catch (cause) {
+      setOrderError(userMessage(cause));
+      setRefresh((n) => n + 1);
+    } finally {
+      setReceiving(null);
+    }
+  }
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -138,58 +165,66 @@ export function BinderActivity({
           {checkpointError}
         </p>
       ) : null}
-      <div className="activity-batch-bar">
-        <label>
-          Batch
-          <select
-            value={data?.selectedBatch ?? ''}
-            disabled={loading || !data}
-            onChange={(e) => setBatch(e.target.value)}
-          >
-            {data?.batches.map((b, i) => (
-              <option key={b.id} value={b.id}>
-                {i === 0
-                  ? 'Current batch'
-                  : b.createdAt === null
-                    ? 'First batch'
-                    : batchTime(b.createdAt)}{' '}
-                · {b.count} {b.count === 1 ? 'change' : 'changes'}
-              </option>
-            ))}
-          </select>
-        </label>
-        <nav aria-label="Checkpoint batches">
-          <button
-            type="button"
-            aria-label="Older batch"
-            title="Older batch"
-            disabled={!older || loading}
-            onClick={() => older && setBatch(older.id)}
-          >
-            <Icon name="chevron-left" />
-          </button>
-          <button
-            type="button"
-            aria-label="Newer batch"
-            title="Newer batch"
-            disabled={!newer || loading}
-            onClick={() => newer && setBatch(newer.id)}
-          >
-            <Icon name="chevron-right" />
-          </button>
-          <button
-            type="button"
-            disabled={loading}
-            onClick={() => {
-              setBatch('');
-              setRefresh((n) => n + 1);
-            }}
-          >
-            Latest changes
-          </button>
-        </nav>
-      </div>
-      {selected?.createdAt ? (
+      {kind === 'ordered' ? (
+        <p className="panel-help">
+          Outstanding orders across all checkpoints. Mark a card received when it arrives.
+        </p>
+      ) : null}
+      {orderError ? <p role="alert">{orderError}</p> : null}
+      {kind !== 'ordered' ? (
+        <div className="activity-batch-bar">
+          <label>
+            Batch
+            <select
+              value={data?.selectedBatch ?? ''}
+              disabled={loading || !data}
+              onChange={(e) => setBatch(e.target.value)}
+            >
+              {data?.batches.map((b, i) => (
+                <option key={b.id} value={b.id}>
+                  {i === 0
+                    ? 'Current batch'
+                    : b.createdAt === null
+                      ? 'First batch'
+                      : batchTime(b.createdAt)}{' '}
+                  · {b.count} {b.count === 1 ? 'change' : 'changes'}
+                </option>
+              ))}
+            </select>
+          </label>
+          <nav aria-label="Checkpoint batches">
+            <button
+              type="button"
+              aria-label="Older batch"
+              title="Older batch"
+              disabled={!older || loading}
+              onClick={() => older && setBatch(older.id)}
+            >
+              <Icon name="chevron-left" />
+            </button>
+            <button
+              type="button"
+              aria-label="Newer batch"
+              title="Newer batch"
+              disabled={!newer || loading}
+              onClick={() => newer && setBatch(newer.id)}
+            >
+              <Icon name="chevron-right" />
+            </button>
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => {
+                setBatch('');
+                setRefresh((n) => n + 1);
+              }}
+            >
+              Latest changes
+            </button>
+          </nav>
+        </div>
+      ) : null}
+      {kind !== 'ordered' && selected?.createdAt ? (
         <p className="activity-batch-date">From {activityTime(selected.createdAt)}</p>
       ) : null}
       <div className="activity-filter-bar">
@@ -206,7 +241,10 @@ export function BinderActivity({
         <label>
           Changes
           <select value={kind} onChange={(e) => setKind(e.target.value)}>
-            <option value="all">Added and removed</option>
+            <option value="all">All changes</option>
+            <option value="ordered">Ordered · all checkpoints</option>
+            <option value="received">Received</option>
+            <option value="cancelled">Cancelled orders</option>
             <option value="added">Added only</option>
             <option value="removed">Removed only</option>
           </select>
@@ -295,11 +333,21 @@ export function BinderActivity({
           ) : null}
           {data.events.length === 0 ? (
             <div className="activity-empty">
-              <strong>{filtered ? 'No matching changes' : 'No changes in this batch'}</strong>
+              <strong>
+                {kind === 'ordered'
+                  ? query || sections.length
+                    ? 'No matching orders'
+                    : 'No outstanding orders'
+                  : filtered
+                    ? 'No matching changes'
+                    : 'No changes in this batch'}
+              </strong>
               <p>
-                {filtered
-                  ? 'Try another batch or clear the filters.'
-                  : 'Your next placement or removal will appear here.'}
+                {kind === 'ordered'
+                  ? 'Orders stay here across checkpoints until you mark them received.'
+                  : filtered
+                    ? 'Try another batch or clear the filters.'
+                    : 'Your next placement or removal will appear here.'}
               </p>
             </div>
           ) : (
@@ -321,15 +369,38 @@ export function BinderActivity({
                             frameType: null,
                           }
                     }
-                    state={(event.card?.collection?.quantity ?? 0) > 0 ? 'owned' : 'unowned'}
+                    state={
+                      event.kind === 'ordered'
+                        ? 'ordered'
+                        : (event.card?.collection?.quantity ?? 0) > 0
+                          ? 'owned'
+                          : 'unowned'
+                    }
                     onView={event.card && onOpenCard ? () => onOpenCard(event.cardId) : undefined}
                   />
                   <div className="activity-card-heading">
                     <span className={`activity-kind activity-kind-${event.kind}`}>
-                      {event.kind === 'added' ? 'Added' : 'Removed'}
+                      {
+                        {
+                          added: 'Added',
+                          removed: 'Removed',
+                          ordered: 'Ordered',
+                          received: 'Received',
+                          cancelled: 'Order cancelled',
+                        }[event.kind]
+                      }
                     </span>
                   </div>
                   <strong>{event.name}</strong>
+                  {kind === 'ordered' && event.versionRevision != null ? (
+                    <button
+                      type="button"
+                      disabled={receiving !== null || loading}
+                      onClick={() => void receive(event)}
+                    >
+                      {receiving === event.id ? 'Receiving…' : 'Mark received'}
+                    </button>
+                  ) : null}
                   {event.sectionName ? (
                     <span className="activity-card-section">{event.sectionName}</span>
                   ) : null}

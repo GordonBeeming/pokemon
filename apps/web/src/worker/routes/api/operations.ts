@@ -48,6 +48,7 @@ import {
   compactRemoveBinderEntry,
   moveBinderEntryByOffset,
   setBinderEntryAssignment,
+  setBinderOrderStatus,
   setBinderEntryPageBreak,
   reserveBinderPage,
   resizeBinderCapacity,
@@ -273,6 +274,13 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       offset: number,
       expectedRevision: number,
     ) => moveBinderEntryByOffset(env.DB, ownerId, versionId, from, offset, expectedRevision),
+    setBinderOrderStatus: (
+      versionId: string,
+      at: BinderSlotLocation,
+      cardId: string,
+      status: 'ordered' | 'received' | 'cancelled',
+      expectedRevision: number,
+    ) => setBinderOrderStatus(env.DB, ownerId, versionId, at, cardId, status, expectedRevision),
     setBinderEntryAssignment: (
       versionId: string,
       at: BinderSlotLocation,

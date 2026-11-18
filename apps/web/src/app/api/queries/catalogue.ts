@@ -1,3 +1,4 @@
+import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
 import { catalogueCardViewSchema, catalogueDetailViewSchema } from '@pokedex/shared';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
@@ -5,7 +6,7 @@ import type { CatalogueSearch } from '../../routes/search-params';
 import { apiFetch } from '../client';
 import { queryKeys } from '../keys';
 
-export const CATALOGUE_PAGE_SIZE = 50;
+export const CATALOGUE_PAGE_SIZE = GALLERY_PAGE_SIZE;
 // The hard cap the worker and every copy/bulk-add tool agree on (see FEATURES.md's
 // Clipboard & bulk actions section) — used to short-circuit a walk before it starts.
 export const CATALOGUE_BULK_CAP = 2000;

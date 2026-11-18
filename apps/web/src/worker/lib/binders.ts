@@ -1,3 +1,4 @@
+import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
 import { createHash } from 'node:crypto';
 import { activitySnapshot, activityChanges } from './binder-activity';
 import {
@@ -59,6 +60,9 @@ const natural = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 export interface ReflowEntry {
   entry: BinderEntry;
   assignedCardId?: string | null;
+  orderedCardId?: string | null;
+  orderedAddCopy?: number;
+  orderedAt?: number | null;
   originalIndex?: number;
 }
 
@@ -160,6 +164,9 @@ interface SlotRow {
   label?: string | null;
   pokemon_number?: number | null;
   assigned_card_id?: string | null;
+  ordered_card_id?: string | null;
+  ordered_add_copy?: number;
+  ordered_at?: number | null;
   starts_new_page?: number;
   set_id?: string | null;
   set_language?: string | null;
@@ -246,6 +253,9 @@ export interface OrderingRow {
 export type ArrangementMode = 'set-number' | 'release-date' | 'pokedex-number' | 'language';
 
 export type BinderErrorCode =
+  | 'binder_order_copy_unavailable'
+  | 'binder_order_active_only'
+  | 'binder_order_not_found'
   | 'binder_version_not_found'
   | 'binder_not_found'
   | 'binder_version_not_draft'
@@ -450,7 +460,7 @@ async function readPages(
     .prepare(
       `SELECT slot.binder_page_id, slot.row_index, slot.column_index, slot.card_id,
         ${slotKindSql('slot')} AS entry_kind, slot.label, slot.pokemon_number,
-        slot.assigned_card_id, slot.starts_new_page, slot.set_id, slot.set_language,
+        slot.assigned_card_id, slot.ordered_card_id, slot.ordered_add_copy, slot.ordered_at, slot.starts_new_page, slot.set_id, slot.set_language,
         target_set.set_name AS set_name,
         COALESCE(target_set.abbreviation, upper(slot.set_id)) AS set_code,
         slot.group_kind, slot.group_key, ${groupSampleSql('slot')} AS group_sample,
@@ -486,6 +496,7 @@ async function readPages(
         label: slot.label ?? null,
         pokemonNumber: slot.pokemon_number ?? null,
         assignedCardId: slot.assigned_card_id ?? null,
+        orderedCardId: slot.ordered_card_id ?? null,
         startsNewPage: slot.starts_new_page === 1,
         ...(slot.entry_kind === 'set'
           ? {
@@ -806,7 +817,7 @@ export async function activeBinderShortages(
          JOIN binder_versions version ON version.id=page.binder_version_id
          JOIN binders binder ON binder.id=version.binder_id
          WHERE binder.owner_id=?1 AND version.status='active' AND slot.entry_kind='exact-card'
-           AND slot.assigned_card_id IS NULL GROUP BY slot.card_id
+           AND slot.assigned_card_id IS NULL AND slot.ordered_card_id IS NULL GROUP BY slot.card_id
        )
        SELECT targets.card_id, card.pokedex_number, targets.required,
          COALESCE(collection.quantity,0) AS owned, COALESCE(assigned.assigned,0) AS assigned,
@@ -841,7 +852,7 @@ export async function activeBinderShortages(
        JOIN binder_versions version ON version.id=page.binder_version_id
        JOIN binders binder ON binder.id=version.binder_id
        WHERE binder.owner_id=?1 AND version.status='active' AND slot.entry_kind='pokemon'
-         AND slot.assigned_card_id IS NULL GROUP BY slot.pokemon_number
+         AND slot.assigned_card_id IS NULL AND slot.ordered_card_id IS NULL GROUP BY slot.pokemon_number
      ), owned AS (
        SELECT card.pokedex_number, SUM(collection.quantity) AS owned FROM catalogue_cards card
        JOIN collection_cards collection ON collection.card_id=card.id
@@ -942,7 +953,8 @@ export async function getBinderPlannerSummary(db: D1Database, ownerId: string, v
     pageIds: pages.map((page) => page.id),
     revision: version.revision,
     targets,
-    placed: slots.filter((slot) => slot.assigned_card_id !== null).length,
+    placed: slots.filter((slot) => slot.assigned_card_id != null).length,
+    ordered: slots.filter((slot) => slot.ordered_card_id != null).length,
     reservedSleeves,
     reservedPages: pages.filter((page) => page.kind === 'reserved').length,
     generatedPadding,
@@ -990,7 +1002,7 @@ export async function searchBinderSpaces(
     .prepare(
       `
     SELECT p.position AS page, s.row_index AS row, s.column_index AS column,
-      ${slotKindSql('s')} AS kind, s.pokemon_number, s.assigned_card_id,
+      ${slotKindSql('s')} AS kind, s.pokemon_number, s.assigned_card_id,s.ordered_card_id,
       CASE WHEN s.entry_kind='exact-card' THEN s.card_id END AS target_card_id,
       CASE WHEN s.set_id IS NOT NULL THEN 'Any card · ' || COALESCE(target_set.set_name, s.set_id)
         WHEN s.entry_kind = 'reserved' THEN 'Reserved: ' || COALESCE(s.label, 'sleeve')
@@ -1004,7 +1016,7 @@ export async function searchBinderSpaces(
     LEFT JOIN catalogue_cards c ON c.id=s.card_id
     LEFT JOIN catalogue_sets target_set
       ON target_set.set_id=s.set_id AND target_set.language=s.set_language
-    LEFT JOIN catalogue_cards placed ON placed.id=s.assigned_card_id
+    LEFT JOIN catalogue_cards placed ON placed.id=COALESCE(s.assigned_card_id,s.ordered_card_id)
     LEFT JOIN catalogue_sets placed_set
       ON placed_set.set_id=placed.set_id AND placed_set.language=placed.language
     WHERE p.binder_version_id=?1
@@ -1021,7 +1033,7 @@ export async function searchBinderSpaces(
         OR (s.entry_kind='empty' AND instr('empty pocket',?2)>0)
         OR (s.entry_kind='exact-card' AND instr(${foldText("COALESCE(c.name,'') || ' ' || COALESCE(c.set_name,'') || ' ' || COALESCE(c.number,'')")},?2)>0))
     UNION ALL
-    SELECT position AS page,NULL AS row,NULL AS column,'reserved-page' AS kind,NULL AS pokemon_number,NULL AS assigned_card_id,
+    SELECT position AS page,NULL AS row,NULL AS column,'reserved-page' AS kind,NULL AS pokemon_number,NULL AS assigned_card_id,NULL AS ordered_card_id,
       NULL AS target_card_id,
       CASE WHEN kind='reserved' THEN 'Reserved page: ' || COALESCE(label,'Unlabelled')
         ELSE 'Page: ' || label END AS label,
@@ -1030,7 +1042,7 @@ export async function searchBinderSpaces(
     FROM binder_pages WHERE binder_version_id=?1 AND (kind='reserved' OR label IS NOT NULL)
       AND instr(${foldText("CASE WHEN kind='reserved' THEN 'reserved page ' ELSE 'page ' END || COALESCE(label,'')")},?2)>0
       AND json_valid(?8)
-    ORDER BY page,row,column LIMIT 51 OFFSET ?7
+    ORDER BY page,row,column LIMIT ${GALLERY_PAGE_SIZE + 1} OFFSET ?7
   `,
     )
     .bind(
@@ -1052,6 +1064,7 @@ export async function searchBinderSpaces(
       kind: string;
       pokemon_number: number | null;
       assigned_card_id: string | null;
+      ordered_card_id: string | null;
       target_card_id: string | null;
       label: string;
       placed_label: string | null;
@@ -1061,7 +1074,7 @@ export async function searchBinderSpaces(
       energy_group: string | null;
     }>();
   return binderSearchResultSchema.parse({
-    matches: result.results.slice(0, 50).map((row) => {
+    matches: result.results.slice(0, GALLERY_PAGE_SIZE).map((row) => {
       const species = row.pokemon_number ? NATIONAL_POKEDEX[row.pokemon_number - 1] : undefined;
       return {
         page: row.page,
@@ -1070,6 +1083,7 @@ export async function searchBinderSpaces(
         kind: row.kind,
         placed: row.assigned_card_id !== null,
         assignedCardId: row.assigned_card_id,
+        orderedCardId: row.ordered_card_id,
         targetCardId: row.target_card_id,
         pokemonNumber: row.pokemon_number,
         // A filled pocket is named by the card in it; an open one by what it wants.
@@ -1084,7 +1098,7 @@ export async function searchBinderSpaces(
                 : row.label),
       };
     }),
-    nextOffset: result.results.length > 50 ? offset + 50 : null,
+    nextOffset: result.results.length > GALLERY_PAGE_SIZE ? offset + GALLERY_PAGE_SIZE : null,
   });
 }
 
@@ -1119,7 +1133,7 @@ export async function getBinderVersionShortages(
          SELECT slot.card_id, COUNT(*) AS required
          FROM binder_slots slot JOIN binder_pages page ON page.id = slot.binder_page_id
          WHERE page.binder_version_id = ?1 AND slot.entry_kind = 'exact-card'
-           AND slot.assigned_card_id IS NULL GROUP BY slot.card_id
+           AND slot.assigned_card_id IS NULL AND slot.ordered_card_id IS NULL GROUP BY slot.card_id
        )
        SELECT targets.card_id, card.pokedex_number, targets.required,
          COALESCE(collection.quantity, 0) AS owned,
@@ -1155,7 +1169,7 @@ export async function getBinderVersionShortages(
          SELECT slot.pokemon_number, COUNT(*) AS required
          FROM binder_slots slot JOIN binder_pages page ON page.id = slot.binder_page_id
          WHERE page.binder_version_id = ?1 AND slot.entry_kind = 'pokemon'
-           AND slot.assigned_card_id IS NULL GROUP BY slot.pokemon_number
+           AND slot.assigned_card_id IS NULL AND slot.ordered_card_id IS NULL GROUP BY slot.pokemon_number
        ), owned AS (
          SELECT card.pokedex_number, SUM(collection.quantity) AS owned
          FROM catalogue_cards card JOIN collection_cards collection ON collection.card_id = card.id
@@ -1249,7 +1263,7 @@ export async function getBinderAssignmentCandidates(
   const target = await db
     .prepare(
       `SELECT slot.binder_page_id, slot.row_index, slot.column_index, slot.card_id,
-        ${slotKindSql('slot')} AS entry_kind, slot.label, slot.pokemon_number, slot.assigned_card_id,
+        ${slotKindSql('slot')} AS entry_kind, slot.label, slot.pokemon_number, slot.assigned_card_id, slot.ordered_card_id, slot.ordered_add_copy, slot.ordered_at,
         slot.starts_new_page, slot.is_manual_gap, slot.set_id, slot.set_language,
         slot.group_kind, slot.group_key, slot.energy_group,
         page.position AS page_position, page.kind AS page_kind
@@ -1527,7 +1541,16 @@ export async function arrangeBinderVersion(
   const entries = available
     .map((slot, originalIndex): ReflowEntry | null => {
       const entry = slotEntry(slot);
-      return entry ? { entry, assignedCardId: slot.assigned_card_id ?? null, originalIndex } : null;
+      return entry
+        ? {
+            entry,
+            assignedCardId: slot.assigned_card_id ?? null,
+            orderedCardId: slot.ordered_card_id ?? null,
+            orderedAddCopy: slot.ordered_add_copy ?? 1,
+            orderedAt: slot.ordered_at ?? null,
+            originalIndex,
+          }
+        : null;
     })
     .filter((entry) => entry !== null);
   const targets = entries.filter(
@@ -1736,7 +1759,7 @@ export async function setBinderSlot(
           entry_kind = CASE WHEN ?1 IS NULL THEN 'empty' ELSE 'exact-card' END,
           label = NULL, pokemon_number = NULL, set_id = NULL, set_language = NULL, group_kind = NULL, group_key = NULL, energy_group = NULL,
           assigned_card_id = CASE WHEN ?5 = 1 THEN ?1 WHEN ?6 = 1 THEN NULL
-            WHEN assigned_card_id = ?1 THEN assigned_card_id ELSE NULL END, starts_new_page = CASE WHEN ?1 IS NULL THEN 0 ELSE starts_new_page END
+            WHEN assigned_card_id = ?1 THEN assigned_card_id ELSE NULL END, ordered_card_id=CASE WHEN ?5=1 THEN NULL WHEN ordered_card_id=?1 THEN ordered_card_id ELSE NULL END,ordered_at=CASE WHEN ?5=1 THEN NULL WHEN ordered_card_id=?1 THEN ordered_at ELSE NULL END, starts_new_page = CASE WHEN ?1 IS NULL THEN 0 ELSE starts_new_page END
          WHERE binder_page_id = ?2 AND row_index = ?3 AND column_index = ?4`,
         )
         .bind(
@@ -1826,7 +1849,7 @@ export async function setBinderSlots(
              AND row_index = binder_slots.row_index
              AND column_index = binder_slots.column_index
          ), entry_kind = 'exact-card', label = NULL, pokemon_number = NULL, set_id = NULL, set_language = NULL, group_kind = NULL, group_key = NULL, energy_group = NULL,
-           assigned_card_id = NULL, starts_new_page = 0, is_manual_gap = 0
+           assigned_card_id = NULL, ordered_card_id=NULL,ordered_at=NULL, starts_new_page = 0, is_manual_gap = 0
          WHERE EXISTS (
            SELECT 1 FROM assignments
            WHERE page_id = binder_slots.binder_page_id
@@ -1873,7 +1896,14 @@ export async function swapBinderSlots(
     const sourcePayload = (slot: MaterializedSlot): ReflowEntry | null => {
       const entry = slotEntry(slot);
       return entry
-        ? { entry, assignedCardId: slot.assigned_card_id ?? null, originalIndex: 0 }
+        ? {
+            entry,
+            assignedCardId: slot.assigned_card_id ?? null,
+            orderedCardId: slot.ordered_card_id ?? null,
+            orderedAddCopy: slot.ordered_add_copy ?? 1,
+            orderedAt: slot.ordered_at ?? null,
+            originalIndex: 0,
+          }
         : null;
     };
     const newSource = sourcePayload(targetSlot);
@@ -1897,7 +1927,16 @@ export async function swapBinderSlots(
   const available = slots.filter((slot) => slot.page_kind !== 'reserved');
   const payload = (slot: MaterializedSlot, originalIndex: number): ReflowEntry | null => {
     const entry = slotEntry(slot);
-    return entry ? { entry, assignedCardId: slot.assigned_card_id ?? null, originalIndex } : null;
+    return entry
+      ? {
+          entry,
+          assignedCardId: slot.assigned_card_id ?? null,
+          orderedCardId: slot.ordered_card_id ?? null,
+          orderedAddCopy: slot.ordered_add_copy ?? 1,
+          orderedAt: slot.ordered_at ?? null,
+          originalIndex,
+        }
+      : null;
   };
   const physical = available.map(payload);
   const sourceIndex = available.indexOf(sourceSlot);
@@ -2001,7 +2040,7 @@ export async function addCardsToBinderVersion(
              AND row_index = binder_slots.row_index
              AND column_index = binder_slots.column_index
          ), entry_kind = 'exact-card', label = NULL, pokemon_number = NULL, set_id = NULL, set_language = NULL, group_kind = NULL, group_key = NULL, energy_group = NULL,
-           assigned_card_id = NULL, starts_new_page = 0, is_manual_gap = 0
+           assigned_card_id = NULL, ordered_card_id=NULL,ordered_at=NULL, starts_new_page = 0, is_manual_gap = 0
          WHERE EXISTS (
            SELECT 1 FROM assignments
            WHERE page_id = binder_slots.binder_page_id
@@ -2073,10 +2112,10 @@ export async function cloneBinderVersion(
           FROM json_each(?1)
          )
          INSERT INTO binder_slots (binder_page_id, row_index, column_index, card_id,
-           entry_kind, label, pokemon_number, assigned_card_id, starts_new_page, is_manual_gap,
+           entry_kind, label, pokemon_number, assigned_card_id, ordered_card_id, ordered_add_copy, ordered_at, starts_new_page, is_manual_gap,
            set_id, set_language, group_kind, group_key, energy_group)
          SELECT mapping.new_id, slots.row_index, slots.column_index, slots.card_id,
-           slots.entry_kind, slots.label, slots.pokemon_number, slots.assigned_card_id,
+           slots.entry_kind, slots.label, slots.pokemon_number, slots.assigned_card_id, slots.ordered_card_id, slots.ordered_add_copy, slots.ordered_at,
            slots.starts_new_page, slots.is_manual_gap, slots.set_id, slots.set_language,
            slots.group_kind, slots.group_key, slots.energy_group
          FROM mapping JOIN binder_slots slots ON slots.binder_page_id = mapping.source_id`,
@@ -2257,7 +2296,7 @@ async function materializedSlots(db: D1Database, versionId: string): Promise<Mat
   const result = await db
     .prepare(
       `SELECT slot.binder_page_id, slot.row_index, slot.column_index, slot.card_id,
-        ${slotKindSql('slot')} AS entry_kind, slot.label, slot.pokemon_number, slot.assigned_card_id,
+        ${slotKindSql('slot')} AS entry_kind, slot.label, slot.pokemon_number, slot.assigned_card_id, slot.ordered_card_id, slot.ordered_add_copy, slot.ordered_at,
         slot.starts_new_page, slot.is_manual_gap, slot.set_id, slot.set_language,
         slot.group_kind, slot.group_key, slot.energy_group,
         page.position AS page_position, page.kind AS page_kind
@@ -2320,7 +2359,16 @@ function manualGapIndices(
 function physicalEntries(slots: readonly MaterializedSlot[]): Array<ReflowEntry | null> {
   return slots.map((slot, originalIndex) => {
     const entry = slotEntry(slot);
-    return entry ? { entry, assignedCardId: slot.assigned_card_id ?? null, originalIndex } : null;
+    return entry
+      ? {
+          entry,
+          assignedCardId: slot.assigned_card_id ?? null,
+          orderedCardId: slot.ordered_card_id ?? null,
+          orderedAddCopy: slot.ordered_add_copy ?? 1,
+          orderedAt: slot.ordered_at ?? null,
+          originalIndex,
+        }
+      : null;
   });
 }
 
@@ -2538,6 +2586,9 @@ function planSectionLayout(
       group_key: encoded.groupKey,
       energy_group: encoded.energyGroup,
       assigned_card_id: encoded.assignedCardId,
+      ordered_card_id: encoded.orderedCardId,
+      ordered_add_copy: encoded.orderedAddCopy,
+      ordered_at: encoded.orderedAt,
       starts_new_page: encoded.startsNewPage ? 1 : 0,
       is_manual_gap: encoded.isManualGap,
     });
@@ -2601,6 +2652,9 @@ function encodedSlot(
     energyGroup: entry?.kind === 'energy' ? entry.key : null,
     startsNewPage: entry && 'startsNewPage' in entry ? entry.startsNewPage : false,
     assignedCardId: item?.assignedCardId ?? null,
+    orderedCardId: item?.orderedCardId ?? null,
+    orderedAddCopy: item?.orderedAddCopy ?? 1,
+    orderedAt: item?.orderedAt ?? null,
   };
 }
 
@@ -2659,6 +2713,7 @@ function rewriteSlotsStatements(
           CAST(json_extract(value, '$.startsNewPage') AS INTEGER) AS starts_new_page,
           CAST(json_extract(value, '$.isManualGap') AS INTEGER) AS is_manual_gap
           ,json_extract(value, '$.assignedCardId') AS assigned_card_id
+          ,json_extract(value, '$.orderedCardId') AS ordered_card_id,COALESCE(json_extract(value, '$.orderedAddCopy'),1) AS ordered_add_copy,json_extract(value, '$.orderedAt') AS ordered_at
         FROM json_each(?1)
        )
        UPDATE binder_slots AS target SET entry_kind = replacement.entry_kind,
@@ -2668,6 +2723,7 @@ function rewriteSlotsStatements(
          group_kind = replacement.group_kind, group_key = replacement.group_key,
          energy_group = replacement.energy_group,
          assigned_card_id = replacement.assigned_card_id,
+         ordered_card_id = replacement.ordered_card_id,ordered_add_copy=replacement.ordered_add_copy,ordered_at=replacement.ordered_at,
          starts_new_page = replacement.starts_new_page, is_manual_gap = replacement.is_manual_gap
        FROM replacement
        WHERE replacement.page_id = target.binder_page_id
@@ -3088,11 +3144,115 @@ function assignmentUpdateStatement(
 ): D1PreparedStatement {
   return db
     .prepare(
-      `UPDATE binder_slots SET assigned_card_id = ?1
+      `UPDATE binder_slots SET assigned_card_id = ?1,ordered_card_id=NULL,ordered_at=NULL
          WHERE binder_page_id = ?2 AND row_index = ?3 AND column_index = ?4
            AND ${ASSIGNABLE_SQL}`,
     )
     .bind(cardId, pageId, at.row, at.column);
+}
+
+/** Incoming orders are target coverage, not owned inventory. Receiving is atomic. */
+export async function setBinderOrderStatus(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  at: BinderSlotLocation,
+  cardId: string,
+  status: 'ordered' | 'received' | 'cancelled',
+  requestedRevision: number,
+): Promise<BinderMutationResult> {
+  const version = await readVersion(db, ownerId, versionId);
+  requireEditable(version);
+  expectedRevision(version, requestedRevision);
+  if (version.status !== 'active') domainError('binder_order_active_only');
+  validateLocation(version, at);
+  const page = await pageAt(db, versionId, at.page);
+  await requireCard(db, ownerId, cardId);
+  const slot = await db
+    .prepare(
+      'SELECT assigned_card_id,ordered_card_id,ordered_add_copy FROM binder_slots WHERE binder_page_id=? AND row_index=? AND column_index=?',
+    )
+    .bind(page.id, at.row, at.column)
+    .first<{
+      assigned_card_id: string | null;
+      ordered_card_id: string | null;
+      ordered_add_copy: number;
+    }>();
+  if (!slot) domainError('binder_slot_not_found');
+  if (status === 'received' && slot.assigned_card_id === cardId && !slot.ordered_card_id)
+    return { ...(await mutationResult(db, ownerId, versionId, [at.page])), anchor: at };
+  if (status === 'ordered' && slot.ordered_card_id === cardId)
+    return { ...(await mutationResult(db, ownerId, versionId, [at.page])), anchor: at };
+  if (status !== 'ordered' && slot.ordered_card_id !== cardId)
+    domainError('binder_order_not_found');
+  const now = nowSeconds();
+  const statements: D1PreparedStatement[] = [assignableSlotAssertion(db, page.id, at)];
+  if (status === 'ordered') {
+    statements.push(
+      db
+        .prepare(
+          `UPDATE binder_slots SET ordered_card_id=?1,ordered_at=?2,ordered_add_copy=CASE WHEN assigned_card_id=?1 THEN 0 ELSE 1 END,assigned_card_id=NULL WHERE binder_page_id=?3 AND row_index=?4 AND column_index=?5`,
+        )
+        .bind(cardId, now, page.id, at.row, at.column),
+    );
+  } else if (status === 'cancelled') {
+    statements.push(
+      db
+        .prepare(
+          'UPDATE binder_slots SET ordered_card_id=NULL,ordered_at=NULL WHERE binder_page_id=? AND row_index=? AND column_index=?',
+        )
+        .bind(page.id, at.row, at.column),
+    );
+  } else {
+    if (slot.ordered_add_copy === 1) {
+      const mutationId = crypto.randomUUID();
+      statements.push(
+        quantityCapAssertion(db, ownerId, cardId, 1),
+        incrementQuantityStatement(db, ownerId, cardId, 1, mutationId, now),
+        appliedEventInsert(db, ownerId, cardId, mutationId, 1, 'add', now),
+      );
+    }
+    statements.push(
+      assignmentQuantityAssertion(db, ownerId, version, page.id, at, cardId),
+      assignmentUpdateStatement(db, cardId, page.id, at),
+    );
+  }
+  try {
+    await runVersionBatch(db, ownerId, versionId, version.revision, false, [
+      ...statements,
+      ...revisionStatements(db, version, now),
+    ]);
+  } catch (error) {
+    if (
+      status === 'received' &&
+      slot.ordered_add_copy === 0 &&
+      !(error instanceof BinderDomainError)
+    ) {
+      const budget = await db
+        .prepare(
+          `SELECT COALESCE((SELECT quantity FROM collection_cards WHERE owner_id=?1 AND card_id=?2),0) AS quantity,(SELECT COUNT(*) FROM binder_slots s JOIN binder_pages p ON p.id=s.binder_page_id JOIN binder_versions v ON v.id=p.binder_version_id JOIN binders b ON b.active_version_id=v.id WHERE b.owner_id=?1 AND s.assigned_card_id=?2) AS assigned`,
+        )
+        .bind(ownerId, cardId)
+        .first<{ quantity: number; assigned: number }>();
+      if ((budget?.assigned ?? 0) >= (budget?.quantity ?? 0))
+        domainError('binder_order_copy_unavailable');
+    }
+    if (
+      status === 'received' &&
+      slot.ordered_add_copy === 0 &&
+      error instanceof BinderDomainError &&
+      error.code === 'binder_assignment_quantity_exceeded'
+    )
+      domainError('binder_order_copy_unavailable');
+    if (
+      status === 'received' &&
+      slot.ordered_add_copy === 1 &&
+      (await copyWouldExceedCap(db, ownerId, cardId))
+    )
+      throw new CollectionDomainError('collection_quantity_out_of_bounds');
+    throw error;
+  }
+  return { ...(await mutationResult(db, ownerId, versionId, [at.page])), anchor: at };
 }
 
 export async function setBinderEntryAssignment(
@@ -3481,6 +3641,7 @@ export interface BinderCardMatches {
   setTargets: SlotRefRow[];
   groupTargets: SlotRefRow[];
   placed: SlotRefRow[];
+  ordered: SlotRefRow[];
   nextTarget: SlotRefRow | null;
   endDestination: SlotRefRow | null;
 }
@@ -3493,6 +3654,7 @@ interface BinderMatchSlotRow {
   column_index: number;
   entry_kind: 'exact-card' | 'pokemon' | GroupKind;
   assigned_card_id: string | null;
+  ordered_card_id: string | null;
 }
 
 // A slot's card_id/pokemon_number is only its fixed target, never proof it's
@@ -3540,6 +3702,7 @@ export async function getCardBinderMatches(
       setTargets: [],
       groupTargets: [],
       placed: [],
+      ordered: [],
       nextTarget: null,
       endDestination: null,
     });
@@ -3549,7 +3712,7 @@ export async function getCardBinderMatches(
     .prepare(
       `SELECT binder.id AS binder_id, page.id AS page_id, page.position AS page_position,
         slot.row_index, slot.column_index, ${slotKindSql('slot')} AS entry_kind,
-        slot.assigned_card_id
+        slot.assigned_card_id,slot.ordered_card_id
        FROM binder_slots slot
        JOIN binder_pages page ON page.id = slot.binder_page_id
        JOIN binder_versions version ON version.id = page.binder_version_id
@@ -3591,7 +3754,11 @@ export async function getCardBinderMatches(
       entry.placed.push(ref);
       continue;
     }
-    if (row.assigned_card_id !== null) continue;
+    if (row.ordered_card_id === cardId) {
+      entry.ordered.push(ref);
+      continue;
+    }
+    if (row.assigned_card_id !== null || row.ordered_card_id !== null) continue;
     if (row.entry_kind === 'exact-card') entry.exactTargets.push(ref);
     else if (row.entry_kind === 'pokemon') entry.pokemonTargets.push(ref);
     else if (row.entry_kind === 'set') entry.setTargets.push(ref);
@@ -3868,7 +4035,7 @@ export async function assignOwnedExactTargets(
          slot.column_index, slot.card_id
        FROM binder_slots slot JOIN binder_pages page ON page.id = slot.binder_page_id
        WHERE page.binder_version_id = ?1 AND slot.entry_kind = 'exact-card'
-         AND slot.card_id IS NOT NULL AND slot.assigned_card_id IS NULL
+         AND slot.card_id IS NOT NULL AND slot.assigned_card_id IS NULL AND slot.ordered_card_id IS NULL
        ORDER BY page.position, slot.row_index, slot.column_index`,
     )
     .bind(versionId)

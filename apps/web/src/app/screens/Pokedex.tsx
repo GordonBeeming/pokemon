@@ -1,3 +1,4 @@
+import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
 import {
   formatDexNumber,
   frameTypeFor,
@@ -25,7 +26,7 @@ import { SelectField } from '../ui/SelectField';
 import { Pagination } from './catalogue/Pagination';
 import './pokedex/pokedex.css';
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = GALLERY_PAGE_SIZE;
 const SCROLL_KEY = 'pokedex:scroll-y';
 
 function matches(

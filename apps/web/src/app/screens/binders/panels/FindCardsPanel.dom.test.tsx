@@ -134,47 +134,31 @@ it.each([
   [844, 390],
   [768, 1024],
   [1024, 768],
-])(
-  'marks binder or General wants without placing or adding copies at %ix%i',
-  async (width, height) => {
-    Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
-    Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
-    const { requests, onAssign, onAddAndPlace } = await setup();
-    expect(tile().getAttribute('aria-pressed')).toBe('false');
-    await step(() => tile().click());
-    await flush();
-    expect(tile().getAttribute('aria-pressed')).toBe('true');
-    expect(requests.filter((r) => r.method === 'PUT').at(-1)?.body).toEqual({
-      cardId: 'card',
-      binderId: 'binder',
-      wanted: true,
-    });
-    const select = document.querySelector('select')!;
-    await step(() => {
-      select.value = 'general';
-      select.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    await flush();
-    expect(tile().getAttribute('aria-pressed')).toBe('false');
-    await step(() => tile().click());
-    await flush();
-    expect(requests.filter((r) => r.method === 'PUT').at(-1)?.body).toEqual({
-      cardId: 'card',
-      binderId: null,
-      wanted: true,
-    });
-    await step(() => tile().click());
-    await flush();
-    expect(requests.filter((r) => r.method === 'PUT').at(-1)?.body).toEqual({
-      cardId: 'card',
-      binderId: null,
-      wanted: false,
-    });
-    expect(onAssign).not.toHaveBeenCalled();
-    expect(onAddAndPlace).not.toHaveBeenCalled();
-    expect(requests.every((r) => r.path.startsWith('/api/wanted'))).toBe(true);
-  },
-);
+])('marks this binder’s wants without placing or adding copies at %ix%i', async (width, height) => {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+  const { requests, onAssign, onAddAndPlace } = await setup();
+  expect(tile().getAttribute('aria-pressed')).toBe('false');
+  await step(() => tile().click());
+  await flush();
+  expect(tile().getAttribute('aria-pressed')).toBe('true');
+  expect(requests.filter((r) => r.method === 'PUT').at(-1)?.body).toEqual({
+    cardId: 'card',
+    binderId: 'binder',
+    wanted: true,
+  });
+  expect(document.querySelector('.find-cards-mode select')).toBeNull();
+  await step(() => tile().click());
+  await flush();
+  expect(requests.filter((r) => r.method === 'PUT').at(-1)?.body).toEqual({
+    cardId: 'card',
+    binderId: 'binder',
+    wanted: false,
+  });
+  expect(onAssign).not.toHaveBeenCalled();
+  expect(onAddAndPlace).not.toHaveBeenCalled();
+  expect(requests.every((r) => r.path.startsWith('/api/wanted'))).toBe(true);
+});
 it('keeps the wishlist unmarked and reports a failed save', async () => {
   const { onAssign, onAddAndPlace } = await setup(true);
   await step(() => tile().click());

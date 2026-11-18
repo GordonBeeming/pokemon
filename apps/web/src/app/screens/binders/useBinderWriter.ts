@@ -35,6 +35,8 @@ export interface CapacityNeed {
  * stale for the next time it's shown. */
 export function applyMutation(queryClient: QueryClient, result: BinderMutation): void {
   const versionId = result.version.id;
+  void queryClient.invalidateQueries({ queryKey: ['catalogue'] });
+  void queryClient.invalidateQueries({ queryKey: ['dashboard'] });
   void queryClient.invalidateQueries({ queryKey: ['wanted', 'list'] });
   const written = new Set<number>();
   for (const page of result.pages) {

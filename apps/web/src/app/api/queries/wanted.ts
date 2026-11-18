@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { apiFetch } from '../client';
 export interface WantedFilters {
   scope: string;
-  placement?: 'all' | 'placed' | 'not-placed';
+  placement?: 'all' | 'placed' | 'not-placed' | 'ordered';
   includeUnfilled: boolean;
   q: string;
   sort: 'name' | 'newest' | 'pokedex' | 'set';

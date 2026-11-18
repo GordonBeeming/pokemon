@@ -154,3 +154,26 @@ it('filters placed wants against their own binder and General wants against any 
     .run(second.version.binderId);
   expect((await list({ placement: 'placed' })).total).toBe(0);
 });
+it('uses 48-card pages with no gaps or duplicates', async () => {
+  const { database, list } = await setup();
+  for (let i = 0; i < 52; i++) {
+    const id = `page-card-${String(i).padStart(2, '0')}`;
+    database
+      .prepare(
+        "INSERT INTO catalogue_cards(id,name,language,category,set_id,set_name,number,created_at,updated_at) VALUES(?,?,'en','trainer','base','Base',?,1,1)",
+      )
+      .run(id, id, String(i));
+    database
+      .prepare(
+        "INSERT INTO wanted_cards(owner_id,scope,card_id,binder_id,created_at) VALUES('a','general',?,NULL,1)",
+      )
+      .run(id);
+  }
+  const first = await list();
+  expect(first.entries).toHaveLength(48);
+  expect(first.nextOffset).toBe(48);
+  const last = await list({ offset: '48' });
+  expect(last.entries).toHaveLength(4);
+  expect(last.nextOffset).toBeNull();
+  expect(new Set([...first.entries, ...last.entries].map((e) => e.cardId)).size).toBe(52);
+});

@@ -1,3 +1,4 @@
+import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
 import {
   artistKey,
   TRAINER_CHARACTERS,
@@ -46,7 +47,7 @@ const BLANK_POKEDEX_SEARCH = pokedexSearch.parse({});
 const BLANK_ILLUSTRATORS_SEARCH = illustratorsSearch.parse({});
 const BLANK_TRAINERS_SEARCH = trainersSearch.parse({});
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = GALLERY_PAGE_SIZE;
 
 export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement {
   const navigate = useNavigate({ from: '/catalogue' });

@@ -5,6 +5,7 @@ import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { catalogueCardViewSchema, type WantedEntry } from '@pokedex/shared';
 import type { WantedFilters } from '../api/queries/wanted';
 import { Wanted } from './Wanted';
+import { ToastProvider } from '../ui/Toast';
 import { WantedControl } from './card/WantedControl';
 const mocks = vi.hoisted(() => ({
   mutate: vi.fn<(input: { cardId: string; binderId: string | null; wanted: boolean }) => void>(),
@@ -53,6 +54,27 @@ const entry: WantedEntry = {
   createdAt: 1,
   targetKind: 'exact-card',
 };
+vi.mock('./card/CardInspector', () => ({
+  CardInspector: ({
+    cardId,
+    onClose,
+    onDirtyChange,
+  }: {
+    cardId: string;
+    onClose: () => void;
+    onDirtyChange?: (dirty: boolean) => void;
+  }) => (
+    <div data-testid="wanted-card-inspector">
+      <span>{cardId}</span>
+      <button type="button" onClick={onClose}>
+        Close inspector
+      </button>
+      <button type="button" onClick={() => onDirtyChange?.(true)}>
+        Edit notes
+      </button>
+    </div>
+  ),
+}));
 vi.mock('../api/queries/binders', () => ({
   useBinders: () => ({ data: [{ id: 'binder', name: 'National' }] }),
 }));
@@ -136,10 +158,9 @@ for (const [device, width, height] of [
     expect(remove?.disabled).toBe(false);
     act(() => remove?.click());
     expect(mocks.mutate).toHaveBeenCalledWith({ cardId: 'card', binderId: null, wanted: false });
-    expect(container.querySelector('a[href="/card/card"]')).not.toBeNull();
-    expect(container.textContent).toContain('Base Set · 63 · EN');
-    expect(container.textContent).toContain('1 owned');
-    expect(container.textContent).toContain('1 placed in your binders');
+    expect(container.querySelector('.wanted-details')?.textContent).toBe('GeneralRemove');
+    expect(container.querySelector('.wanted-details h2')).toBeNull();
+    expect(container.querySelector('.wanted-details')?.textContent).not.toContain('owned');
     const placement = container.querySelectorAll('select')[1];
     if (!placement) throw new Error('Missing placement filter');
     act(() => {
@@ -153,6 +174,26 @@ for (const [device, width, height] of [
     expect(frame?.textContent).toContain('BS');
     expect(frame?.querySelector('.card-frame-rarity')).not.toBeNull();
     expect(frame?.querySelector('.card-frame-price')?.textContent).toBe('~A$4');
+    act(() =>
+      root.render(
+        <ToastProvider>
+          <Page />
+        </ToastProvider>,
+      ),
+    );
+    act(() =>
+      container.querySelector<HTMLButtonElement>('.wanted-item button.card-frame')?.click(),
+    );
+    expect(document.querySelector('.side-panel')).not.toBeNull();
+    expect(document.querySelector('[data-testid="wanted-card-inspector"]')?.textContent).toContain(
+      'card',
+    );
+    act(() =>
+      [...document.querySelectorAll<HTMLButtonElement>('button')]
+        .find((b) => b.textContent === 'Close inspector')
+        ?.click(),
+    );
+    expect(document.querySelector('.side-panel')).toBeNull();
   });
 }
 it('marks a specific printing for General or a chosen binder without placing it', () => {

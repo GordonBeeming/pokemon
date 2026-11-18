@@ -69,6 +69,17 @@ const sharedRoutes = [
   },
   {
     method: 'PUT',
+    browser: '/binders/versions/version-1/order',
+    desktop: '/desktop/binders/versions/version-1/order',
+    body: {
+      at: { page: 0, row: 0, column: 0 },
+      cardId: 'card-1',
+      status: 'ordered',
+      expectedRevision: 1,
+    },
+  },
+  {
+    method: 'PUT',
     browser: '/binders/versions/version-1/assignment',
     desktop: '/desktop/binders/versions/version-1/assignment',
     body: { at: { page: 0, row: 0, column: 0 }, cardId: null, expectedRevision: 1 },

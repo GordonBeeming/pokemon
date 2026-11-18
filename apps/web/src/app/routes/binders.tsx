@@ -1,3 +1,5 @@
+import { useQueryClient } from '@tanstack/react-query';
+import { applyMutation } from '../screens/binders/useBinderWriter';
 import { z } from 'zod';
 import { Link } from '@tanstack/react-router';
 import { BinderActivity } from '../screens/binders/BinderActivity';
@@ -68,6 +70,7 @@ export const binderActivityRoute = createRoute({
     z.object({ returnPage: z.number().int().positive().catch(1) }).parse(search),
   component: function BinderActivityPage() {
     const { binderId } = binderActivityRoute.useParams();
+    const queryClient = useQueryClient();
     const { returnPage } = binderActivityRoute.useSearch();
     const navigate = useNavigate();
     const binders = useBinders();
@@ -108,6 +111,7 @@ export const binderActivityRoute = createRoute({
           key={binderId}
           binderId={binderId}
           revision={0}
+          onMutation={(result) => applyMutation(queryClient, result)}
           onOpenCard={(cardId) => void navigate({ to: '/card/$cardId', params: { cardId } })}
         />
       </section>

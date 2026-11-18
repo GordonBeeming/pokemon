@@ -9,6 +9,8 @@ import { Sheet } from '../../ui/Sheet';
 import { isTarget, pocketState } from './model';
 
 export type PocketActionKey =
+  | 'ordered'
+  | 'received'
   | 'view'
   | 'find'
   | 'move'
@@ -33,12 +35,17 @@ export function pocketActionItems({
   editable: boolean;
   hasCard: boolean;
   hasClipboard: boolean;
-  on: Record<PocketActionKey, () => void>;
+  on: Record<Exclude<PocketActionKey, 'ordered' | 'received'>, () => void> &
+    Partial<Record<'ordered' | 'received', () => void>>;
 }): ActionBarItem[] {
   const state = pocketState(slot);
   const target = isTarget(slot);
   const items: ActionBarItem[] = [];
   if (hasCard) items.push({ key: 'view', label: 'View card', icon: 'eye', onSelect: on.view });
+  if (editable && target && slot.orderedCardId && on.received)
+    items.push({ key: 'received', label: 'Mark received', icon: 'plus', onSelect: on.received });
+  if (editable && target && !slot.orderedCardId && on.ordered)
+    items.push({ key: 'ordered', label: 'Mark ordered', icon: 'sync', onSelect: on.ordered });
   if (editable && target)
     items.push({ key: 'find', label: 'Find cards', icon: 'magnifier', onSelect: on.find });
   if (editable && state !== 'empty')

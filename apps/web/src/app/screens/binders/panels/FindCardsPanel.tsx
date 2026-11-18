@@ -87,6 +87,8 @@ export function FindCardsPanel({
   pending,
   error,
   onAssign,
+  onOrder,
+  initialMode = 'place',
   onAddAndPlace,
   onUnassign,
   onPageBreak,
@@ -109,27 +111,35 @@ export function FindCardsPanel({
   pending: boolean;
   error: string | null;
   onAssign: (candidate: BinderCandidate) => void;
+  onOrder?: (card: ResolvedCard) => void;
+  initialMode?: 'place' | 'order';
   onAddAndPlace: (card: ResolvedCard, place: AddAndPlace) => void;
   onUnassign: () => void;
   onPageBreak: (startsNewPage: boolean) => void;
   onClose: () => void;
 }): ReactElement {
-  const [mode, setMode] = useState<'place' | 'wanted'>('place');
-  const [wantedScope, setWantedScope] = useState<'binder' | 'general'>('binder');
+  const [mode, setMode] = useState<'place' | 'order' | 'wanted'>(initialMode);
   const usableSpares = (spares ?? []).filter((spare) => spare.candidate.available > 0);
   const spareIds = new Set(usableSpares.map((spare) => spare.candidate.cardId));
   const addDisabled = !editable || pending || addBlockedReason !== null;
   const tile = (card: ResolvedCard): ReactElement =>
     mode === 'wanted' ? (
-      <WantedTile
-        key={`${card.id}:${wantedScope}`}
-        card={card}
-        palette={palette}
-        binderId={wantedScope === 'binder' ? binderId : null}
-      />
+      <WantedTile key={card.id} card={card} palette={palette} binderId={binderId} />
+    ) : mode === 'order' ? (
+      <button
+        key={card.id}
+        type="button"
+        className="card-picker-item find-cards-item"
+        disabled={addDisabled || !onOrder}
+        onClick={() => onOrder?.(card)}
+      >
+        <CardFrame card={frameCardFrom(card)} state="owned" forceSolid palette={palette} />
+        <span className="card-picker-name">{card.name}</span>
+        <span className="find-cards-action">Mark ordered</span>
+      </button>
     ) : (
       <AddAndPlaceTile
-        key={`${card.id}:${wantedScope}`}
+        key={card.id}
         card={card}
         palette={palette}
         disabled={addDisabled}
@@ -149,27 +159,24 @@ export function FindCardsPanel({
           disabled={pending}
           options={[
             { value: 'place', label: 'Place cards' },
+            { value: 'order', label: 'Order cards' },
             { value: 'wanted', label: 'Wishlist' },
           ]}
         />
-        {mode === 'wanted' ? (
-          <label className="panel-field">
-            <span>Wishlist</span>
-            <select
-              aria-label="Wishlist"
-              value={wantedScope}
-              onChange={(e) => setWantedScope(e.target.value === 'general' ? 'general' : 'binder')}
-            >
-              <option value="binder">This binder</option>
-              <option value="general">General</option>
-            </select>
-          </label>
-        ) : null}
       </div>
+      {mode === 'order' ? (
+        <p className="panel-help">
+          An ordered card covers this target while you wait. It is added to your owned copies when
+          you mark it received.
+        </p>
+      ) : null}
+      {slot.orderedCardId ? (
+        <p className="panel-help">This pocket already has a card on order.</p>
+      ) : null}
       {mode === 'wanted' ? (
         <p className="panel-help">
-          Tap cards to add or remove them from this wishlist. Your collection and this pocket stay
-          unchanged.
+          Tap cards to add or remove them from this binder’s wishlist. Your collection and this
+          pocket stay unchanged.
         </p>
       ) : null}
       {error && mode === 'place' ? (
@@ -230,9 +237,13 @@ export function FindCardsPanel({
 
       <section className="panel-section" aria-labelledby="find-printings-heading">
         <h3 id="find-printings-heading">
-          {mode === 'wanted' ? 'Cards for your wishlist' : 'Add a copy'}
+          {mode === 'wanted'
+            ? 'Cards for your wishlist'
+            : mode === 'order'
+              ? 'Order a card for this pocket'
+              : 'Add a copy'}
         </h3>
-        {mode === 'place' && addBlockedReason ? (
+        {mode !== 'wanted' && addBlockedReason ? (
           <p className="panel-help">{addBlockedReason}</p>
         ) : null}
         {exactCard ? (

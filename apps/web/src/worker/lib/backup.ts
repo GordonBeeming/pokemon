@@ -3,7 +3,7 @@ import { newId, nowSeconds } from './db';
 import { ApplicationError, describeError, logError, logInfo } from './log';
 
 const LEGACY_BACKUP_VERSION = 2 as const;
-const BACKUP_VERSION = 10 as const;
+const BACKUP_VERSION = 11 as const;
 const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 const MAX_BACKUP_CHUNK_BYTES = 1_500_000;
 const MAX_BACKUP_MANIFEST_BYTES = 1_000_000;
@@ -121,10 +121,20 @@ const slotRow = z
     label: z.string().nullable().optional(),
     pokemon_number: z.number().int().min(1).max(1025).nullable().optional(),
     assigned_card_id: z.string().nullable().optional(),
+    ordered_card_id: z.string().nullable().optional(),
+    ordered_add_copy: z.number().int().min(0).max(1).optional(),
+    ordered_at: z.number().int().nullable().optional(),
     starts_new_page: z.number().int().min(0).max(1).optional(),
     is_manual_gap: z.number().int().min(0).max(1).nullable().optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((slot, context) => {
+    if (slot.ordered_card_id && (slot.assigned_card_id || slot.ordered_at == null))
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'An order needs its timestamp and cannot also be physically assigned',
+      });
+  });
 const bookmarkRow = z
   .object({
     id: z.string().min(1),
@@ -172,7 +182,7 @@ const activityRow = z
     binder_id: z.string(),
     version_id: z.string(),
     version_number: z.number().int().positive(),
-    kind: z.enum(['added', 'removed']),
+    kind: z.enum(['added', 'removed', 'ordered', 'received', 'cancelled']),
     card_id: z.string(),
     page: z.number().int().nonnegative(),
     row_index: z.number().int().nonnegative(),
@@ -257,6 +267,7 @@ const backupManifestSchema = z
       z.literal(7),
       z.literal(8),
       z.literal(9),
+      z.literal(10),
       z.literal(BACKUP_VERSION),
     ]),
     ownerId: z.string().min(1),
@@ -334,7 +345,7 @@ const backupQueries: readonly BackupQuery[] = [
          WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
        OR EXISTS (SELECT 1 FROM binder_slots s JOIN binder_pages p ON p.id = s.binder_page_id
          JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
-         WHERE b.owner_id = ?1 AND (s.card_id = c.id OR s.assigned_card_id = c.id)))
+         WHERE b.owner_id = ?1 AND (s.card_id = c.id OR s.assigned_card_id = c.id OR s.ordered_card_id = c.id)))
      ORDER BY c.rowid LIMIT ?3`,
   },
   {
@@ -351,7 +362,7 @@ const backupQueries: readonly BackupQuery[] = [
            WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
          OR EXISTS (SELECT 1 FROM binder_slots bs JOIN binder_pages p ON p.id = bs.binder_page_id
            JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
-           WHERE b.owner_id = ?1 AND (bs.card_id = c.id OR bs.assigned_card_id = c.id))))
+           WHERE b.owner_id = ?1 AND (bs.card_id = c.id OR bs.assigned_card_id = c.id OR bs.ordered_card_id = c.id))))
      ORDER BY s.rowid LIMIT ?3`,
   },
   {
@@ -391,7 +402,7 @@ const backupQueries: readonly BackupQuery[] = [
   {
     kind: 'slots',
     sql: `SELECT s.rowid AS backup_cursor, s.binder_page_id, s.row_index, s.column_index, s.card_id,
-      s.entry_kind, s.label, s.pokemon_number, s.assigned_card_id, s.starts_new_page, s.is_manual_gap,
+      s.entry_kind, s.label, s.pokemon_number, s.assigned_card_id, s.ordered_card_id,s.ordered_add_copy,s.ordered_at, s.starts_new_page, s.is_manual_gap,
       s.set_id, s.set_language, s.group_kind, s.group_key, s.energy_group
      FROM binder_slots s JOIN binder_pages p ON p.id = s.binder_page_id
      JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
@@ -431,7 +442,7 @@ const backupQueries: readonly BackupQuery[] = [
          WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
        OR EXISTS (SELECT 1 FROM binder_slots s JOIN binder_pages p ON p.id = s.binder_page_id
          JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
-         WHERE b.owner_id = ?1 AND (s.card_id = c.id OR s.assigned_card_id = c.id)))
+         WHERE b.owner_id = ?1 AND (s.card_id = c.id OR s.assigned_card_id = c.id OR s.ordered_card_id = c.id)))
      ORDER BY m.rowid LIMIT ?3`,
   },
   {
@@ -1012,7 +1023,7 @@ const foreignCardReferenceSql = `SELECT 1 FROM ${jsonRows}
       AND card.id IN (
         CASE c.kind WHEN 'catalogue' THEN json_extract(j.value,'$.id')
           ELSE json_extract(j.value,'$.card_id') END,
-        json_extract(j.value,'$.assigned_card_id')
+        json_extract(j.value,'$.assigned_card_id'),json_extract(j.value,'$.ordered_card_id')
       )
   )`;
 
@@ -1200,8 +1211,8 @@ export async function restoreBackup(
           .bind(restoreRunId, ownerId),
         db
           .prepare(
-            `INSERT INTO binder_slots (binder_page_id,row_index,column_index,card_id,entry_kind,label,pokemon_number,assigned_card_id,starts_new_page,is_manual_gap,set_id,set_language,group_kind,group_key,energy_group)
-           SELECT json_extract(j.value,'$.binder_page_id'),json_extract(j.value,'$.row_index'),json_extract(j.value,'$.column_index'),json_extract(j.value,'$.card_id'),COALESCE(json_extract(j.value,'$.entry_kind'),CASE WHEN json_extract(j.value,'$.card_id') IS NULL THEN 'empty' ELSE 'exact-card' END),json_extract(j.value,'$.label'),json_extract(j.value,'$.pokemon_number'),json_extract(j.value,'$.assigned_card_id'),COALESCE(json_extract(j.value,'$.starts_new_page'),0),json_extract(j.value,'$.is_manual_gap'),json_extract(j.value,'$.set_id'),json_extract(j.value,'$.set_language'),json_extract(j.value,'$.group_kind'),json_extract(j.value,'$.group_key'),json_extract(j.value,'$.energy_group') FROM ${jsonRows} AND c.kind='slots'`,
+            `INSERT INTO binder_slots (binder_page_id,row_index,column_index,card_id,entry_kind,label,pokemon_number,assigned_card_id,ordered_card_id,ordered_add_copy,ordered_at,starts_new_page,is_manual_gap,set_id,set_language,group_kind,group_key,energy_group)
+           SELECT json_extract(j.value,'$.binder_page_id'),json_extract(j.value,'$.row_index'),json_extract(j.value,'$.column_index'),json_extract(j.value,'$.card_id'),COALESCE(json_extract(j.value,'$.entry_kind'),CASE WHEN json_extract(j.value,'$.card_id') IS NULL THEN 'empty' ELSE 'exact-card' END),json_extract(j.value,'$.label'),json_extract(j.value,'$.pokemon_number'),json_extract(j.value,'$.assigned_card_id'),json_extract(j.value,'$.ordered_card_id'),COALESCE(json_extract(j.value,'$.ordered_add_copy'),1),json_extract(j.value,'$.ordered_at'),COALESCE(json_extract(j.value,'$.starts_new_page'),0),json_extract(j.value,'$.is_manual_gap'),json_extract(j.value,'$.set_id'),json_extract(j.value,'$.set_language'),json_extract(j.value,'$.group_kind'),json_extract(j.value,'$.group_key'),json_extract(j.value,'$.energy_group') FROM ${jsonRows} AND c.kind='slots'`,
           )
           .bind(restoreRunId, ownerId),
         db

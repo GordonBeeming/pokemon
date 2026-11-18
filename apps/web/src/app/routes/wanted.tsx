@@ -4,7 +4,7 @@ import { authedRoute } from './authed-layout';
 import { Wanted } from '../screens/Wanted';
 export const wantedSearchSchema = z.object({
   scope: z.string().min(1).max(128).catch('all'),
-  placement: z.enum(['all', 'placed', 'not-placed']).catch('all'),
+  placement: z.enum(['all', 'placed', 'not-placed', 'ordered']).catch('all'),
   includeUnfilled: z.boolean().catch(false),
   q: z.string().max(200).catch(''),
   sort: z.enum(['name', 'newest', 'pokedex', 'set']).catch('name'),

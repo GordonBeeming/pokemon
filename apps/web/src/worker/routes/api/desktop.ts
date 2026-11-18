@@ -1,3 +1,4 @@
+import { binderOrderRequestSchema } from '@pokedex/shared';
 import { listTrainerDex } from '../../lib/trainer-dex';
 import { wantedMutationSchema, wantedQuerySchema } from '@pokedex/shared';
 import { listWanted, wantedScopes, setWanted } from '../../lib/wanted';
@@ -456,6 +457,26 @@ desktopApiRoutes.post('/desktop/binders/versions/:id/entries/move', async (c) =>
         parsed.data.from,
         parsed.data.offset,
         parsed.data.expectedRevision,
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+desktopApiRoutes.put('/desktop/binders/versions/:id/order', async (c) => {
+  try {
+    const parsed = binderOrderRequestSchema.safeParse(await parsedJson(c.req.raw));
+    if (!parsed.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    const d = parsed.data;
+    const operations = ownerOperations(c.env, await desktopOwner(c, 'binders:write'));
+    return c.json({
+      ok: true,
+      binder: await operations.setBinderOrderStatus(
+        c.req.param('id'),
+        d.at,
+        d.cardId,
+        d.status,
+        d.expectedRevision,
       ),
     });
   } catch (error) {

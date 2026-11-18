@@ -1,15 +1,14 @@
-import { useEffect, type ReactElement } from 'react';
-import { Link, useNavigate } from '@tanstack/react-router';
+import { GALLERY_PAGE_SIZE, type WantedEntry } from '@pokedex/shared';
+import { useEffect, useState, type ReactElement } from 'react';
+import { Link } from '@tanstack/react-router';
 import { anyFrameCard, frameCardFrom } from './binders/model';
 import { catalogueSearch } from '../routes/search-params';
 import { useBinders } from '../api/queries/binders';
-import {
-  useWantedList,
-  useSetWanted,
-  wantedPrinting,
-  type WantedFilters,
-} from '../api/queries/wanted';
+import { useWantedList, useSetWanted, type WantedFilters } from '../api/queries/wanted';
 import { CardFrame } from '../cards/CardFrame';
+import { SidePanel } from '../ui/SidePanel';
+import { useToast } from '../ui/Toast';
+import { CardInspector } from './card/CardInspector';
 import './wanted.css';
 export function Wanted({
   search,
@@ -19,7 +18,7 @@ export function Wanted({
   onSearch: (search: WantedFilters) => void;
 }): ReactElement {
   const binders = useBinders();
-  const navigate = useNavigate();
+  const [inspected, setInspected] = useState<WantedEntry | null>(null);
   const scope =
     search.scope === 'all' ||
     search.scope === 'general' ||
@@ -86,15 +85,18 @@ export function Wanted({
             onChange={(e) =>
               change({
                 placement:
-                  e.target.value === 'placed'
-                    ? 'placed'
-                    : e.target.value === 'not-placed'
-                      ? 'not-placed'
-                      : 'all',
+                  e.target.value === 'ordered'
+                    ? 'ordered'
+                    : e.target.value === 'placed'
+                      ? 'placed'
+                      : e.target.value === 'not-placed'
+                        ? 'not-placed'
+                        : 'all',
               })
             }
           >
             <option value="all">All wanted cards</option>
+            <option value="ordered">On order</option>
             <option value="placed">Already placed in binder</option>
             <option value="not-placed">Not placed in binder</option>
           </select>
@@ -180,17 +182,15 @@ export function Wanted({
                 <li key={entry.key} className="wanted-item">
                   <div className="wanted-art">
                     <CardFrame
-                      state={entry.ownedQuantity > 0 ? 'owned' : 'unowned'}
-                      variant={entry.cardId ? 'card' : 'any'}
-                      onView={
-                        entry.cardId
-                          ? () =>
-                              void navigate({
-                                to: '/card/$cardId',
-                                params: { cardId: entry.cardId! },
-                              })
-                          : undefined
+                      state={
+                        entry.orderedCount
+                          ? 'ordered'
+                          : entry.ownedQuantity > 0
+                            ? 'owned'
+                            : 'unowned'
                       }
+                      variant={entry.cardId ? 'card' : 'any'}
+                      onView={entry.cardId ? () => setInspected(entry) : undefined}
                       card={
                         entry.card
                           ? frameCardFrom(entry.card)
@@ -210,66 +210,35 @@ export function Wanted({
                     />
                   </div>
                   <div className="wanted-details">
-                    <h2>{entry.name}</h2>
-                    {entry.cardId ? (
-                      <p>{wantedPrinting(entry)}</p>
+                    {entry.binderId ? (
+                      <Link
+                        className="wanted-scope"
+                        to="/binders/$binderId"
+                        params={{ binderId: entry.binderId }}
+                        search={{ page: 1, q: entry.targetKind === 'pokemon' ? entry.name : '' }}
+                      >
+                        {entry.binderName ?? 'Binder'}
+                      </Link>
                     ) : (
-                      <p>
-                        Any{' '}
-                        {entry.targetKind === 'pokemon'
-                          ? 'printing'
-                          : entry.targetKind === 'set'
-                            ? 'card from this set'
-                            : `matching ${entry.targetKind} card`}
-                      </p>
+                      <span className="wanted-scope">General</span>
                     )}
-                    <p className="wanted-scope">
-                      {entry.binderName ?? 'General'} ·{' '}
-                      {entry.manual ? 'Wanted' : 'Unfilled target'}
-                    </p>
-                    {entry.unfilled > 0 ? (
-                      <p>
-                        {entry.unfilled} unfilled {entry.unfilled === 1 ? 'pocket' : 'pockets'}
-                      </p>
+                    {entry.manual && entry.cardId ? (
+                      <button
+                        type="button"
+                        className="wanted-remove"
+                        disabled={mutation.isPending}
+                        onClick={() =>
+                          mutation.mutate({
+                            cardId: entry.cardId ?? '',
+                            binderId: entry.binderId,
+                            wanted: false,
+                          })
+                        }
+                        aria-label={`Remove ${entry.name} from ${entry.binderName ?? 'General'} wanted list`}
+                      >
+                        Remove
+                      </button>
                     ) : null}
-                    {entry.cardId ? <p>{entry.ownedQuantity} owned</p> : null}
-                    {entry.placedCount > 0 ? (
-                      <p className="wanted-scope">
-                        {entry.placedCount} placed{' '}
-                        {entry.binderId ? 'in this binder' : 'in your binders'}
-                      </p>
-                    ) : null}
-                    <div className="wanted-item-actions">
-                      {entry.cardId ? (
-                        <Link to="/card/$cardId" params={{ cardId: entry.cardId }}>
-                          Card details
-                        </Link>
-                      ) : entry.binderId ? (
-                        <Link
-                          to="/binders/$binderId"
-                          params={{ binderId: entry.binderId }}
-                          search={{ page: 1, q: entry.targetKind === 'pokemon' ? entry.name : '' }}
-                        >
-                          Open binder
-                        </Link>
-                      ) : null}
-                      {entry.manual && entry.cardId ? (
-                        <button
-                          type="button"
-                          disabled={mutation.isPending}
-                          onClick={() =>
-                            mutation.mutate({
-                              cardId: entry.cardId ?? '',
-                              binderId: entry.binderId,
-                              wanted: false,
-                            })
-                          }
-                          aria-label={`Remove ${entry.name} from ${entry.binderName ?? 'General'} wanted list`}
-                        >
-                          Remove want
-                        </button>
-                      ) : null}
-                    </div>
                   </div>
                 </li>
               ))}
@@ -279,11 +248,11 @@ export function Wanted({
             <button
               type="button"
               disabled={search.offset === 0}
-              onClick={() => change({ offset: Math.max(0, search.offset - 100) })}
+              onClick={() => change({ offset: Math.max(0, search.offset - GALLERY_PAGE_SIZE) })}
             >
               Previous
             </button>
-            <span>Page {Math.floor(search.offset / 100) + 1}</span>
+            <span>Page {Math.floor(search.offset / GALLERY_PAGE_SIZE) + 1}</span>
             <button
               type="button"
               disabled={list.data.nextOffset === null}
@@ -296,6 +265,47 @@ export function Wanted({
           </nav>
         </>
       )}
+      {inspected?.cardId ? (
+        <WantedInspector
+          key={inspected.key}
+          cardId={inspected.cardId}
+          binderId={inspected.binderId}
+          onClose={() => setInspected(null)}
+        />
+      ) : null}
     </section>
+  );
+}
+
+function WantedInspector({
+  cardId,
+  binderId,
+  onClose,
+}: {
+  cardId: string;
+  binderId: string | null;
+  onClose: () => void;
+}): ReactElement {
+  const [dirty, setDirty] = useState(false);
+  const toast = useToast();
+  function close() {
+    if (dirty) {
+      toast(
+        'error',
+        'Notes are still saving. Wait a moment, or fix the save error, then try again.',
+      );
+      return;
+    }
+    onClose();
+  }
+  return (
+    <SidePanel open onClose={close} title="Card">
+      <CardInspector
+        cardId={cardId}
+        onClose={close}
+        onDirtyChange={setDirty}
+        context={{ from: 'wanted', ...(binderId ? { binderId } : {}) }}
+      />
+    </SidePanel>
   );
 }

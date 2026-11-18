@@ -1,4 +1,6 @@
 import { z } from 'zod';
+
+export const GALLERY_PAGE_SIZE = 48;
 export * from './binder-search';
 export * from './binder-activity';
 export * from './wanted';
@@ -235,6 +237,7 @@ export const binderSlotSchema = z
     groupKey: z.string().trim().min(1).max(200).nullable().optional(),
     groupName: z.string().trim().min(1).max(200).nullable().optional(),
     assignedCardId: cardIdSchema.nullable().optional(),
+    orderedCardId: cardIdSchema.nullable().optional(),
     startsNewPage: z.boolean().optional(),
   })
   .strict();
@@ -287,6 +290,7 @@ export const dashboardBinderProgressSchema = z
     name: z.string().trim().min(1).max(120),
     targets: z.number().int().nonnegative(),
     placed: z.number().int().nonnegative(),
+    ordered: z.number().int().nonnegative().optional(),
     percent: z.number().int().min(0).max(100),
   })
   .strict();
@@ -649,6 +653,7 @@ export const binderPlannerSummarySchema = z
     revision: z.number().int().positive(),
     targets: z.number().int().nonnegative(),
     placed: z.number().int().nonnegative(),
+    ordered: z.number().int().nonnegative().optional(),
     reservedSleeves: z.number().int().nonnegative(),
     reservedPages: z.number().int().nonnegative(),
     generatedPadding: z.number().int().nonnegative(),
@@ -789,6 +794,7 @@ export const binderCardMatchesSchema = z
     setTargets: z.array(slotRefSchema).default([]),
     groupTargets: z.array(slotRefSchema).default([]),
     placed: z.array(slotRefSchema),
+    ordered: z.array(slotRefSchema).optional(),
     nextTarget: slotRefSchema.nullable(),
     endDestination: slotRefSchema.nullable(),
   })
@@ -935,3 +941,12 @@ export const apiErrorDetailsSchema = z.union([
   collectionRemoveMiscountCandidatesErrorSchema,
 ]);
 export type ApiErrorDetails = z.infer<typeof apiErrorDetailsSchema>;
+
+export const binderOrderRequestSchema = z
+  .object({
+    at: binderSlotLocationSchema,
+    cardId: cardIdSchema,
+    status: z.enum(['ordered', 'received', 'cancelled']),
+    expectedRevision: z.number().int().nonnegative(),
+  })
+  .strict();

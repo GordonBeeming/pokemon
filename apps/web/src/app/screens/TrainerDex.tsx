@@ -1,3 +1,4 @@
+import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
 import { TRAINER_REGIONS } from '@pokedex/shared';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
@@ -8,7 +9,7 @@ import type { TrainerDexSearch } from '../routes/trainer-dex';
 import { SelectField } from '../ui/SelectField';
 import { Pagination } from './catalogue/Pagination';
 import './trainer-dex.css';
-const PAGE_SIZE = 50;
+const PAGE_SIZE = GALLERY_PAGE_SIZE;
 export function TrainerDex({
   search,
   onSearch,

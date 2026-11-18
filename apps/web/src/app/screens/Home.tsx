@@ -181,7 +181,8 @@ export function Home({
                     <span className="binder-progress-row-head">
                       <span>{binder.name}</span>
                       <span>
-                        {binder.placed} of {binder.targets} placed
+                        {binder.placed + (binder.ordered ?? 0)} of {binder.targets} covered
+                        {binder.ordered ? ` · ${binder.ordered} ordered` : ''}
                       </span>
                     </span>
                     <span className="progress-track">

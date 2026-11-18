@@ -227,7 +227,7 @@ describe('Home', () => {
     await renderHome({ onOpenCard: vi.fn(), onCloseCard: vi.fn() });
     await flushUntil(() => container.textContent?.includes('Kanto') === true);
 
-    expect(container.textContent).toContain('2 of 4 placed');
+    expect(container.textContent).toContain('2 of 4 covered');
     expect(container.textContent).toContain('#0025 Pikachu');
     expect(container.querySelector('.progress-fill')?.getAttribute('style')).toContain('50%');
   });

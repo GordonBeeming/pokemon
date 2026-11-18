@@ -164,3 +164,37 @@
 .wanted-filters select {
   height: 2.75rem;
 }
+.wanted-details {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  flex: none;
+}
+.wanted-scope {
+  font-size: 0.8125rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+.wanted-screen .wanted-remove {
+  min-height: 2.75rem;
+  flex: none;
+  padding: 0 0.25rem;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 400;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+.wanted-screen .wanted-remove:hover {
+  color: var(--danger);
+}
+.wanted-details > a.wanted-scope {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}

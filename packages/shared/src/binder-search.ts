@@ -24,6 +24,7 @@ export const binderSearchMatchSchema = z.object({
   // What the results grid draws: the copy placed here, the exact card asked for, or
   // the Pokémon whose printings an unfilled "any printing" pocket can take.
   assignedCardId: z.string().min(1).nullable().default(null),
+  orderedCardId: z.string().min(1).nullable().optional(),
   targetCardId: z.string().min(1).nullable().default(null),
   pokemonNumber: z.number().int().positive().nullable().default(null),
 });

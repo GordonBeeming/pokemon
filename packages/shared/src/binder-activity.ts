@@ -4,7 +4,7 @@ import { catalogueCardViewSchema } from './index';
 export const binderActivityQuerySchema = z.object({
   batch: z.string().max(128).optional(),
   q: z.string().trim().max(200).default(''),
-  kind: z.enum(['all', 'added', 'removed']).default('all'),
+  kind: z.enum(['all', 'added', 'removed', 'ordered', 'received', 'cancelled']).default('all'),
   sort: z.enum(['newest', 'oldest', 'binder', 'pokedex']).default('newest'),
   sections: z
     .string()
@@ -33,10 +33,11 @@ export const binderActivityResultSchema = z.object({
   events: z.array(
     z.object({
       id: z.number().int(),
-      kind: z.enum(['added', 'removed']),
+      kind: z.enum(['added', 'removed', 'ordered', 'received', 'cancelled']),
       createdAt: z.number().int(),
       versionId: z.string(),
       versionNumber: z.number().int(),
+      versionRevision: z.number().int().nullable().optional(),
       page: z.number().int(),
       row: z.number().int(),
       column: z.number().int(),

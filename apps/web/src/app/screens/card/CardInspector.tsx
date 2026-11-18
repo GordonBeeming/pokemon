@@ -38,7 +38,8 @@ export type CardInspectorContext =
    * "why did I open this" is immediately visible. */
   | { from?: 'binder'; binderId: string; slotId: string }
   /** The Home shelf. */
-  | { from: 'home' };
+  | { from: 'home' }
+  | { from: 'wanted'; binderId?: string };
 
 export interface CardInspectorProps {
   cardId: string;

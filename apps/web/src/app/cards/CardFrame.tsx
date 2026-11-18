@@ -44,7 +44,7 @@ export function formatFramePrice(amountAud: number): string {
   }).format(amountAud)}`;
 }
 
-export type CardFrameState = 'owned' | 'placed' | 'unowned';
+export type CardFrameState = 'owned' | 'placed' | 'unowned' | 'ordered';
 
 export interface CardFrameProps {
   card: CardFrameCard;
@@ -118,7 +118,7 @@ export function CardFrame({
     variant === 'any' ? 'any printing' : codeNum || null,
     card.pokedexNumber ? `Pokédex ${formatDexNumber(card.pokedexNumber)}` : null,
     rarityName,
-    state === 'unowned' ? 'not owned' : 'owned',
+    state === 'ordered' ? 'ordered, awaiting arrival' : state === 'unowned' ? 'not owned' : 'owned',
   ]
     .filter(Boolean)
     .join(', ');
@@ -234,6 +234,7 @@ export function CardFrame({
     return (
       <div className={classes} style={style} aria-label={ariaLabel} role="img">
         {content}
+        {state === 'ordered' ? <span className="card-frame-order-badge">Ordered</span> : null}
       </div>
     );
 
@@ -247,6 +248,7 @@ export function CardFrame({
       aria-pressed={selected}
     >
       {content}
+      {state === 'ordered' ? <span className="card-frame-order-badge">Ordered</span> : null}
     </button>
   );
 }

@@ -111,12 +111,12 @@ describe('binder space search', () => {
         1200,
       );
       const first = await searchBinderSpaces(db, 'owner', version.id, { q: 'empty' });
-      const second = await searchBinderSpaces(db, 'owner', version.id, { q: 'empty', offset: 50 });
-      expect(first.matches).toHaveLength(50);
-      expect(first.nextOffset).toBe(50);
-      expect(second.matches[0]).toMatchObject({ page: 5, row: 1, column: 2 });
-      const last = await searchBinderSpaces(db, 'owner', version.id, { q: 'empty', offset: 1150 });
-      expect(last.matches).toHaveLength(50);
+      const second = await searchBinderSpaces(db, 'owner', version.id, { q: 'empty', offset: 48 });
+      expect(first.matches).toHaveLength(48);
+      expect(first.nextOffset).toBe(48);
+      expect(second.matches[0]).toMatchObject({ page: 5, row: 1, column: 0 });
+      const last = await searchBinderSpaces(db, 'owner', version.id, { q: 'empty', offset: 1152 });
+      expect(last.matches).toHaveLength(48);
       expect(last.nextOffset).toBeNull();
     } finally {
       database.close();

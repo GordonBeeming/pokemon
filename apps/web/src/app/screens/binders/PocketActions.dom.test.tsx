@@ -26,7 +26,7 @@ afterEach(async () => {
   container.remove();
 });
 
-const handlers = (): Record<PocketActionKey, () => void> => ({
+const handlers = (): Record<Exclude<PocketActionKey, 'ordered' | 'received'>, () => void> => ({
   view: vi.fn(),
   find: vi.fn(),
   move: vi.fn(),
@@ -202,4 +202,26 @@ describe('PocketActions', () => {
     await step(() => move?.click());
     expect(on.move).toHaveBeenCalledTimes(1);
   });
+});
+
+it('offers received for an ordered target and ordered for a received target', () => {
+  const on = { ...handlers(), ordered: vi.fn(), received: vi.fn() };
+  const ordered = pocketActionItems({
+    slot: slot({ entryKind: 'pokemon', pokemonNumber: 7, orderedCardId: 'card' }),
+    editable: true,
+    hasCard: true,
+    hasClipboard: false,
+    on,
+  });
+  expect(ordered.some((a) => a.key === 'received')).toBe(true);
+  expect(ordered.some((a) => a.key === 'ordered')).toBe(false);
+  const received = pocketActionItems({
+    slot: slot({ entryKind: 'pokemon', pokemonNumber: 7, assignedCardId: 'card' }),
+    editable: true,
+    hasCard: true,
+    hasClipboard: false,
+    on,
+  });
+  expect(received.some((a) => a.key === 'ordered')).toBe(true);
+  expect(received.some((a) => a.key === 'received')).toBe(false);
 });

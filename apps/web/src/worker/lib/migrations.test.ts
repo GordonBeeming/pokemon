@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -791,4 +791,21 @@ describe('migration 026 binder page section', () => {
       database.exec("UPDATE binders SET page_section = 'sleeve' WHERE id = 'binder-1'"),
     ).toThrow(/CHECK constraint/u);
   });
+});
+
+it('preserves deleted activity IDs across the order migration so checkpoints cannot hide new changes', () => {
+  const db = databaseAtMigrationEighteen();
+  for (const name of readdirSync(migrationsDirectory)
+    .filter((name) => Number(name.slice(0, 3)) > 18 && Number(name.slice(0, 3)) <= 32)
+    .sort())
+    db.exec(migration(name));
+  db.exec(`INSERT INTO binders(id,owner_id,name,created_at,updated_at) VALUES('order-migration','owner-a','Orders',1,1);
+ INSERT INTO binder_activity(id,binder_id,version_id,version_number,kind,card_id,page,row_index,column_index,created_at) VALUES(100,'order-migration','v',1,'added','card',0,0,0,1);
+ INSERT INTO binder_checkpoints(id,binder_id,after_id,created_at) VALUES('cp','order-migration',100,1);
+ DELETE FROM binder_activity;`);
+  db.exec(migration('033_binder_orders.sql'));
+  db.exec(
+    `INSERT INTO binder_activity(binder_id,version_id,version_number,kind,card_id,page,row_index,column_index,created_at) VALUES('order-migration','v',1,'ordered','card',0,0,0,2)`,
+  );
+  expect(db.prepare('SELECT id FROM binder_activity').get()?.id).toBe(101);
 });

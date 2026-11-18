@@ -71,10 +71,16 @@ function PocketContent({
   showFrame,
 }: Pick<PocketProps, 'slot' | 'cards' | 'palette' | 'showFrame'>): ReactElement {
   const state = pocketState(slot);
-  const placed = slot.assignedCardId ? cards.get(slot.assignedCardId) : undefined;
+  const filledId = slot.assignedCardId ?? slot.orderedCardId;
+  const placed = filledId ? cards.get(filledId) : undefined;
   if (placed)
     return (
-      <CardFrame card={frameCardFrom(placed)} state="placed" frame={showFrame} palette={palette} />
+      <CardFrame
+        card={frameCardFrom(placed)}
+        state={slot.orderedCardId ? 'ordered' : 'placed'}
+        frame={showFrame}
+        palette={palette}
+      />
     );
   if (slot.entryKind === 'exact-card' && slot.cardId) {
     const target = cards.get(slot.cardId);

@@ -9,7 +9,7 @@ export const wantedMutationSchema = z
   .strict();
 export const wantedQuerySchema = z.object({
   scope: z.string().min(1).max(128).default('all'),
-  placement: z.enum(['all', 'placed', 'not-placed']).default('all'),
+  placement: z.enum(['all', 'placed', 'not-placed', 'ordered']).default('all'),
   includeUnfilled: z
     .enum(['true', 'false'])
     .default('false')
@@ -42,6 +42,7 @@ export const wantedEntrySchema = z.object({
   unfilled: z.number().int(),
   ownedQuantity: z.number().int(),
   placedCount: z.number().int().nonnegative().default(0),
+  orderedCount: z.number().int().nonnegative().optional(),
   createdAt: z.number().int(),
   targetKind: z.string(),
 });

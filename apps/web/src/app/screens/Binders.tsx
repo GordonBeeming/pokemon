@@ -247,7 +247,7 @@ export function Binders({
               binder.latestVersionId !== null && binder.latestVersionId !== binder.activeVersionId;
             const fill =
               summary && summary.targets > 0
-                ? Math.round((summary.placed / summary.targets) * 100)
+                ? Math.round(((summary.placed + (summary.ordered ?? 0)) / summary.targets) * 100)
                 : 0;
             return (
               <li key={binder.id}>
@@ -268,13 +268,13 @@ export function Binders({
                         pages
                       </span>
                       <span className="binder-tile-meta">
-                        {summary.placed.toLocaleString('en-AU')} of{' '}
-                        {summary.targets.toLocaleString('en-AU')} targets placed
+                        {(summary.placed + (summary.ordered ?? 0)).toLocaleString('en-AU')} of{' '}
+                        {summary.targets.toLocaleString('en-AU')} targets covered
                       </span>
                       <span
                         className="binder-tile-bar"
                         role="img"
-                        aria-label={`${fill}% of targets placed`}
+                        aria-label={`${fill}% of targets covered`}
                       >
                         <span style={{ width: `${fill}%` }} />
                       </span>

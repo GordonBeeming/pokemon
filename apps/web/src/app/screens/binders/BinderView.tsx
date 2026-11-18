@@ -80,6 +80,7 @@ import {
   PageBookmarkPanel,
   PageReservePanel,
   RemovePanel,
+  MarkOrderedPanel,
   ReserveSleevePanel,
 } from './panels/PocketPanels';
 import { PocketActions, pocketActionItems } from './PocketActions';
@@ -99,6 +100,8 @@ export interface BinderViewProps {
 type PanelKind =
   | 'view'
   | 'find'
+  | 'order'
+  | 'order-status'
   | 'change'
   | 'insert'
   | 'paste'
@@ -796,6 +799,7 @@ export function BinderView({
   const layoutLabel = version ? `${version.layout.rows} × ${version.layout.columns}` : '';
   const selectedCardId =
     selectedSlot?.assignedCardId ??
+    selectedSlot?.orderedCardId ??
     (selectedSlot?.entryKind === 'exact-card' ? selectedSlot.cardId : null);
   const selectedCard = selectedCardId ? cards.get(selectedCardId) : undefined;
   const selectedBookmark =
@@ -826,6 +830,33 @@ export function BinderView({
           hasCard: selectedCardId !== null && selectedCardId !== undefined,
           hasClipboard: clipboard !== null,
           on: {
+            ordered:
+              version?.status === 'active'
+                ? () => {
+                    if (selectedSlot.assignedCardId) {
+                      setPanel('order-status');
+                      return;
+                    }
+                    const cardId =
+                      selectedSlot.assignedCardId ??
+                      (selectedSlot.entryKind === 'exact-card' ? selectedSlot.cardId : null);
+                    if (cardId)
+                      void run('Card marked ordered.', (revision) =>
+                        binderApi.orderStatus(versionId, selected, cardId, 'ordered', revision),
+                      );
+                    else setPanel('order');
+                  }
+                : undefined,
+            received:
+              version?.status === 'active'
+                ? () => {
+                    const cardId = selectedSlot.orderedCardId;
+                    if (cardId)
+                      void run('Card received and placed.', (revision) =>
+                        binderApi.orderStatus(versionId, selected, cardId, 'received', revision),
+                      );
+                  }
+                : undefined,
             view: () => setPanel('view'),
             find: () => setPanel('find'),
             move: () => pickUp(selected, selectedSlot),
@@ -875,7 +906,7 @@ export function BinderView({
 
   const metaText = `${layoutLabel} pages · ${capacity.toLocaleString('en-AU')} pockets${
     summary.data
-      ? ` · ${summary.data.targets.toLocaleString('en-AU')} targets · ${summary.data.placed.toLocaleString('en-AU')} placed`
+      ? ` · ${summary.data.targets.toLocaleString('en-AU')} targets · ${summary.data.placed.toLocaleString('en-AU')} received${summary.data.ordered ? ` · ${summary.data.ordered} ordered` : ''}`
       : ''
   }`;
   const meta = <p className="binder-meta">{metaText}</p>;
@@ -1328,7 +1359,7 @@ export function BinderView({
           phone={phone}
           summary={{
             imageUrl: selectedCard?.imageLowUrl ?? null,
-            faded: !selectedSlot.assignedCardId,
+            faded: !selectedSlot.assignedCardId && !selectedSlot.orderedCardId,
             title: selectedTitle,
             where,
             status: placedStatus(selectedSlot, cards),
@@ -1336,7 +1367,11 @@ export function BinderView({
               ? {
                   card: frameCardFrom(selectedCard),
                   variant: 'card',
-                  state: selectedSlot.assignedCardId ? 'placed' : 'unowned',
+                  state: selectedSlot.orderedCardId
+                    ? 'ordered'
+                    : selectedSlot.assignedCardId
+                      ? 'placed'
+                      : 'unowned',
                 }
               : selectedSlot.entryKind === 'pokemon' && selectedSlot.pokemonNumber
                 ? {
@@ -1371,8 +1406,15 @@ export function BinderView({
           />
         </SidePanel>
       ) : null}
-      {panel === 'find' && selectedSlot && selected && versionId ? (
+      {(panel === 'find' || panel === 'order') && selectedSlot && selected && versionId ? (
         <FindCardsPanelContainer
+          key={`${panel}:${search.sel}`}
+          initialMode={panel === 'order' ? 'order' : 'place'}
+          onOrder={(card) =>
+            void run('Card marked ordered.', (revision) =>
+              binderApi.orderStatus(versionId, selected, card.id, 'ordered', revision),
+            )
+          }
           versionId={versionId}
           slot={selectedSlot}
           at={selected}
@@ -1529,6 +1571,20 @@ export function BinderView({
           onClose={closePanel}
         />
       ) : null}
+      {panel === 'order-status' && selectedSlot?.assignedCardId && selected && versionId ? (
+        <MarkOrderedPanel
+          pending={pending}
+          error={writer.error}
+          onClose={closePanel}
+          onConfirm={() => {
+            const cardId = selectedSlot.assignedCardId;
+            if (cardId)
+              void run('Card marked ordered.', (revision) =>
+                binderApi.orderStatus(versionId, selected, cardId, 'ordered', revision),
+              );
+          }}
+        />
+      ) : null}
       {panel === 'remove' && selectedSlot && selected && versionId ? (
         <RemovePanel
           slot={selectedSlot}
@@ -1536,8 +1592,18 @@ export function BinderView({
           target={pocketTargetDescription(selectedSlot, cards)}
           canRemoveCopy={version?.status === 'active'}
           onUnassign={() =>
-            void run('Card unplaced. The target and your owned copy are unchanged.', (revision) =>
-              binderApi.assign(versionId, selected, null, revision),
+            void run(
+              'Placement cleared. The target and your owned copies are unchanged.',
+              (revision) =>
+                selectedSlot.orderedCardId
+                  ? binderApi.orderStatus(
+                      versionId,
+                      selected,
+                      selectedSlot.orderedCardId,
+                      'cancelled',
+                      revision,
+                    )
+                  : binderApi.assign(versionId, selected, null, revision),
             )
           }
           onCopyRemoved={() => {

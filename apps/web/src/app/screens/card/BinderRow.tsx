@@ -1,14 +1,19 @@
 import type { BinderCardMatches, SlotRef } from '@pokedex/shared';
 import { Link } from '@tanstack/react-router';
 import { useState, type ReactElement } from 'react';
-import { fetchBinderPage, useBinders } from '../../api/queries/binders';
+import { useQueryClient } from '@tanstack/react-query';
+import { applyMutation } from '../binders/useBinderWriter';
+import { binderApi, fetchBinderPage, useBinders } from '../../api/queries/binders';
 import { usePlaceCard } from '../../api/queries/card';
 import { useToast } from '../../ui/Toast';
 
 export type BinderRowMatch = BinderCardMatches;
 
 type Destination =
-  { kind: 'next'; slot: SlotRef } | { kind: 'end'; slot: SlotRef } | { kind: 'full' };
+  | { kind: 'ordered'; slot: SlotRef }
+  | { kind: 'next'; slot: SlotRef }
+  | { kind: 'end'; slot: SlotRef }
+  | { kind: 'full' };
 
 /**
  * Priority order per the lead's fix-round-1 review: a matching open target this
@@ -17,6 +22,7 @@ type Destination =
  * printing in one atomic batch), else the binder has no room left at all.
  */
 function destinationFor(match: BinderRowMatch): Destination {
+  if (match.ordered?.[0]) return { kind: 'ordered', slot: match.ordered[0] };
   if (match.nextTarget) return { kind: 'next', slot: match.nextTarget };
   if (match.endDestination) return { kind: 'end', slot: match.endDestination };
   return { kind: 'full' };
@@ -44,10 +50,17 @@ export function BinderRow({
   const [placing, setPlacing] = useState(false);
   const destination = destinationFor(match);
   const inBinder = match.placed.length > 0;
-  const tag = inBinder ? 'In binder' : match.nextTarget ? 'Target waiting' : 'Not in binder';
+  const tag = inBinder
+    ? 'In binder'
+    : match.ordered?.length
+      ? 'Ordered'
+      : match.nextTarget
+        ? 'Target waiting'
+        : 'Not in binder';
   const place = usePlaceCard(cardId);
   const toast = useToast();
   const binders = useBinders();
+  const queryClient = useQueryClient();
 
   async function confirmPlace(): Promise<void> {
     if (destination.kind === 'full') return;
@@ -65,12 +78,22 @@ export function BinderRow({
       // — read fresh right before placing, the same two-hop lookup the old app's
       // "Add to selected binder" flow used.
       const page = await fetchBinderPage(activeVersionId, 0);
-      await place.mutateAsync({
-        binderId: match.binderId,
-        slotId: destination.slot.slotId,
-        addCopy: looseCopies === 0,
-        expectedRevision: page.version.revision,
-      });
+      if (destination.kind === 'ordered') {
+        const result = await binderApi.orderStatus(
+          activeVersionId,
+          { page: destination.slot.page, row: destination.slot.row, column: destination.slot.col },
+          cardId,
+          'received',
+          page.version.revision,
+        );
+        applyMutation(queryClient, result);
+      } else
+        await place.mutateAsync({
+          binderId: match.binderId,
+          slotId: destination.slot.slotId,
+          addCopy: looseCopies === 0,
+          expectedRevision: page.version.revision,
+        });
       toast('success', `Placed in ${match.name} — page ${destination.slot.page + 1}.`);
       setOpen(false);
     } catch (cause) {
@@ -90,6 +113,7 @@ export function BinderRow({
       >
         <span>
           <strong>{match.name}</strong>
+          {match.ordered?.length ? <small>{match.ordered.length} on order</small> : null}
           {inBinder ? <small>{match.placed.length} placed here</small> : null}
         </span>
         <span
@@ -114,9 +138,11 @@ export function BinderRow({
           ) : (
             <>
               <p>
-                {destination.kind === 'next'
-                  ? `Place in the waiting target — page ${destination.slot.page + 1}, pocket ${destination.slot.pocketIndex + 1}.`
-                  : `Add at the end — page ${destination.slot.page + 1}, pocket ${destination.slot.pocketIndex + 1}. This becomes a new exact target for this printing.`}
+                {destination.kind === 'ordered'
+                  ? `Receive the ordered copy — page ${destination.slot.page + 1}, pocket ${destination.slot.pocketIndex + 1}.`
+                  : destination.kind === 'next'
+                    ? `Place in the waiting target — page ${destination.slot.page + 1}, pocket ${destination.slot.pocketIndex + 1}.`
+                    : `Add at the end — page ${destination.slot.page + 1}, pocket ${destination.slot.pocketIndex + 1}. This becomes a new exact target for this printing.`}
               </p>
               <button
                 type="button"
@@ -125,9 +151,11 @@ export function BinderRow({
               >
                 {placing || place.isPending
                   ? 'Placing…'
-                  : looseCopies === 0
-                    ? 'Add a copy and place'
-                    : 'Place here'}
+                  : destination.kind === 'ordered'
+                    ? 'Mark received'
+                    : looseCopies === 0
+                      ? 'Add a copy and place'
+                      : 'Place here'}
               </button>
             </>
           )}

@@ -10,11 +10,16 @@ const mocks = vi.hoisted(() => ({
     (id: string, query: URLSearchParams, signal?: AbortSignal) => Promise<BinderActivityResult>
   >(),
   checkpoint: vi.fn(),
+  order: vi.fn(),
 }));
 vi.mock('../../api/queries/binder-activity', async (original) => ({
   ...(await original<typeof import('../../api/queries/binder-activity')>()),
   api: { binderActivity: mocks.read, createBinderCheckpoint: mocks.checkpoint },
 }));
+vi.mock('../../api/queries/binders', async (original) => {
+  const actual = await original<typeof import('../../api/queries/binders')>();
+  return { ...actual, binderApi: { ...actual.binderApi, orderStatus: mocks.order } };
+});
 let root: Root;
 let container: HTMLDivElement;
 const result: BinderActivityResult = {
@@ -80,6 +85,7 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.useFakeTimers();
   mocks.read.mockReset().mockResolvedValue(result);
+  mocks.order.mockReset().mockResolvedValue({ version: { id: 'v' }, pages: [] });
   mocks.checkpoint.mockReset().mockResolvedValue({ ok: true, checkpointId: 'new', created: true });
   container = document.createElement('div');
   document.body.replaceChildren(container);
@@ -235,4 +241,62 @@ it('respects the standard hidden-price setting', async () => {
   await settle();
   expect(container.querySelector('.card-frame-code')).not.toBeNull();
   expect(container.querySelector('.card-frame-price')).toBeNull();
+});
+
+it.each([
+  [1440, 1000],
+  [390, 844],
+  [844, 390],
+  [768, 1024],
+  [1024, 768],
+])('receives outstanding orders across checkpoints at %ix%i', async (width, height) => {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+  const original = result.events[0];
+  if (!original) throw new Error('Missing fixture event');
+  let received = false;
+  const onMutation = vi.fn();
+  mocks.order.mockImplementation(() => {
+    received = true;
+    return Promise.resolve({ version: { id: 'v' }, pages: [] });
+  });
+  mocks.read.mockImplementation((_id, query) =>
+    Promise.resolve(
+      query.get('kind') === 'ordered'
+        ? {
+            ...result,
+            total: received ? 0 : 1,
+            events: received ? [] : [{ ...original, kind: 'ordered', versionRevision: 2 }],
+          }
+        : result,
+    ),
+  );
+  act(() => root.render(<BinderActivity binderId="b" revision={1} onMutation={onMutation} />));
+  await settle();
+  const kind = [...container.querySelectorAll('select')].find((s) =>
+    s.parentElement?.textContent?.startsWith('Changes'),
+  );
+  if (!kind) throw new Error('Missing change filter');
+  act(() => {
+    kind.value = 'ordered';
+    kind.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await settle();
+  expect(container.querySelector('.activity-batch-bar')).toBeNull();
+  expect(container.textContent).toContain('across all checkpoints');
+  expect(container.querySelector('.card-frame-order-badge')?.textContent).toBe('Ordered');
+  await act(async () => {
+    button('Mark received').click();
+    await Promise.resolve();
+  });
+  await settle();
+  expect(mocks.order).toHaveBeenCalledWith(
+    'v',
+    { page: 2, row: 0, column: 1 },
+    'squirtle',
+    'received',
+    2,
+  );
+  expect(onMutation).toHaveBeenCalledOnce();
+  expect(container.querySelectorAll('.binder-activity-grid li')).toHaveLength(0);
 });

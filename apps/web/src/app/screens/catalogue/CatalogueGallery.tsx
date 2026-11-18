@@ -1,10 +1,11 @@
+import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
 import type { CatalogueCardView } from '@pokedex/shared';
 import type { ReactElement } from 'react';
 import { CardFrame } from '../../cards/CardFrame';
 import { CardFrameSkeleton } from '../../ui/Skeleton';
 import { EmptyState } from '../../ui/EmptyState';
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = GALLERY_PAGE_SIZE;
 
 function toFrameCard(card: CatalogueCardView) {
   return {

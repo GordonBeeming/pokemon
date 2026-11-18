@@ -64,6 +64,12 @@ const sectionSql = `WITH binder_context AS MATERIALIZED (
  SELECT e.*,COALESCE(v.id,b.fallback_version) AS section_version_id
  FROM binder_activity e JOIN binder_context b ON b.id=e.binder_id
  LEFT JOIN binder_versions v ON v.id=e.version_id AND v.binder_id=e.binder_id
+), outstanding AS (
+ SELECT -(p.position*400+s.row_index*20+s.column_index+1) AS id,b.id AS binder_id,v.id AS version_id,v.id AS section_version_id,
+ v.version_number,v.revision AS version_revision,'ordered' AS kind,s.ordered_card_id AS card_id,p.position AS page,s.row_index,s.column_index,s.ordered_at AS created_at
+ FROM binder_context b JOIN binder_versions v ON v.id=b.fallback_version AND v.status='active'
+ JOIN binder_pages p ON p.binder_version_id=v.id JOIN binder_slots s ON s.binder_page_id=p.id
+ WHERE s.ordered_card_id IS NOT NULL
 )`;
 const sectionMatch = `s.version_id=e.section_version_id AND e.page*400+e.row_index*20+e.column_index>=s.start
  AND (s.end IS NULL OR e.page*400+e.row_index*20+e.column_index<s.end)`;
@@ -117,14 +123,18 @@ export async function getBinderActivity(
   const index = boundaries.findIndex((b) => b.id === selectedBatch);
   const boundary = boundaries[index];
   if (!boundary) throw new ApplicationError('invalid_filter', 400);
-  const clauses = ['e.binder_id = ?1', 'e.id > ?3'];
-  const values: (string | number)[] = [binderId, ownerId, boundary.afterId];
+  const outstanding = query.kind === 'ordered';
+  const source = outstanding ? 'outstanding' : 'activity';
+  const clauses = outstanding ? ['e.binder_id = ?1'] : ['e.binder_id = ?1', 'e.id > ?3'];
+  const values: (string | number)[] = outstanding
+    ? [binderId, ownerId]
+    : [binderId, ownerId, boundary.afterId];
   const previous = boundaries[index - 1];
-  if (previous) {
+  if (previous && !outstanding) {
     clauses.push('e.id <= ?');
     values.push(previous.afterId);
   }
-  if (query.kind !== 'all') {
+  if (query.kind !== 'all' && !outstanding) {
     clauses.push('e.kind = ?');
     values.push(query.kind);
   }
@@ -155,25 +165,29 @@ export async function getBinderActivity(
     .all<{ name: string }>();
   const unbookmarked = await db
     .prepare(
-      `${sectionSql} SELECT 1 AS found FROM activity e WHERE e.binder_id=?1 AND e.id>?3 AND e.id<=?4 AND NOT EXISTS(SELECT 1 FROM sections s WHERE ${sectionMatch}) LIMIT 1`,
+      `${sectionSql} SELECT 1 AS found FROM ${source} e WHERE e.binder_id=?1 ${outstanding ? '' : 'AND e.id>?3 AND e.id<=?4'} AND NOT EXISTS(SELECT 1 FROM sections s WHERE ${sectionMatch}) LIMIT 1`,
     )
-    .bind(binderId, ownerId, boundary.afterId, previous?.afterId ?? Number.MAX_SAFE_INTEGER)
+    .bind(
+      ...(outstanding
+        ? [binderId, ownerId]
+        : [binderId, ownerId, boundary.afterId, previous?.afterId ?? Number.MAX_SAFE_INTEGER]),
+    )
     .first<{ found: number }>();
-  const from = `FROM activity e LEFT JOIN catalogue_cards c ON c.id = e.card_id AND (c.owner_id IS NULL OR c.owner_id = (SELECT owner_id FROM binders WHERE id = e.binder_id)) WHERE ${clauses.join(' AND ')}`;
+  const from = `FROM ${source} e LEFT JOIN catalogue_cards c ON c.id = e.card_id AND (c.owner_id IS NULL OR c.owner_id = (SELECT owner_id FROM binders WHERE id = e.binder_id)) WHERE ${clauses.join(' AND ')}`;
   const total = await db
     .prepare(`${sectionSql} SELECT COUNT(*) AS total ${from}`)
     .bind(...values)
     .first<{ total: number }>();
   const order = {
-    newest: 'e.id DESC',
-    oldest: 'e.id ASC',
+    newest: outstanding ? 'e.created_at DESC,e.id DESC' : 'e.id DESC',
+    oldest: outstanding ? 'e.created_at,e.id' : 'e.id ASC',
     binder: 'e.version_number DESC, e.page, e.row_index, e.column_index, e.id DESC',
     pokedex: 'c.pokedex_number IS NULL, c.pokedex_number, e.id DESC',
   }[query.sort];
   const events = await db
     .prepare(
       `${sectionSql} SELECT e.id, e.kind, e.created_at AS createdAt, e.version_id AS versionId,
-    e.version_number AS versionNumber, e.page, e.row_index AS row, e.column_index AS column,
+    e.version_number AS versionNumber, ${outstanding ? 'e.version_revision' : 'NULL'} AS versionRevision, e.page, e.row_index AS row, e.column_index AS column,
     e.card_id AS cardId, COALESCE(c.name, e.card_id) AS name, COALESCE(c.set_name, '') AS setName,
     COALESCE(c.number, '') AS number, COALESCE(c.language, '') AS language, c.pokedex_number AS pokedexNumber,
     (SELECT GROUP_CONCAT(s.name, ' / ') FROM sections s WHERE ${sectionMatch}) AS sectionName,
@@ -188,6 +202,7 @@ export async function getBinderActivity(
       createdAt: number;
       versionId: string;
       versionNumber: number;
+      versionRevision: number | null;
       page: number;
       row: number;
       column: number;
@@ -233,38 +248,29 @@ export async function getBinderActivity(
 export function activitySnapshot(db: D1Database, versionId: string, mutationId: string) {
   return db
     .prepare(
-      `INSERT INTO binder_activity_snapshot (mutation_id, card_id, page, row_index, column_index)
-    SELECT ?1, s.assigned_card_id, p.position, s.row_index, s.column_index FROM binder_slots s
-    JOIN binder_pages p ON p.id = s.binder_page_id
-    WHERE p.binder_version_id = ?2 AND s.assigned_card_id IS NOT NULL`,
+      `INSERT INTO binder_activity_snapshot(mutation_id,card_id,page,row_index,column_index,status)
+ SELECT ?1,COALESCE(s.assigned_card_id,s.ordered_card_id),p.position,s.row_index,s.column_index,CASE WHEN s.ordered_card_id IS NOT NULL THEN 'ordered' ELSE 'received' END
+ FROM binder_slots s JOIN binder_pages p ON p.id=s.binder_page_id WHERE p.binder_version_id=?2 AND (s.assigned_card_id IS NOT NULL OR s.ordered_card_id IS NOT NULL)`,
     )
     .bind(mutationId, versionId);
 }
-
 export function activityChanges(db: D1Database, versionId: string, mutationId: string) {
-  // Compare the final layout so intermediate reflow writes never become activity.
   return [
     db
       .prepare(
         `WITH current AS (
-    SELECT s.assigned_card_id AS card_id, p.position AS page, s.row_index, s.column_index
-    FROM binder_slots s JOIN binder_pages p ON p.id = s.binder_page_id
-    WHERE p.binder_version_id = ?2 AND s.assigned_card_id IS NOT NULL
-  ), changes AS (
-    SELECT 'removed' AS kind, old.card_id, old.page, old.row_index, old.column_index
-    FROM binder_activity_snapshot old WHERE mutation_id = ?1 AND NOT EXISTS (
-      SELECT 1 FROM current c WHERE c.card_id = old.card_id AND c.page = old.page
-      AND c.row_index = old.row_index AND c.column_index = old.column_index)
-    UNION ALL
-    SELECT 'added', c.card_id, c.page, c.row_index, c.column_index FROM current c WHERE NOT EXISTS (
-      SELECT 1 FROM binder_activity_snapshot old WHERE mutation_id = ?1 AND old.card_id = c.card_id
-      AND old.page = c.page AND old.row_index = c.row_index AND old.column_index = c.column_index)
-  ) INSERT INTO binder_activity (binder_id, version_id, version_number, kind, card_id, page, row_index, column_index, created_at)
-    SELECT v.binder_id, v.id, v.version_number, c.kind, c.card_id, c.page, c.row_index, c.column_index, ?3
-    FROM changes c JOIN binder_versions v ON v.id = ?2
-    ORDER BY c.kind DESC, c.page, c.row_index, c.column_index`,
+ SELECT COALESCE(s.assigned_card_id,s.ordered_card_id) AS card_id,p.position AS page,s.row_index,s.column_index,CASE WHEN s.ordered_card_id IS NOT NULL THEN 'ordered' ELSE 'received' END AS status
+ FROM binder_slots s JOIN binder_pages p ON p.id=s.binder_page_id WHERE p.binder_version_id=?2 AND (s.assigned_card_id IS NOT NULL OR s.ordered_card_id IS NOT NULL)
+ ),changes AS (
+ SELECT CASE WHEN old.status='ordered' THEN 'cancelled' ELSE 'removed' END AS kind,old.card_id,old.page,old.row_index,old.column_index
+ FROM binder_activity_snapshot old WHERE mutation_id=?1 AND NOT EXISTS(SELECT 1 FROM current c WHERE c.card_id=old.card_id AND c.page=old.page AND c.row_index=old.row_index AND c.column_index=old.column_index AND (c.status=old.status OR old.status='ordered'))
+ UNION ALL
+ SELECT CASE WHEN c.status='ordered' THEN 'ordered' WHEN EXISTS(SELECT 1 FROM binder_activity_snapshot old WHERE mutation_id=?1 AND old.card_id=c.card_id AND old.page=c.page AND old.row_index=c.row_index AND old.column_index=c.column_index AND old.status='ordered') THEN 'received' ELSE 'added' END,c.card_id,c.page,c.row_index,c.column_index
+ FROM current c WHERE NOT EXISTS(SELECT 1 FROM binder_activity_snapshot old WHERE mutation_id=?1 AND old.card_id=c.card_id AND old.page=c.page AND old.row_index=c.row_index AND old.column_index=c.column_index AND old.status=c.status)
+ ) INSERT INTO binder_activity(binder_id,version_id,version_number,kind,card_id,page,row_index,column_index,created_at)
+ SELECT v.binder_id,v.id,v.version_number,c.kind,c.card_id,c.page,c.row_index,c.column_index,?3 FROM changes c JOIN binder_versions v ON v.id=?2 ORDER BY c.kind DESC,c.page,c.row_index,c.column_index`,
       )
       .bind(mutationId, versionId, nowSeconds()),
-    db.prepare('DELETE FROM binder_activity_snapshot WHERE mutation_id = ?').bind(mutationId),
+    db.prepare('DELETE FROM binder_activity_snapshot WHERE mutation_id=?').bind(mutationId),
   ];
 }

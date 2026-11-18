@@ -1,3 +1,4 @@
+import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
 import {
   NATIONAL_POKEDEX,
   wantedListSchema,
@@ -84,22 +85,23 @@ const listing = `WITH pokemon AS (
  COALESCE(s.label,s.set_id,s.group_key,s.energy_group),0,1,0
  FROM binder_slots s JOIN binder_pages p ON p.id=s.binder_page_id
  JOIN binder_versions v ON v.id=p.binder_version_id JOIN binders b ON b.active_version_id=v.id
- WHERE ?3=1 AND ?2 NOT IN ('all','general') AND b.owner_id=?1 AND (?2='all' OR b.id=?2) AND s.assigned_card_id IS NULL
+ WHERE ?3=1 AND ?2 NOT IN ('all','general') AND b.owner_id=?1 AND (?2='all' OR b.id=?2) AND s.assigned_card_id IS NULL AND s.ordered_card_id IS NULL
  AND (s.entry_kind IN ('exact-card','pokemon') OR s.set_id IS NOT NULL OR s.group_kind IS NOT NULL OR s.energy_group IS NOT NULL)
 ), grouped AS (
  SELECT scope,MAX(binder_id) AS binder_id,MAX(target_kind) AS target_kind,MAX(card_id) AS card_id,MAX(pokemon_number) AS pokemon_number,target_key,MAX(label) AS label,MAX(manual) AS manual,SUM(unfilled) AS unfilled,MAX(created_at) AS created_at
  FROM raw GROUP BY scope,target_key
 ), placements AS MATERIALIZED (
- SELECT s.assigned_card_id AS card_id,b.id AS binder_id,COUNT(*) AS n
+ SELECT COALESCE(s.assigned_card_id,s.ordered_card_id) AS card_id,b.id AS binder_id,SUM(CASE WHEN s.assigned_card_id IS NOT NULL THEN 1 ELSE 0 END) AS n,SUM(CASE WHEN s.ordered_card_id IS NOT NULL THEN 1 ELSE 0 END) AS orders
  FROM binder_slots s JOIN binder_pages p ON p.id=s.binder_page_id
  JOIN binder_versions v ON v.id=p.binder_version_id JOIN binders b ON b.active_version_id=v.id
- WHERE b.owner_id=?1 AND s.assigned_card_id IS NOT NULL GROUP BY s.assigned_card_id,b.id
-), placed_any AS (SELECT card_id,SUM(n) AS n FROM placements GROUP BY card_id), entries AS (
+ WHERE b.owner_id=?1 AND (s.assigned_card_id IS NOT NULL OR s.ordered_card_id IS NOT NULL) GROUP BY COALESCE(s.assigned_card_id,s.ordered_card_id),b.id
+), placed_any AS (SELECT card_id,SUM(n) AS n,SUM(orders) AS orders FROM placements GROUP BY card_id), entries AS (
  SELECT g.scope||':'||g.target_key AS key,g.scope,g.binder_id AS binderId,b.name AS binderName,g.card_id AS cardId,
  COALESCE(c.name,pk.name,g.label,'Unavailable card') AS name,c.set_name AS setName,c.number,c.language,
  COALESCE(c.pokedex_number,g.pokemon_number) AS pokedexNumber,g.manual,g.unfilled,g.created_at AS createdAt,g.target_kind AS targetKind,
  COALESCE(cc.quantity,0) AS ownedQuantity,
  COALESCE(CASE WHEN g.binder_id IS NULL THEN pa.n ELSE pb.n END,0) AS placedCount,
+ COALESCE(CASE WHEN g.binder_id IS NULL THEN pa.orders ELSE pb.orders END,0) AS orderedCount,
  CASE WHEN art.card_id IS NOT NULL OR EXISTS(SELECT 1 FROM card_sources src WHERE src.card_id=preview.id AND src.provider='tcgdex') THEN preview.id ELSE NULL END AS artCardId
  FROM grouped g LEFT JOIN binders b ON b.id=g.binder_id AND b.owner_id=?1
  LEFT JOIN catalogue_cards c ON c.id=g.card_id AND (c.owner_id IS NULL OR c.owner_id=?1)
@@ -113,7 +115,7 @@ const listing = `WITH pokemon AS (
  WHERE (g.binder_id IS NULL OR b.id IS NOT NULL) AND (g.card_id IS NULL OR c.id IS NOT NULL)
 ), filtered AS (
  SELECT * FROM entries WHERE instr(lower(name||' '||COALESCE(setName,'')||' '||COALESCE(number,'')||' '||COALESCE(binderName,'')),lower(?4))>0
- AND (?6='all' OR (?6='placed' AND placedCount>0) OR (?6='not-placed' AND placedCount=0))
+ AND (?6='all' OR (?6='placed' AND placedCount>0) OR (?6='not-placed' AND placedCount=0) OR (?6='ordered' AND orderedCount>0))
 )`;
 export async function listWanted(db: D1Database, ownerId: string, query: WantedQuery) {
   await requireBinder(db, ownerId, query.scope);
@@ -136,7 +138,9 @@ export async function listWanted(db: D1Database, ownerId: string, query: WantedQ
     set: 'setName IS NULL,setName COLLATE NOCASE,number,name COLLATE NOCASE,key',
   }[query.sort];
   const rows = await db
-    .prepare(`${listing} SELECT * FROM filtered ORDER BY ${order} LIMIT 100 OFFSET ?7`)
+    .prepare(
+      `${listing} SELECT * FROM filtered ORDER BY ${order} LIMIT ${GALLERY_PAGE_SIZE} OFFSET ?7`,
+    )
     .bind(...values, query.offset)
     .all<{
       key: string;
@@ -155,6 +159,7 @@ export async function listWanted(db: D1Database, ownerId: string, query: WantedQ
       targetKind: string;
       ownedQuantity: number;
       placedCount: number;
+      orderedCount: number;
       artCardId: string | null;
     }>();
   const cardIds = [...new Set(rows.results.flatMap((row) => (row.cardId ? [row.cardId] : [])))];

@@ -1,3 +1,4 @@
+import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
 import type { BinderSearchMatch, FrameType } from '@pokedex/shared';
 import { useState, type ReactElement } from 'react';
 import {
@@ -11,7 +12,7 @@ import { EmptyState } from '../../ui/EmptyState';
 import { CardFrameSkeleton } from '../../ui/Skeleton';
 import { anyFrameCard, binderErrorMessage, frameCardFrom } from './model';
 
-const PAGE_SIZE = 50;
+const PAGE_SIZE = GALLERY_PAGE_SIZE;
 /** Spare printings fetched per Pokémon on top of the ones other tiles may already use.
  * The catalogue lists owned printings first for a Pokémon, so the lookup reaches real art
  * to fade once the owned ones are spent. */
@@ -70,6 +71,8 @@ function tilesFor(
   taken: Set<string>,
 ): Tile[] {
   const base = `${match.page}-${match.row}-${match.column}`;
+  const ordered = match.orderedCardId ? cards.get(match.orderedCardId) : undefined;
+  if (ordered) return [cardTile(base, match, ordered, 'binder', 'Ordered')];
   const placed = match.assignedCardId ? cards.get(match.assignedCardId) : undefined;
   if (placed) return [cardTile(base, match, placed, 'binder', 'In this binder')];
   const target = match.targetCardId ? cards.get(match.targetCardId) : undefined;
@@ -142,20 +145,29 @@ export function BinderSearchResults({
   const matches = results.data?.matches ?? [];
   const nextOffset = results.data?.nextOffset ?? null;
   const cardIds = matches.flatMap((match) =>
-    [match.assignedCardId, match.targetCardId].filter((id): id is string => Boolean(id)),
+    [match.assignedCardId, match.orderedCardId, match.targetCardId].filter((id): id is string =>
+      Boolean(id),
+    ),
   );
   const resolved = useResolvedCardGroups([cardIds]);
   const openSpecies = [
     ...new Set(
       matches
-        .filter((match) => match.kind === 'pokemon' && !match.placed && match.pokemonNumber)
+        .filter(
+          (match) =>
+            match.kind === 'pokemon' &&
+            !match.placed &&
+            !match.orderedCardId &&
+            match.pokemonNumber,
+        )
         .map((match) => match.pokemonNumber as number),
     ),
   ].slice(0, LOOKED_UP_SPECIES);
   // Every card already drawn on this page, and every open pocket, can use up one
   // printing before a pocket reaches one it can show, so the lookup reaches past them.
   const openPockets = matches.filter(
-    (match) => match.kind === 'pokemon' && !match.placed && match.pokemonNumber,
+    (match) =>
+      match.kind === 'pokemon' && !match.placed && !match.orderedCardId && match.pokemonNumber,
   ).length;
   const printingLimit = Math.min(
     MAX_PRINTINGS,
@@ -177,7 +189,9 @@ export function BinderSearchResults({
     speciesQueries.some((item) => item.isPending);
   const taken = new Set(
     matches.flatMap((match) =>
-      [match.assignedCardId, match.targetCardId].filter((id): id is string => Boolean(id)),
+      [match.assignedCardId, match.orderedCardId, match.targetCardId].filter((id): id is string =>
+        Boolean(id),
+      ),
     ),
   );
   const tiles = matches.flatMap((match) => tilesFor(match, cards, printings, taken));
