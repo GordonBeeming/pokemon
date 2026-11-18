@@ -12,7 +12,7 @@ export const api = {
   createBinderCheckpoint: (id: string) =>
     apiFetch(
       `/api/binders/${encodeURIComponent(id)}/checkpoints`,
-      z.object({ ok: z.literal(true), checkpointId: z.string() }),
+      z.object({ ok: z.literal(true), checkpointId: z.string().nullable(), created: z.boolean() }),
       { method: 'POST' },
-    ).then((body) => body.checkpointId),
+    ),
 };

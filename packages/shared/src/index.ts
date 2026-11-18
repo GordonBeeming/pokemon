@@ -2,6 +2,7 @@ import { z } from 'zod';
 export * from './binder-search';
 export * from './binder-activity';
 export * from './wanted';
+export * from './trainer-dex';
 import { BASIC_ENERGY_TYPES } from './energy';
 import { NATIONAL_POKEDEX_SIZE } from './national-pokedex';
 import { FRAME_TYPES, RARITY_KEYS } from './frame';

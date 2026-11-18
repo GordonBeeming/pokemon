@@ -1,8 +1,4 @@
-import {
-  NATIONAL_POKEDEX,
-  binderActivityResultSchema,
-  type BinderActivityQuery,
-} from '@pokedex/shared';
+import { binderActivityResultSchema, type BinderActivityQuery } from '@pokedex/shared';
 import { newId, nowSeconds } from './db';
 import { BinderDomainError } from './binders';
 import { ApplicationError } from './log';
@@ -20,16 +16,52 @@ async function requireBinder(db: D1Database, ownerId: string, binderId: string) 
 export async function createBinderCheckpoint(db: D1Database, ownerId: string, binderId: string) {
   await requireBinder(db, ownerId, binderId);
   const id = newId('checkpoint');
-  await db
+  // The predicate and insert share one statement, so retries and simultaneous clicks
+  // cannot create two boundaries for the same set of changes.
+  const inserted = await db
     .prepare(
-      `INSERT INTO binder_checkpoints (id, binder_id, after_id, created_at)
-    SELECT ?1, id, COALESCE((SELECT MAX(id) FROM binder_activity WHERE binder_id = ?2), 0), ?3
-    FROM binders WHERE id = ?2 AND owner_id = ?4`,
+      `INSERT INTO binder_checkpoints(id,binder_id,after_id,created_at)
+    SELECT ?1,b.id,(SELECT MAX(e.id) FROM binder_activity e WHERE e.binder_id=b.id),?3
+    FROM binders b WHERE b.id=?2 AND b.owner_id=?4
+    AND COALESCE((SELECT MAX(e.id) FROM binder_activity e WHERE e.binder_id=b.id),0)
+      > COALESCE((SELECT MAX(cp.after_id) FROM binder_checkpoints cp WHERE cp.binder_id=b.id),0)
+    RETURNING id`,
     )
     .bind(id, binderId, nowSeconds(), ownerId)
-    .run();
-  return id;
+    .first<{ id: string }>();
+  if (inserted) return { checkpointId: inserted.id, created: true };
+  const latest = await db
+    .prepare(
+      'SELECT id FROM binder_checkpoints WHERE binder_id=? ORDER BY after_id DESC,created_at DESC,rowid DESC LIMIT 1',
+    )
+    .bind(binderId)
+    .first<{ id: string }>();
+  return { checkpointId: latest?.id ?? null, created: false };
 }
+
+const sectionSql = `WITH binder_context AS MATERIALIZED (
+ SELECT b.id,COALESCE(b.active_version_id,(SELECT v.id FROM binder_versions v WHERE v.binder_id=b.id ORDER BY v.version_number DESC LIMIT 1)) AS fallback_version
+ FROM binders b WHERE b.id=?1 AND b.owner_id=?2
+), marks AS MATERIALIZED (
+ SELECT v.id AS version_id,bm.name,p.position*400+bm.row_index*20+bm.column_index AS start
+ FROM binder_bookmarks bm JOIN binder_pages p ON p.id=bm.binder_page_id
+ JOIN binder_versions v ON v.id=p.binder_version_id JOIN binders b ON b.id=v.binder_id
+ WHERE b.id=?1 AND b.owner_id=?2
+ UNION
+ SELECT v.id,COALESCE(p.label,'Reserved page '||(p.position+1)),p.position*400
+ FROM binder_pages p JOIN binder_versions v ON v.id=p.binder_version_id JOIN binders b ON b.id=v.binder_id
+ WHERE b.id=?1 AND b.owner_id=?2 AND (p.kind='reserved' OR p.label IS NOT NULL)
+), coordinates AS (SELECT DISTINCT version_id,start FROM marks), ranges AS (
+ SELECT version_id,start,LEAD(start) OVER(PARTITION BY version_id ORDER BY start) AS end FROM coordinates
+), sections AS MATERIALIZED (
+ SELECT m.version_id,m.name,r.start,r.end FROM marks m JOIN ranges r ON r.version_id=m.version_id AND r.start=m.start
+), activity AS (
+ SELECT e.*,COALESCE(v.id,b.fallback_version) AS section_version_id
+ FROM binder_activity e JOIN binder_context b ON b.id=e.binder_id
+ LEFT JOIN binder_versions v ON v.id=e.version_id AND v.binder_id=e.binder_id
+)`;
+const sectionMatch = `s.version_id=e.section_version_id AND e.page*400+e.row_index*20+e.column_index>=s.start
+ AND (s.end IS NULL OR e.page*400+e.row_index*20+e.column_index<s.end)`;
 
 export async function getBinderActivity(
   db: D1Database,
@@ -43,7 +75,7 @@ export async function getBinderActivity(
       `SELECT cp.id, cp.after_id, cp.created_at,
     (SELECT COUNT(*) FROM binder_activity e WHERE e.binder_id = cp.binder_id AND e.id > cp.after_id) AS newer
     FROM binder_checkpoints cp WHERE cp.binder_id = ?
-    ORDER BY cp.after_id DESC, cp.created_at DESC, cp.rowid DESC`,
+    ORDER BY cp.after_id DESC, cp.created_at ASC, cp.rowid ASC`,
     )
     .bind(binderId)
     .all<{ id: string; after_id: number; created_at: number; newer: number }>();
@@ -51,8 +83,14 @@ export async function getBinderActivity(
     .prepare('SELECT COUNT(*) AS total FROM binder_activity WHERE binder_id = ?')
     .bind(binderId)
     .first<{ total: number }>();
+  const seen = new Set<number>();
+  const distinctCheckpoints = checkpoints.results.filter((cp) => {
+    if (cp.after_id === 0 || seen.has(cp.after_id)) return false;
+    seen.add(cp.after_id);
+    return true;
+  });
   const boundaries = [
-    ...checkpoints.results.map((c) => ({
+    ...distinctCheckpoints.map((c) => ({
       id: c.id,
       afterId: c.after_id,
       createdAt: c.created_at,
@@ -65,13 +103,17 @@ export async function getBinderActivity(
     createdAt: b.createdAt,
     count: b.newer - (boundaries[index - 1]?.newer ?? 0),
   }));
+  const requested = checkpoints.results.find((cp) => cp.id === query.batch);
+  const requestedBatch = requested
+    ? boundaries.find((b) => b.afterId === requested.after_id)?.id
+    : query.batch;
   const selectedBatch =
-    query.batch ?? batches.find((b) => b.count > 0)?.id ?? batches[0]?.id ?? 'beginning';
+    requestedBatch ?? batches.find((b) => b.count > 0)?.id ?? batches[0]?.id ?? 'beginning';
   const index = boundaries.findIndex((b) => b.id === selectedBatch);
   const boundary = boundaries[index];
   if (!boundary) throw new ApplicationError('invalid_filter', 400);
-  const clauses = ['e.binder_id = ?', 'e.id > ?'];
-  const values: (string | number)[] = [binderId, boundary.afterId];
+  const clauses = ['e.binder_id = ?1', 'e.id > ?3'];
+  const values: (string | number)[] = [binderId, ownerId, boundary.afterId];
   const previous = boundaries[index - 1];
   if (previous) {
     clauses.push('e.id <= ?');
@@ -87,16 +129,34 @@ export async function getBinderActivity(
     );
     values.push(query.q);
   }
-  if (query.regions.length) {
-    const numbers = NATIONAL_POKEDEX.filter((p) => query.regions.includes(p.discoveryCategory)).map(
-      (p) => p.number,
-    );
-    clauses.push("c.category = 'pokemon' AND c.pokedex_number IN (SELECT value FROM json_each(?))");
-    values.push(JSON.stringify(numbers));
+  if (query.sections.length) {
+    const names = query.sections
+      .filter((id) => id !== 'unbookmarked')
+      .map((id) => (id.startsWith('bookmark:') ? id.slice(9) : id));
+    const filters: string[] = [];
+    if (names.length) {
+      filters.push(
+        `EXISTS(SELECT 1 FROM sections s WHERE ${sectionMatch} AND s.name IN (SELECT value FROM json_each(?)))`,
+      );
+      values.push(JSON.stringify(names));
+    }
+    if (query.sections.includes('unbookmarked'))
+      filters.push(`NOT EXISTS(SELECT 1 FROM sections s WHERE ${sectionMatch})`);
+    clauses.push(`(${filters.join(' OR ')})`);
   }
-  const from = `FROM binder_activity e LEFT JOIN catalogue_cards c ON c.id = e.card_id AND (c.owner_id IS NULL OR c.owner_id = (SELECT owner_id FROM binders WHERE id = e.binder_id)) WHERE ${clauses.join(' AND ')}`;
+  const sectionNames = await db
+    .prepare(`${sectionSql} SELECT name FROM sections GROUP BY name ORDER BY MIN(start),name`)
+    .bind(binderId, ownerId)
+    .all<{ name: string }>();
+  const unbookmarked = await db
+    .prepare(
+      `${sectionSql} SELECT 1 AS found FROM activity e WHERE e.binder_id=?1 AND e.id>?3 AND e.id<=?4 AND NOT EXISTS(SELECT 1 FROM sections s WHERE ${sectionMatch}) LIMIT 1`,
+    )
+    .bind(binderId, ownerId, boundary.afterId, previous?.afterId ?? Number.MAX_SAFE_INTEGER)
+    .first<{ found: number }>();
+  const from = `FROM activity e LEFT JOIN catalogue_cards c ON c.id = e.card_id AND (c.owner_id IS NULL OR c.owner_id = (SELECT owner_id FROM binders WHERE id = e.binder_id)) WHERE ${clauses.join(' AND ')}`;
   const total = await db
-    .prepare(`SELECT COUNT(*) AS total ${from}`)
+    .prepare(`${sectionSql} SELECT COUNT(*) AS total ${from}`)
     .bind(...values)
     .first<{ total: number }>();
   const order = {
@@ -107,10 +167,11 @@ export async function getBinderActivity(
   }[query.sort];
   const events = await db
     .prepare(
-      `SELECT e.id, e.kind, e.created_at AS createdAt, e.version_id AS versionId,
+      `${sectionSql} SELECT e.id, e.kind, e.created_at AS createdAt, e.version_id AS versionId,
     e.version_number AS versionNumber, e.page, e.row_index AS row, e.column_index AS column,
     e.card_id AS cardId, COALESCE(c.name, e.card_id) AS name, COALESCE(c.set_name, '') AS setName,
     COALESCE(c.number, '') AS number, COALESCE(c.language, '') AS language, c.pokedex_number AS pokedexNumber,
+    (SELECT GROUP_CONCAT(s.name, ' / ') FROM sections s WHERE ${sectionMatch}) AS sectionName,
     CASE WHEN EXISTS(SELECT 1 FROM art_manifest a WHERE a.card_id = e.card_id AND a.variant = 'low')
       OR EXISTS(SELECT 1 FROM card_sources s WHERE s.card_id = e.card_id AND s.provider = 'tcgdex') THEN 1 ELSE 0 END AS hasArt
     ${from} ORDER BY ${order} LIMIT 500`,
@@ -132,14 +193,20 @@ export async function getBinderActivity(
       language: string;
       pokedexNumber: number | null;
       hasArt: number;
+      sectionName: string | null;
     }>();
   return binderActivityResultSchema.parse({
     selectedBatch,
+    pendingChanges: boundaries[0]?.newer ?? 0,
+    sections: [
+      ...sectionNames.results.map((s) => ({ id: `bookmark:${s.name}`, name: s.name })),
+      ...(unbookmarked ? [{ id: 'unbookmarked', name: 'Unbookmarked' }] : []),
+    ],
     batches,
     total: total?.total ?? 0,
     events: events.results.map(({ hasArt, ...e }) => ({
       ...e,
-      region: NATIONAL_POKEDEX.find((p) => p.number === e.pokedexNumber)?.discoveryCategory ?? null,
+      region: null,
       imageLowUrl: hasArt ? `/api/art/${encodeURIComponent(e.cardId)}/low` : null,
     })),
   });

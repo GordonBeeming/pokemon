@@ -1,5 +1,6 @@
 import {
   artistKey,
+  TRAINER_CHARACTERS,
   NATIONAL_POKEDEX,
   RARITY_LABELS,
   type FrameType,
@@ -115,8 +116,13 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
   const galleryTrainer = search.trainer
     ? trainers.data?.find((entry) => entry.key === search.trainer)
     : undefined;
+  const character = TRAINER_CHARACTERS.find((t) => t.key === search.character);
   const contextual =
-    Boolean(speciesEntry) || search.set.length === 1 || artistGallery || trainerGallery;
+    Boolean(character) ||
+    Boolean(speciesEntry) ||
+    search.set.length === 1 ||
+    artistGallery ||
+    trainerGallery;
   const contextSetName = search.set.length === 1 ? cards[0]?.setName : undefined;
 
   function moveToPage(nextPage: number): void {
@@ -224,6 +230,9 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
     ...(search.artist
       ? [{ key: 'artist', label: search.artist, icon: 'illustrator' as const }]
       : []),
+    ...(search.character
+      ? [{ key: 'character', label: character?.name ?? search.character, icon: 'people' as const }]
+      : []),
     ...(search.trainer
       ? [
           {
@@ -240,15 +249,21 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
     search.set.length +
     (search.region ? 1 : 0) +
     (search.artist ? 1 : 0) +
-    (search.trainer ? 1 : 0);
+    (search.trainer ? 1 : 0) +
+    (search.character ? 1 : 0);
   // The illustrator is named, not counted: arriving from their tile, the name is the
   // only sign on a phone of whose cards these are.
-  const countedFilters = activeFilterCount - (search.artist ? 1 : 0) - (search.trainer ? 1 : 0);
+  const countedFilters =
+    activeFilterCount -
+    (search.artist ? 1 : 0) -
+    (search.trainer ? 1 : 0) -
+    (search.character ? 1 : 0);
   const phoneSummary = [
     search.q ? `“${search.q}”` : search.artist || search.number ? null : 'Search cards',
     search.number ? `No. ${search.number}` : null,
     search.artist ?? null,
     search.trainer ? (galleryTrainer?.name ?? search.trainer) : null,
+    character?.name ?? null,
     search.owned === 'owned' ? 'Owned' : search.owned === 'missing' ? 'Missing' : null,
     countedFilters > 0 ? `${countedFilters} filter${countedFilters === 1 ? '' : 's'}` : null,
   ]
@@ -259,6 +274,7 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
     if (key === 'region') return updateSearch({ region: undefined });
     if (key === 'artist') return updateSearch({ artist: undefined });
     if (key === 'trainer') return updateSearch({ trainer: undefined });
+    if (key === 'character') return updateSearch({ character: undefined });
     const [kind, value] = key.split(':');
     if (kind === 'type') updateSearch({ type: search.type.filter((item) => item !== value) });
     else if (kind === 'rarity')
@@ -298,7 +314,19 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
               Show full catalogue
             </Link>
           ) : null}
-          {trainerGallery && search.trainer ? (
+          {character ? (
+            <>
+              <Link
+                className="text-button back-link"
+                to="/trainer-dex"
+                search={{ q: '', region: character.regions[0] ?? 'all', available: true, page: 1 }}
+              >
+                Back to Trainer Dex
+              </Link>
+              <h1>{character.name} card gallery</h1>
+              <p>English Trainer cards · {character.regions.join(' · ')}</p>
+            </>
+          ) : trainerGallery && search.trainer ? (
             <div className="artist-heading">
               <h1>
                 <Icon name="people" title="Trainer" /> {galleryTrainer?.name ?? search.trainer}

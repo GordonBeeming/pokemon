@@ -45,6 +45,7 @@ export function catalogueWireParams(
     | 'dex'
     | 'artist'
     | 'trainer'
+    | 'character'
   >,
 ): URLSearchParams {
   const params = new URLSearchParams({ includePokemonNumber: 'true' });
@@ -60,6 +61,7 @@ export function catalogueWireParams(
   if (filters.dex !== undefined) params.set('pokedexNumber', String(filters.dex));
   if (filters.artist) params.set('artist', filters.artist);
   if (filters.trainer) params.set('trainer', filters.trainer);
+  if (filters.character) params.set('character', filters.character);
   return params;
 }
 

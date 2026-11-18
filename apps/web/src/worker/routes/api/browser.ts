@@ -1,3 +1,4 @@
+import { listTrainerDex } from '../../lib/trainer-dex';
 import { wantedMutationSchema, wantedQuerySchema } from '@pokedex/shared';
 import { listWanted, wantedScopes, setWanted } from '../../lib/wanted';
 import { binderActivityQuerySchema } from '@pokedex/shared';
@@ -1629,7 +1630,7 @@ browserApiRoutes.post('/binders/:id/checkpoints', async (c) => {
   try {
     return c.json({
       ok: true,
-      checkpointId: await createBinderCheckpoint(c.env.DB, sessionOwner(c), c.req.param('id')),
+      ...(await createBinderCheckpoint(c.env.DB, sessionOwner(c), c.req.param('id'))),
     });
   } catch (error) {
     return apiFailure(c, error);
@@ -1670,6 +1671,15 @@ browserApiRoutes.put('/wanted', async (c) => {
         input.data.wanted,
       ),
     });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+browserApiRoutes.use('/trainer-dex*', requireSession);
+browserApiRoutes.get('/trainer-dex', async (c) => {
+  try {
+    return c.json({ ok: true, ...(await listTrainerDex(c.env.DB, sessionOwner(c))) });
   } catch (error) {
     return apiFailure(c, error);
   }

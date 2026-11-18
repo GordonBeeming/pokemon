@@ -1272,55 +1272,152 @@ an action at the end */
 }
 
 .binder-activity {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
   min-width: 0;
 }
-.binder-activity-heading {
+.activity-summary {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  margin: 0 0 1rem;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
 }
-.binder-activity-heading p {
+.activity-summary > div {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+.activity-summary strong {
+  font-size: 1.2rem;
+}
+.activity-summary span,
+.activity-batch-date {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+.activity-summary button {
+  flex-shrink: 0;
+}
+.activity-feedback,
+.activity-batch-date {
   margin: 0;
 }
-.binder-activity-filters {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
-  gap: 1rem;
+.activity-batch-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
-.binder-activity-filters label {
+.activity-batch-bar > label {
+  flex: 1;
+  min-width: min(100%, 22rem);
+}
+.activity-batch-bar label,
+.activity-filter-bar label {
   display: grid;
   gap: 0.4rem;
+  font-size: 0.875rem;
+  font-weight: 600;
   min-width: 0;
 }
-.binder-activity-filters select,
-.binder-activity-filters input {
+.activity-batch-bar select,
+.activity-filter-bar input,
+.activity-filter-bar select {
   width: 100%;
   min-width: 0;
+  font-weight: 400;
 }
-.binder-activity-regions {
+.activity-batch-bar nav {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.7rem 1rem;
-  margin: 1rem 0;
+  gap: 0.5rem;
 }
-.binder-activity-regions label {
+.activity-batch-bar nav button:first-child,
+.activity-batch-bar nav button:nth-child(2) {
+  width: 2.75rem;
+  padding: 0;
+}
+.activity-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+}
+.activity-sections-heading,
+.activity-results-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.activity-sections h2,
+.activity-results-heading h2 {
+  font-size: 1rem;
+  margin: 0;
+}
+.activity-sections {
+  display: grid;
+  gap: 0.75rem;
+}
+.activity-sections > p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+.activity-sections fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.activity-section {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0.4rem 0.75rem;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  font-size: 0.875rem;
+  cursor: pointer;
 }
-.binder-activity-regions input {
-  width: auto;
+.activity-section.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft-bg);
+  color: var(--accent-deep);
 }
-.binder-activity-nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.6rem;
+.activity-section input {
+  flex: none;
+  margin: 0;
+}
+.activity-empty {
+  padding: 2rem 1rem;
+  text-align: center;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+.activity-empty p {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.875rem;
 }
 .binder-activity-grid {
   list-style: none;
+  margin: 0;
   padding: 0;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr));
@@ -1329,25 +1426,94 @@ an action at the end */
 .binder-activity-grid li {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.4rem;
   min-width: 0;
   overflow-wrap: anywhere;
+  padding: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  font-size: 0.875rem;
+}
+.binder-activity-grid li > strong {
+  font-size: 1rem;
+}
+.binder-activity-grid small {
+  color: var(--muted);
+  font-size: 0.75rem;
 }
 .activity-kind {
-  font-weight: 700;
+  display: inline-flex;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft-bg);
+  color: var(--accent-deep);
 }
 .activity-kind-removed {
+  background: var(--surface);
   color: var(--danger);
+  border: 1px solid var(--line);
+}
+.activity-card-section {
+  font-weight: 600;
+}
+@media (max-width: 1000px) {
+  .activity-batch-bar > label {
+    flex-basis: 100%;
+  }
+  .activity-filter-bar {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .activity-filter-bar > label:first-child {
+    grid-column: 1/-1;
+  }
+}
+@media (max-width: 480px) {
+  .activity-summary {
+    padding: 1rem;
+    gap: 0.5rem;
+  }
+  .activity-summary strong {
+    font-size: 1rem;
+  }
+  .activity-summary span {
+    font-size: 0.75rem;
+  }
+  .activity-summary button {
+    padding: 0 0.65rem;
+    font-size: 0.8125rem;
+  }
+  .activity-filter-bar {
+    padding: 1rem;
+    gap: 0.75rem;
+  }
+  .binder-activity-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+  .binder-activity-grid li {
+    padding: 0.5rem;
+    font-size: 0.8125rem;
+  }
+  .activity-batch-bar > label {
+    flex-basis: 100%;
+  }
 }
 @media print {
   .binder-activity {
     display: block;
   }
-  .binder-activity-heading button,
-  .binder-activity-filters,
-  .binder-activity-regions,
-  .binder-activity-nav {
+  .activity-summary,
+  .activity-batch-bar,
+  .activity-filter-bar,
+  .activity-sections,
+  .activity-feedback {
     display: none;
+  }
+  .binder-activity-grid li {
+    break-inside: avoid;
   }
 }
 

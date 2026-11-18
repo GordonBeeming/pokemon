@@ -12,6 +12,7 @@ type SharedRoute = {
 
 const mutationId = '00000000-0000-4000-8000-000000000001';
 const sharedRoutes = [
+  { method: 'GET', browser: '/trainer-dex', desktop: '/desktop/trainer-dex' },
   { method: 'GET', browser: '/wanted', desktop: '/desktop/wanted' },
   { method: 'GET', browser: '/wanted/cards/card-1', desktop: '/desktop/wanted/cards/card-1' },
   {

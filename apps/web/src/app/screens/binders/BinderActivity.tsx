@@ -1,15 +1,15 @@
 import { useEffect, useState, type ReactElement } from 'react';
-import {
-  POKEMON_DISCOVERY_CATEGORIES,
-  type BinderActivityResult,
-  type PokemonDiscoveryCategory,
-} from '@pokedex/shared';
+import type { BinderActivityResult } from '@pokedex/shared';
 import { api } from '../../api/queries/binder-activity';
 import { CardFrame } from '../../cards/CardFrame';
+import { Icon } from '../../ui/icons';
 import { binderErrorMessage as userMessage } from './model';
 
 export function activityTime(seconds: number): string {
   return `${new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Brisbane', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(seconds * 1000))} AEST`;
+}
+function batchTime(seconds: number): string {
+  return `${new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Brisbane', day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(seconds * 1000))} AEST`;
 }
 
 export function BinderActivity({
@@ -23,7 +23,7 @@ export function BinderActivity({
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState('all');
   const [sort, setSort] = useState('newest');
-  const [regions, setRegions] = useState<PokemonDiscoveryCategory[]>([]);
+  const [sections, setSections] = useState<string[]>([]);
   const [data, setData] = useState<BinderActivityResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -36,7 +36,12 @@ export function BinderActivity({
     setLoading(true);
     setError('');
     const timer = setTimeout(() => {
-      const params = new URLSearchParams({ q: query, kind, sort, regions: regions.join(',') });
+      const params = new URLSearchParams({
+        q: query,
+        kind,
+        sort,
+        sections: JSON.stringify(sections),
+      });
       if (batch) params.set('batch', batch);
       void api
         .binderActivity(binderId, params, controller.signal)
@@ -57,16 +62,20 @@ export function BinderActivity({
       clearTimeout(timer);
       controller.abort();
     };
-  }, [binderId, revision, batch, query, kind, sort, regions, refresh]);
+  }, [binderId, revision, batch, query, kind, sort, sections, refresh]);
   async function checkpoint() {
-    if (saving) return;
+    if (saving || loading || !data?.pendingChanges) return;
     setSaving(true);
     setCheckpointError('');
     try {
-      await api.createBinderCheckpoint(binderId);
+      const result = await api.createBinderCheckpoint(binderId);
       setBatch('');
-      setRefresh((value) => value + 1);
-      setStatus('Checkpoint created. New placements will collect in a fresh batch.');
+      setRefresh((n) => n + 1);
+      setStatus(
+        result.created
+          ? 'Checkpoint created. New changes will start a fresh batch.'
+          : 'No new changes to checkpoint.',
+      );
     } catch (cause) {
       setCheckpointError(userMessage(cause));
     } finally {
@@ -74,32 +83,61 @@ export function BinderActivity({
     }
   }
   const selectedIndex = data?.batches.findIndex((b) => b.id === data.selectedBatch) ?? -1;
-  const earlier = data?.batches[selectedIndex + 1];
-  const later = selectedIndex > 0 ? data?.batches[selectedIndex - 1] : undefined;
+  const selected = data?.batches[selectedIndex];
+  const older = data?.batches[selectedIndex + 1];
+  const newer = selectedIndex > 0 ? data?.batches[selectedIndex - 1] : undefined;
+  const filtered = Boolean(query || kind !== 'all' || sections.length);
+  const available = data?.sections ?? [];
+  const hasBookmarks = available.some((section) => section.id.startsWith('bookmark:'));
+  const choices = [
+    ...(hasBookmarks ? available : []),
+    ...sections
+      .filter((id) => !available.some((section) => section.id === id) || !hasBookmarks)
+      .map((id) => ({
+        id,
+        name: id === 'unbookmarked' ? 'Unbookmarked' : id.replace(/^bookmark:/, ''),
+      })),
+  ];
   return (
     <div className="binder-activity">
-      <div className="binder-activity-heading">
+      <div className="activity-summary">
         <div>
-          <p>
-            Review copies added and removed. Use a checkpoint after putting your physical cards
-            away.
-          </p>
+          <strong>
+            {data
+              ? data.pendingChanges
+                ? `${data.pendingChanges} new ${data.pendingChanges === 1 ? 'change' : 'changes'}`
+                : 'No new changes'
+              : 'Checking for new changes…'}
+          </strong>
+          <span>Since your last checkpoint</span>
         </div>
         <button
           type="button"
-          className="quiet-button tone-accent"
-          disabled={saving || loading}
+          className="button-primary"
+          disabled={saving || loading || !data?.pendingChanges}
           onClick={() => void checkpoint()}
+          title={
+            data?.pendingChanges
+              ? 'Start a fresh batch after putting your cards away'
+              : 'A checkpoint needs at least one new placement or removal'
+          }
         >
           {saving ? 'Creating…' : 'Create checkpoint'}
         </button>
       </div>
-      <p className="form-help">Pocket locations reflect where each change happened.</p>
-      {status ? <p role="status">{status}</p> : null}
-      {checkpointError ? <p role="alert">{checkpointError}</p> : null}
-      <div className="binder-activity-filters">
+      {status ? (
+        <p className="activity-feedback" role="status">
+          {status}
+        </p>
+      ) : null}
+      {checkpointError ? (
+        <p className="activity-feedback" role="alert">
+          {checkpointError}
+        </p>
+      ) : null}
+      <div className="activity-batch-bar">
         <label>
-          Checkpoint batch
+          Batch
           <select
             value={data?.selectedBatch ?? ''}
             disabled={loading || !data}
@@ -107,14 +145,51 @@ export function BinderActivity({
           >
             {data?.batches.map((b, i) => (
               <option key={b.id} value={b.id}>
-                {b.createdAt === null
-                  ? 'Before first checkpoint'
-                  : `Since ${activityTime(b.createdAt)}`}
-                {i === 0 ? ' · current' : ''} · {b.count} changes
+                {i === 0
+                  ? 'Current batch'
+                  : b.createdAt === null
+                    ? 'First batch'
+                    : batchTime(b.createdAt)}{' '}
+                · {b.count} {b.count === 1 ? 'change' : 'changes'}
               </option>
             ))}
           </select>
         </label>
+        <nav aria-label="Checkpoint batches">
+          <button
+            type="button"
+            aria-label="Older batch"
+            title="Older batch"
+            disabled={!older || loading}
+            onClick={() => older && setBatch(older.id)}
+          >
+            <Icon name="chevron-left" />
+          </button>
+          <button
+            type="button"
+            aria-label="Newer batch"
+            title="Newer batch"
+            disabled={!newer || loading}
+            onClick={() => newer && setBatch(newer.id)}
+          >
+            <Icon name="chevron-right" />
+          </button>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => {
+              setBatch('');
+              setRefresh((n) => n + 1);
+            }}
+          >
+            Latest changes
+          </button>
+        </nav>
+      </div>
+      {selected?.createdAt ? (
+        <p className="activity-batch-date">From {activityTime(selected.createdAt)}</p>
+      ) : null}
+      <div className="activity-filter-bar">
         <label>
           Search cards
           <input
@@ -122,7 +197,7 @@ export function BinderActivity({
             maxLength={200}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Name, set or card number"
+            placeholder="Card name, set or number"
           />
         </label>
         <label>
@@ -143,78 +218,87 @@ export function BinderActivity({
           </select>
         </label>
       </div>
-      <fieldset className="binder-activity-regions">
-        <legend>Regions · select any combination</legend>
-        {POKEMON_DISCOVERY_CATEGORIES.map((region) => (
-          <label key={region}>
-            <input
-              type="checkbox"
-              checked={regions.includes(region)}
-              onChange={(e) =>
-                setRegions((current) =>
-                  e.target.checked ? [...current, region] : current.filter((r) => r !== region),
-                )
-              }
-            />
-            {region}
-          </label>
-        ))}
-        {regions.length ? (
-          <button type="button" className="text-button" onClick={() => setRegions([])}>
-            All regions
-          </button>
-        ) : null}
-      </fieldset>
-      {data ? (
-        <nav className="binder-activity-nav" aria-label="Checkpoint batches">
-          <button
-            type="button"
-            className="quiet-button"
-            disabled={!earlier || loading}
-            onClick={() => earlier && setBatch(earlier.id)}
-          >
-            Older batch
-          </button>
-          <button
-            type="button"
-            className="quiet-button"
-            disabled={!later || loading}
-            onClick={() => later && setBatch(later.id)}
-          >
-            Newer batch
-          </button>
-          <button
-            type="button"
-            className="text-button"
-            disabled={loading}
-            onClick={() => {
-              setBatch('');
-              setRefresh((value) => value + 1);
-            }}
-          >
-            Latest non-empty batch
-          </button>
-        </nav>
-      ) : null}
+      <section className="activity-sections" aria-labelledby="activity-sections-heading">
+        <div className="activity-sections-heading">
+          <h2 id="activity-sections-heading">Binder sections</h2>
+          {sections.length ? (
+            <button type="button" className="button-text" onClick={() => setSections([])}>
+              All sections
+            </button>
+          ) : null}
+        </div>
+        {choices.length ? (
+          <fieldset>
+            <legend className="sr-only">Filter by binder bookmarks</legend>
+            {choices.map((section) => (
+              <label
+                key={section.id}
+                className={
+                  sections.includes(section.id) ? 'activity-section selected' : 'activity-section'
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={sections.includes(section.id)}
+                  onChange={(e) =>
+                    setSections((current) =>
+                      e.target.checked
+                        ? [...current, section.id]
+                        : current.filter((name) => name !== section.id),
+                    )
+                  }
+                />
+                {section.name}
+              </label>
+            ))}
+          </fieldset>
+        ) : (
+          <p>Bookmark a page or pocket in this binder to filter by its sections.</p>
+        )}
+      </section>
       {loading ? (
         <p role="status">Loading activity…</p>
       ) : error ? (
         <p role="alert">
           {error}{' '}
-          <button type="button" onClick={() => setRefresh((value) => value + 1)}>
+          <button type="button" onClick={() => setRefresh((n) => n + 1)}>
             Try again
           </button>
         </p>
       ) : data ? (
         <>
-          <p role="status">
-            Showing {data.events.length} of {data.total} matching changes.
-            {data.total > 500
-              ? ' Narrow the filters to see more; each view shows up to 500 changes.'
-              : ''}
-          </p>
+          <div className="activity-results-heading">
+            <h2>
+              {data.total} {data.total === 1 ? 'change' : 'changes'}
+            </h2>
+            {filtered ? (
+              <button
+                type="button"
+                className="button-text"
+                onClick={() => {
+                  setQuery('');
+                  setKind('all');
+                  setSections([]);
+                }}
+              >
+                Clear filters
+              </button>
+            ) : null}
+          </div>
+          {data.total > 500 ? (
+            <p className="activity-batch-date">
+              Showing {data.events.length} of {data.total}. Narrow the filters to see more.
+            </p>
+          ) : null}
           {data.events.length === 0 ? (
-            <p>No matching placements or removals in this batch.</p>
+            <div className="activity-empty">
+              <strong>{filtered ? 'No matching changes' : 'No changes in this batch'}</strong>
+              <p>
+                {filtered
+                  ? 'Try another batch or clear the filters.'
+                  : 'Your next placement or removal will appear here.'}
+              </p>
+            </div>
           ) : (
             <ol className="binder-activity-grid">
               {data.events.map((event) => (
@@ -234,23 +318,23 @@ export function BinderActivity({
                     state="placed"
                     forceSolid
                   />
-                  <span className={`activity-kind activity-kind-${event.kind}`}>
-                    {event.kind === 'added' ? 'Added' : 'Removed'}
-                  </span>
+                  <div className="activity-card-heading">
+                    <span className={`activity-kind activity-kind-${event.kind}`}>
+                      {event.kind === 'added' ? 'Added' : 'Removed'}
+                    </span>
+                  </div>
                   <strong>{event.name}</strong>
                   <span>
                     {event.setName} · {event.number} · {event.language.toUpperCase()}
                   </span>
-                  <span>
-                    {event.region
-                      ? `${event.region} · #${event.pokedexNumber}`
-                      : 'No Pokémon region'}
-                  </span>
+                  {event.sectionName ? (
+                    <span className="activity-card-section">{event.sectionName}</span>
+                  ) : null}
                   <span>
                     Page {event.page + 1} · row {event.row + 1} · pocket {event.column + 1}
                   </span>
-                  <small>
-                    Version {event.versionNumber} · {activityTime(event.createdAt)}
+                  <small title={activityTime(event.createdAt)}>
+                    V{event.versionNumber} · {batchTime(event.createdAt)}
                   </small>
                 </li>
               ))}

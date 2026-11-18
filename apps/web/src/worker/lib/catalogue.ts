@@ -1,3 +1,4 @@
+import { trainerCharacterPredicate } from './trainer-dex';
 import { catalogueRestartPending, restoreUnappliedCatalogueRun } from './catalogue-recovery';
 import { catalogueWorkflowId } from './catalogue-workflow-id';
 import {
@@ -90,6 +91,7 @@ export interface CatalogueFilters {
   artist?: string;
   /** A trainer's Pokémon, by trainer key (see trainerOf). */
   trainer?: string;
+  character?: string;
   /** Energy cards: 'all', 'special' or a basic type (see energyOf). */
   energy?: string;
   /** The printed card number, matched like a numeric search (leading zeros and any
@@ -1488,6 +1490,7 @@ export async function searchCards(
     where.push(`upper(ltrim(${numerator}, '0')) = ltrim(?${values.length + 1}, '0')`);
     values.push(cardNumberFilter);
   }
+  if (filters.character) where.push(trainerCharacterPredicate(filters.character, values));
   if (filters.trainer) {
     where.push(`c.trainer_key = ?${values.length + 1}`);
     values.push(filters.trainer);
@@ -1574,6 +1577,7 @@ export async function searchCards(
     species: filters.species ?? null,
     artist: filters.artist ?? null,
     trainer: filters.trainer ?? null,
+    character: filters.character ?? null,
     energy: filters.energy ?? null,
     numberFilter: cardNumberFilter || null,
     pokedexNumber: filters.pokedexNumber ?? null,

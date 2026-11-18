@@ -83,6 +83,7 @@ const catalogueSearchSchema = z.object({
   artist: z.string().trim().min(1).max(200).optional(),
   // A trainer's Pokémon, by trainer key ("lillie", "teamrocket").
   trainer: z.string().trim().min(1).max(200).optional(),
+  character: z.string().trim().min(1).max(100).optional(),
   // Preserved from Sets & codes: a Japanese-language set stays scoped to Japanese
   // printings after the jump into Catalogue (worker's catalogueFilters already
   // accepts this as `language`).

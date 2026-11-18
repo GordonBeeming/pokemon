@@ -1,3 +1,4 @@
+import { listTrainerDex } from '../../lib/trainer-dex';
 import { wantedMutationSchema, wantedQuerySchema } from '@pokedex/shared';
 import { listWanted, wantedScopes, setWanted } from '../../lib/wanted';
 import { binderActivityQuerySchema } from '@pokedex/shared';
@@ -645,11 +646,11 @@ desktopApiRoutes.post('/desktop/binders/:id/checkpoints', async (c) => {
   try {
     return c.json({
       ok: true,
-      checkpointId: await createBinderCheckpoint(
+      ...(await createBinderCheckpoint(
         c.env.DB,
         await desktopOwner(c, 'binders:write'),
         c.req.param('id'),
-      ),
+      )),
     });
   } catch (error) {
     return apiFailure(c, error);
@@ -696,6 +697,18 @@ desktopApiRoutes.put('/desktop/wanted', async (c) => {
         input.data.binderId,
         input.data.wanted,
       ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+desktopApiRoutes.use('/desktop/trainer-dex*', requireDesktopBearer);
+desktopApiRoutes.get('/desktop/trainer-dex', async (c) => {
+  try {
+    return c.json({
+      ok: true,
+      ...(await listTrainerDex(c.env.DB, await desktopOwner(c, 'catalogue:read'))),
     });
   } catch (error) {
     return apiFailure(c, error);

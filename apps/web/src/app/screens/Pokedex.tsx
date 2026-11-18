@@ -5,7 +5,7 @@ import {
   type NationalPokedexEntry,
   POKEMON_DISCOVERY_CATEGORIES,
 } from '@pokedex/shared';
-import { useNavigate } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   recentlyDiscoveredSpecies,
@@ -156,6 +156,13 @@ export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
         <div>
           <h1>Plan the full National Pokédex.</h1>
           <p>Open a species to see every English printing of it.</p>
+          <Link
+            className="trainer-dex-entry-link"
+            to="/trainer-dex"
+            search={{ q: '', region: 'all', available: true, page: 1 }}
+          >
+            Trainer Dex
+          </Link>
         </div>
         <div className="pokedex-progress" aria-label={`${ownedSpecies} of 1,025 species owned`}>
           <strong>{ownedSpecies.toLocaleString('en-AU')}</strong>

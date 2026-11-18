@@ -18,6 +18,11 @@ let root: Root;
 let container: HTMLDivElement;
 const result: BinderActivityResult = {
   selectedBatch: 'before',
+  pendingChanges: 3,
+  sections: [
+    { id: 'bookmark:Kanto Art', name: 'Kanto Art' },
+    { id: 'bookmark:Johto', name: 'Johto' },
+  ],
   batches: [
     { id: 'current', createdAt: 100, count: 0 },
     { id: 'before', createdAt: 50, count: 1 },
@@ -40,7 +45,8 @@ const result: BinderActivityResult = {
       number: '7',
       language: 'en',
       pokedexNumber: 7,
-      region: 'Kanto',
+      region: null,
+      sectionName: 'Kanto Art',
       imageLowUrl: null,
     },
   ],
@@ -49,7 +55,7 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   vi.useFakeTimers();
   mocks.read.mockReset().mockResolvedValue(result);
-  mocks.checkpoint.mockReset().mockResolvedValue('new');
+  mocks.checkpoint.mockReset().mockResolvedValue({ ok: true, checkpointId: 'new', created: true });
   container = document.createElement('div');
   document.body.replaceChildren(container);
   root = createRoot(container);
@@ -63,7 +69,7 @@ async function settle() {
 }
 function button(text: string) {
   const match = Array.from(container.querySelectorAll('button')).find(
-    (b) => b.textContent === text,
+    (b) => b.textContent === text || b.getAttribute('aria-label') === text,
   );
   if (!match) throw new Error(`Missing button ${text}`);
   return match;
@@ -72,17 +78,20 @@ async function open() {
   act(() => root.render(<BinderActivity binderId="b" revision={1} />));
   await settle();
 }
-it('supports multiple regions, sorts and checkpoint navigation', async () => {
+it('supports multiple bookmark sections, sorts and checkpoint navigation', async () => {
   await open();
   expect(container.textContent).toContain('Squirtle');
-  expect(container.textContent).toContain('AEST');
+  expect(container.textContent).toContain('Kanto Art');
   const checks = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
   act(() => {
     checks[0]?.click();
     checks[1]?.click();
   });
   await settle();
-  expect(mocks.read.mock.lastCall?.[1].get('regions')).toBe('Kanto,Johto');
+  expect(JSON.parse(mocks.read.mock.lastCall?.[1].get('sections') ?? '[]')).toEqual([
+    'bookmark:Kanto Art',
+    'bookmark:Johto',
+  ]);
   const sort = Array.from(container.querySelectorAll('select')).find((s) =>
     s.parentElement?.textContent?.startsWith('Sort by'),
   );
@@ -120,4 +129,42 @@ it('shows fetch and checkpoint failures without showing stale results as current
   });
   expect(container.querySelector('[role="alert"]')).not.toBeNull();
   expect(container.textContent).not.toContain('Checkpoint created');
+});
+
+it('disables checkpoints when the current batch has no changes even while viewing history', async () => {
+  mocks.read.mockResolvedValue({ ...result, pendingChanges: 0 });
+  await open();
+  expect(button('Create checkpoint').disabled).toBe(true);
+  act(() => button('Create checkpoint').click());
+  expect(mocks.checkpoint).not.toHaveBeenCalled();
+});
+it('reports an empty concurrent checkpoint as a no-op', async () => {
+  mocks.checkpoint.mockResolvedValue({ ok: true, checkpointId: 'existing', created: false });
+  await open();
+  await act(async () => {
+    button('Create checkpoint').click();
+    await Promise.resolve();
+  });
+  await settle();
+  expect(container.textContent).toContain('No new changes to checkpoint.');
+  expect(container.textContent).not.toContain('Checkpoint created.');
+});
+
+it('keeps a selected section visible when a different batch has no matches for it', async () => {
+  mocks.read.mockResolvedValueOnce({
+    ...result,
+    sections: [...result.sections, { id: 'unbookmarked', name: 'Unbookmarked' }],
+  });
+  await open();
+  const label = Array.from(container.querySelectorAll('label')).find(
+    (l) => l.textContent === 'Unbookmarked',
+  );
+  const checkbox = label?.querySelector('input');
+  if (!checkbox) throw new Error('Missing unbookmarked filter');
+  act(() => checkbox.click());
+  await settle();
+  const retained = Array.from(container.querySelectorAll('label'))
+    .find((l) => l.textContent === 'Unbookmarked')
+    ?.querySelector('input');
+  expect(retained?.checked).toBe(true);
 });

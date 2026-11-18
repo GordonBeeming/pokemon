@@ -17,6 +17,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/wanted', label: 'Wanted', icon: 'star', railOnly: true },
   { to: '/sets', label: 'Sets', icon: 'sets' },
   { to: '/illustrators', label: 'Illustrators', icon: 'illustrator', railOnly: true },
-  { to: '/trainers', label: 'Trainers', icon: 'people', railOnly: true },
+  { to: '/trainer-dex', label: 'Trainer Dex', icon: 'people', railOnly: true },
+  { to: '/trainers', label: 'Trainer Pokémon', icon: 'card', railOnly: true },
   { to: '/settings', label: 'Settings', icon: 'settings' },
 ];
