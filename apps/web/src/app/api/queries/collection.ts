@@ -132,6 +132,7 @@ export function useRemoveCollectionCopy(cardId: string) {
         body: collectionRemoveRequestSchema.parse(input),
       }).then((body) => body.state),
     onSuccess: (state) => {
+      void queryClient.invalidateQueries({ queryKey: ['wanted', 'list'] });
       applyCollectionState(queryClient, cardId, state);
       void queryClient.invalidateQueries({ queryKey: queryKeys.catalogue.binderMatches(cardId) });
       void queryClient.invalidateQueries({ queryKey: ['binders'] });

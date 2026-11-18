@@ -1,5 +1,6 @@
 import { useState, type ReactElement } from 'react';
 import type { BinderSlotView } from '../../../api/queries/binders';
+import { useRemoveCollectionCopy } from '../../../api/queries/collection';
 import { useOverlayAction } from '../../../ui/overlay';
 import { binderErrorMessage } from '../model';
 import { Panel } from './Panel';
@@ -143,37 +144,99 @@ function BookmarkForm({
   );
 }
 
-/** A reserved sleeve is unreserved, not "removed": the wording follows what's there. */
+/** Removing a placement preserves the binder plan; deleting a target is separate. */
 export function RemovePanel({
   slot,
+  slotId,
+  target,
+  canRemoveCopy,
   pending,
   error,
+  onUnassign,
+  onCopyRemoved,
   onLeaveGap,
   onCloseGap,
   onClose,
 }: {
   slot: BinderSlotView;
+  slotId: string;
+  target: string;
+  canRemoveCopy: boolean;
   pending: boolean;
   error: string | null;
+  onUnassign: () => void;
+  onCopyRemoved: () => void;
   onLeaveGap: () => void;
   onCloseGap: () => void;
   onClose: () => void;
 }): ReactElement {
   const reserved = slot.entryKind === 'reserved';
+  const [removeCopy, setRemoveCopy] = useState(false);
+  const remove = useRemoveCollectionCopy(slot.assignedCardId ?? '');
+  const busy = pending || remove.isPending;
   return (
-    <Panel title={reserved ? 'Unreserve this sleeve' : 'Remove card'} onClose={onClose}>
-      <PanelError error={error} />
+    <Panel
+      title={reserved ? 'Unreserve this sleeve' : 'Remove from binder'}
+      onClose={() => {
+        if (!busy) onClose();
+      }}
+    >
+      <PanelError error={error ?? (remove.isError ? binderErrorMessage(remove.error) : null)} />
+      {slot.assignedCardId ? (
+        <section className="panel-section">
+          <h3>Remove the placed card</h3>
+          <p className="panel-help">
+            Keep this pocket targeting <strong>{target}</strong>.
+          </p>
+          <label className="panel-check">
+            <input
+              type="checkbox"
+              checked={removeCopy}
+              disabled={busy || !canRemoveCopy}
+              onChange={(e) => setRemoveCopy(e.target.checked)}
+            />
+            Also remove one owned copy from my collection
+          </label>
+          {!canRemoveCopy ? (
+            <p className="panel-help">
+              Collection copies can only be removed from the active binder.
+            </p>
+          ) : null}
+          <p className="panel-help">
+            {removeCopy
+              ? 'The placement and one owned copy will be removed together.'
+              : 'Your owned copy will remain in your collection, available to place elsewhere.'}
+          </p>
+          <button
+            type="button"
+            className="button-primary"
+            disabled={busy}
+            onClick={() => {
+              if (removeCopy) {
+                if (canRemoveCopy)
+                  void remove
+                    .mutateAsync({ source: 'pocket', slotId })
+                    .then(onCopyRemoved)
+                    .catch(() => {});
+              } else onUnassign();
+            }}
+          >
+            {busy ? 'Removing…' : 'Remove card · keep target'}
+          </button>
+        </section>
+      ) : null}
+      {slot.assignedCardId ? <h3>Remove the target instead</h3> : null}
       <p className="panel-help">
         {reserved
           ? 'The sleeve becomes empty. Closing the gap moves later targets back by one.'
-          : 'Removing the target keeps any owned copy in your collection. Closing the gap moves later targets back by one.'}
+          : 'These options delete the pocket target. Any owned copy stays in your collection. Closing the gap moves later targets back by one.'}
       </p>
       <div className="panel-actions panel-actions-stack">
-        <button type="button" disabled={pending} onClick={onLeaveGap}>
-          {reserved ? 'Unreserve this sleeve' : 'Remove card and leave gap'}
+        <button type="button" disabled={busy} onClick={onLeaveGap}>
+          {reserved ? 'Unreserve this sleeve' : 'Remove target and leave gap'}
         </button>
-        <button type="button" className="button-danger" disabled={pending} onClick={onCloseGap}>
-          {reserved ? 'Unreserve and close gap' : 'Remove and close gap'}
+        <button type="button" className="button-danger" disabled={busy} onClick={onCloseGap}>
+          {reserved ? 'Unreserve and close gap' : 'Remove target and close gap'}
         </button>
       </div>
     </Panel>

@@ -3,9 +3,11 @@ import {
   wantedListSchema,
   wantedScopesSchema,
   type WantedQuery,
+  type CatalogueCardView,
 } from '@pokedex/shared';
 import { nowSeconds } from './db';
 import { ApplicationError } from './log';
+import { resolveCatalogueCards } from './catalogue';
 
 async function requireCard(db: D1Database, ownerId: string, cardId: string) {
   const card = await db
@@ -87,14 +89,22 @@ const listing = `WITH pokemon AS (
 ), grouped AS (
  SELECT scope,MAX(binder_id) AS binder_id,MAX(target_kind) AS target_kind,MAX(card_id) AS card_id,MAX(pokemon_number) AS pokemon_number,target_key,MAX(label) AS label,MAX(manual) AS manual,SUM(unfilled) AS unfilled,MAX(created_at) AS created_at
  FROM raw GROUP BY scope,target_key
-), entries AS (
+), placements AS MATERIALIZED (
+ SELECT s.assigned_card_id AS card_id,b.id AS binder_id,COUNT(*) AS n
+ FROM binder_slots s JOIN binder_pages p ON p.id=s.binder_page_id
+ JOIN binder_versions v ON v.id=p.binder_version_id JOIN binders b ON b.active_version_id=v.id
+ WHERE b.owner_id=?1 AND s.assigned_card_id IS NOT NULL GROUP BY s.assigned_card_id,b.id
+), placed_any AS (SELECT card_id,SUM(n) AS n FROM placements GROUP BY card_id), entries AS (
  SELECT g.scope||':'||g.target_key AS key,g.scope,g.binder_id AS binderId,b.name AS binderName,g.card_id AS cardId,
  COALESCE(c.name,pk.name,g.label,'Unavailable card') AS name,c.set_name AS setName,c.number,c.language,
  COALESCE(c.pokedex_number,g.pokemon_number) AS pokedexNumber,g.manual,g.unfilled,g.created_at AS createdAt,g.target_kind AS targetKind,
  COALESCE(cc.quantity,0) AS ownedQuantity,
+ COALESCE(CASE WHEN g.binder_id IS NULL THEN pa.n ELSE pb.n END,0) AS placedCount,
  CASE WHEN art.card_id IS NOT NULL OR EXISTS(SELECT 1 FROM card_sources src WHERE src.card_id=preview.id AND src.provider='tcgdex') THEN preview.id ELSE NULL END AS artCardId
  FROM grouped g LEFT JOIN binders b ON b.id=g.binder_id AND b.owner_id=?1
  LEFT JOIN catalogue_cards c ON c.id=g.card_id AND (c.owner_id IS NULL OR c.owner_id=?1)
+ LEFT JOIN placements pb ON pb.card_id=g.card_id AND pb.binder_id=g.binder_id
+ LEFT JOIN placed_any pa ON pa.card_id=g.card_id
  LEFT JOIN pokemon pk ON pk.number=g.pokemon_number
  LEFT JOIN collection_cards cc ON cc.owner_id=?1 AND cc.card_id=c.id
  LEFT JOIN species_representatives representative ON representative.owner_id=?1 AND representative.pokedex_number=g.pokemon_number
@@ -103,10 +113,18 @@ const listing = `WITH pokemon AS (
  WHERE (g.binder_id IS NULL OR b.id IS NOT NULL) AND (g.card_id IS NULL OR c.id IS NOT NULL)
 ), filtered AS (
  SELECT * FROM entries WHERE instr(lower(name||' '||COALESCE(setName,'')||' '||COALESCE(number,'')||' '||COALESCE(binderName,'')),lower(?4))>0
+ AND (?6='all' OR (?6='placed' AND placedCount>0) OR (?6='not-placed' AND placedCount=0))
 )`;
 export async function listWanted(db: D1Database, ownerId: string, query: WantedQuery) {
   await requireBinder(db, ownerId, query.scope);
-  const values = [ownerId, query.scope, query.includeUnfilled ? 1 : 0, query.q, pokemonNames];
+  const values = [
+    ownerId,
+    query.scope,
+    query.includeUnfilled ? 1 : 0,
+    query.q,
+    pokemonNames,
+    query.placement,
+  ];
   const total = await db
     .prepare(`${listing} SELECT COUNT(*) AS total FROM filtered`)
     .bind(...values)
@@ -118,7 +136,7 @@ export async function listWanted(db: D1Database, ownerId: string, query: WantedQ
     set: 'setName IS NULL,setName COLLATE NOCASE,number,name COLLATE NOCASE,key',
   }[query.sort];
   const rows = await db
-    .prepare(`${listing} SELECT * FROM filtered ORDER BY ${order} LIMIT 100 OFFSET ?6`)
+    .prepare(`${listing} SELECT * FROM filtered ORDER BY ${order} LIMIT 100 OFFSET ?7`)
     .bind(...values, query.offset)
     .all<{
       key: string;
@@ -136,12 +154,18 @@ export async function listWanted(db: D1Database, ownerId: string, query: WantedQ
       createdAt: number;
       targetKind: string;
       ownedQuantity: number;
+      placedCount: number;
       artCardId: string | null;
     }>();
+  const cardIds = [...new Set(rows.results.flatMap((row) => (row.cardId ? [row.cardId] : [])))];
+  const cards = new Map<string, CatalogueCardView>(
+    (await resolveCatalogueCards(db, ownerId, cardIds, true)).map((card) => [card.id, card]),
+  );
   const count = total?.total ?? 0;
   return wantedListSchema.parse({
     entries: rows.results.map(({ artCardId, manual, ...row }) => ({
       ...row,
+      card: row.cardId ? (cards.get(row.cardId) ?? null) : null,
       manual: manual === 1,
       imageLowUrl: artCardId ? `/api/art/${encodeURIComponent(artCardId)}/low` : null,
     })),

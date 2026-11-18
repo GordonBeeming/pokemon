@@ -99,6 +99,18 @@ describe('removeCollectionCopy', () => {
     const { slotId } = await binderWithAssignedPocket(db);
     const state = await removeCollectionCopy(db, 'owner', 'card-1', { source: 'pocket', slotId });
     expect(state.quantity).toBe(0);
+    const target = await db
+      .prepare(
+        'SELECT entry_kind,pokemon_number,card_id,assigned_card_id FROM binder_slots WHERE binder_page_id=? AND row_index=0 AND column_index=0',
+      )
+      .bind(slotId.split(':')[0])
+      .first();
+    expect(target).toEqual({
+      entry_kind: 'pokemon',
+      pokemon_number: 7,
+      card_id: null,
+      assigned_card_id: null,
+    });
     const assigned = await db
       .prepare("SELECT COUNT(*) AS count FROM binder_slots WHERE assigned_card_id = 'card-1'")
       .first<{ count: number }>();

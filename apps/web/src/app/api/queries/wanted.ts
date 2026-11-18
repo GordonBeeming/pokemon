@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { apiFetch } from '../client';
 export interface WantedFilters {
   scope: string;
+  placement?: 'all' | 'placed' | 'not-placed';
   includeUnfilled: boolean;
   q: string;
   sort: 'name' | 'newest' | 'pokedex' | 'set';
@@ -15,7 +16,7 @@ export function useWantedList(filters: WantedFilters, enabled = true) {
     enabled,
     queryFn: ({ signal }) =>
       apiFetch(
-        `/api/wanted?${new URLSearchParams({ scope: filters.scope, includeUnfilled: String(filters.includeUnfilled), q: filters.q, sort: filters.sort, offset: String(filters.offset) })}`,
+        `/api/wanted?${new URLSearchParams({ scope: filters.scope, placement: filters.placement ?? 'all', includeUnfilled: String(filters.includeUnfilled), q: filters.q, sort: filters.sort, offset: String(filters.offset) })}`,
         z.object({ ok: z.literal(true), list: wantedListSchema }),
         { signal },
       ).then((d) => d.list),
@@ -40,7 +41,10 @@ export function useSetWanted() {
         method: 'PUT',
         body: input,
       }),
-    onSuccess: () => client.invalidateQueries({ queryKey: ['wanted'] }),
+    onSuccess: (result, input) => {
+      client.setQueryData(['wanted', 'card', input.cardId], result.scopes);
+      return client.invalidateQueries({ queryKey: ['wanted', 'list'] });
+    },
   });
 }
 export function wantedPrinting(entry: WantedEntry): string {

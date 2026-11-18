@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { catalogueCardViewSchema } from './index';
 export const wantedMutationSchema = z
   .object({
     cardId: z.string().trim().min(1).max(128),
@@ -8,6 +9,7 @@ export const wantedMutationSchema = z
   .strict();
 export const wantedQuerySchema = z.object({
   scope: z.string().min(1).max(128).default('all'),
+  placement: z.enum(['all', 'placed', 'not-placed']).default('all'),
   includeUnfilled: z
     .enum(['true', 'false'])
     .default('false')
@@ -26,6 +28,10 @@ export const wantedEntrySchema = z.object({
   binderId: z.string().nullable(),
   binderName: z.string().nullable(),
   cardId: z.string().nullable(),
+  card: z
+    .lazy(() => catalogueCardViewSchema)
+    .nullable()
+    .default(null),
   name: z.string(),
   setName: z.string().nullable(),
   number: z.string().nullable(),
@@ -35,6 +41,7 @@ export const wantedEntrySchema = z.object({
   manual: z.boolean(),
   unfilled: z.number().int(),
   ownedQuantity: z.number().int(),
+  placedCount: z.number().int().nonnegative().default(0),
   createdAt: z.number().int(),
   targetKind: z.string(),
 });

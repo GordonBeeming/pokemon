@@ -1,5 +1,6 @@
 import { useEffect, type ReactElement } from 'react';
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
+import { anyFrameCard, frameCardFrom } from './binders/model';
 import { catalogueSearch } from '../routes/search-params';
 import { useBinders } from '../api/queries/binders';
 import {
@@ -18,6 +19,7 @@ export function Wanted({
   onSearch: (search: WantedFilters) => void;
 }): ReactElement {
   const binders = useBinders();
+  const navigate = useNavigate();
   const scope =
     search.scope === 'all' ||
     search.scope === 'general' ||
@@ -35,7 +37,12 @@ export function Wanted({
   const list = useWantedList(normalized, !needsBinders || binders.data !== undefined);
   const mutation = useSetWanted();
   function change(patch: Partial<WantedFilters>) {
-    onSearch({ ...normalized, ...patch, offset: patch.offset ?? 0 });
+    onSearch({
+      ...normalized,
+      placement: normalized.placement ?? 'all',
+      ...patch,
+      offset: patch.offset ?? 0,
+    });
   }
   return (
     <section className="wanted-screen">
@@ -70,6 +77,26 @@ export function Wanted({
                 {b.name}
               </option>
             ))}
+          </select>
+        </label>
+        <label>
+          Placement
+          <select
+            value={search.placement ?? 'all'}
+            onChange={(e) =>
+              change({
+                placement:
+                  e.target.value === 'placed'
+                    ? 'placed'
+                    : e.target.value === 'not-placed'
+                      ? 'not-placed'
+                      : 'all',
+              })
+            }
+          >
+            <option value="all">All wanted cards</option>
+            <option value="placed">Already placed in binder</option>
+            <option value="not-placed">Not placed in binder</option>
           </select>
         </label>
         <label>
@@ -153,19 +180,33 @@ export function Wanted({
                 <li key={entry.key} className="wanted-item">
                   <div className="wanted-art">
                     <CardFrame
-                      frame={false}
-                      forceSolid
-                      state="owned"
-                      card={{
-                        id: entry.key,
-                        name: entry.name,
-                        frameType: null,
-                        rarityKey: null,
-                        setCode: null,
-                        number: entry.number,
-                        pokedexNumber: entry.pokedexNumber,
-                        imageUrl: entry.imageLowUrl,
-                      }}
+                      state={entry.ownedQuantity > 0 ? 'owned' : 'unowned'}
+                      variant={entry.cardId ? 'card' : 'any'}
+                      onView={
+                        entry.cardId
+                          ? () =>
+                              void navigate({
+                                to: '/card/$cardId',
+                                params: { cardId: entry.cardId! },
+                              })
+                          : undefined
+                      }
+                      card={
+                        entry.card
+                          ? frameCardFrom(entry.card)
+                          : entry.pokedexNumber && !entry.cardId
+                            ? anyFrameCard(entry.pokedexNumber)
+                            : {
+                                id: entry.key,
+                                name: entry.name,
+                                frameType: null,
+                                rarityKey: null,
+                                setCode: null,
+                                number: entry.number,
+                                pokedexNumber: entry.pokedexNumber,
+                                imageUrl: entry.imageLowUrl,
+                              }
+                      }
                     />
                   </div>
                   <div className="wanted-details">
@@ -192,6 +233,12 @@ export function Wanted({
                       </p>
                     ) : null}
                     {entry.cardId ? <p>{entry.ownedQuantity} owned</p> : null}
+                    {entry.placedCount > 0 ? (
+                      <p className="wanted-scope">
+                        {entry.placedCount} placed{' '}
+                        {entry.binderId ? 'in this binder' : 'in your binders'}
+                      </p>
+                    ) : null}
                     <div className="wanted-item-actions">
                       {entry.cardId ? (
                         <Link to="/card/$cardId" params={{ cardId: entry.cardId }}>

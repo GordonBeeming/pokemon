@@ -94,7 +94,14 @@ export function Home({
           <Link
             className="primary-button"
             to="/wanted"
-            search={{ scope: 'all', includeUnfilled: false, q: '', sort: 'name', offset: 0 }}
+            search={{
+              scope: 'all',
+              includeUnfilled: false,
+              placement: 'all',
+              q: '',
+              sort: 'name',
+              offset: 0,
+            }}
           >
             Wanted list
           </Link>

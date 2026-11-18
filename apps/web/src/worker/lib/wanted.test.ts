@@ -97,3 +97,60 @@ it('supports searching, stable sorting and pagination without losing later wants
   ]);
   expect((await list({ offset: '1' })).entries).toHaveLength(1);
 });
+
+it('provides the standard catalogue metadata for wanted printings without assigning or adding copies', async () => {
+  const { db, database, binder, list } = await setup();
+  database.exec(`UPDATE catalogue_cards SET types='["Water"]',rarity='Common' WHERE id='squirtle';
+ INSERT INTO catalogue_sets(set_id,language,set_name,abbreviation,abbreviation_source,updated_at) VALUES('base','en','Base','BS','tcgdex',1);
+ INSERT INTO card_current_prices(card_id,source,native_amount_micros,native_currency,source_captured_at,amount_aud_micros,updated_at) VALUES('squirtle','tcgplayer',1000000,'USD',1,1500000,1);`);
+  await setWanted(db, 'a', 'squirtle', binder.version.binderId, true);
+  const wanted = await list();
+  expect(wanted.entries[0]?.card).toMatchObject({
+    id: 'squirtle',
+    setCode: 'BS',
+    frameType: 'water',
+    rarityKey: 'C',
+    pokedexNumber: 7,
+    collection: { quantity: 3 },
+    price: { amountAud: 1.5 },
+  });
+  expect(
+    database
+      .prepare('SELECT COUNT(*) AS n FROM binder_slots WHERE assigned_card_id IS NOT NULL')
+      .get(),
+  ).toEqual({ n: 0 });
+  expect(
+    database
+      .prepare("SELECT quantity FROM collection_cards WHERE owner_id='a' AND card_id='squirtle'")
+      .get(),
+  ).toEqual({ quantity: 3 });
+});
+
+it('filters placed wants against their own binder and General wants against any active owned binder', async () => {
+  const { db, database, binder, list } = await setup();
+  const second = await createBinder(db, 'a', 'Second', { kind: '2x2', rows: 2, columns: 2 }, 4);
+  await setWanted(db, 'a', 'squirtle', binder.version.binderId, true);
+  await setWanted(db, 'a', 'squirtle', second.version.binderId, true);
+  await setWanted(db, 'a', 'squirtle', null, true);
+  // Owned copies alone must not count as placements.
+  expect((await list({ placement: 'placed' })).total).toBe(0);
+  await setBinderSlot(db, 'a', second.version.id, 0, 0, 0, 'squirtle', second.version.revision, {
+    action: 'existing',
+  });
+  const placed = await list({ placement: 'placed' });
+  expect(placed.total).toBe(2);
+  expect(placed.entries.map((e) => e.scope).sort()).toEqual(
+    ['general', second.version.binderId].sort(),
+  );
+  expect(placed.entries.every((e) => e.placedCount === 1)).toBe(true);
+  const unplaced = await list({ placement: 'not-placed' });
+  expect(unplaced.total).toBe(1);
+  expect(unplaced.entries[0]?.binderId).toBe(binder.version.binderId);
+  expect((await list({ scope: binder.version.binderId, placement: 'placed' })).total).toBe(0);
+  // Placing never deletes a manual want; the user reviews/removes it on Wanted.
+  expect((await list()).total).toBe(3);
+  database
+    .prepare('UPDATE binders SET active_version_id=NULL WHERE id=?')
+    .run(second.version.binderId);
+  expect((await list({ placement: 'placed' })).total).toBe(0);
+});

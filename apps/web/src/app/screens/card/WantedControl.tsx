@@ -21,7 +21,14 @@ export function WantedControl({
         <h3>Wanted</h3>
         <Link
           to="/wanted"
-          search={{ scope: 'all', includeUnfilled: false, q: '', sort: 'name', offset: 0 }}
+          search={{
+            scope: 'all',
+            includeUnfilled: false,
+            placement: 'all',
+            q: '',
+            sort: 'name',
+            offset: 0,
+          }}
         >
           Open shopping list
         </Link>

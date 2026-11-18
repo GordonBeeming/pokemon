@@ -1041,7 +1041,14 @@ export function BinderView({
             <Link
               className="wanted-binder-link"
               to="/wanted"
-              search={{ scope: binderId, includeUnfilled: false, q: '', sort: 'name', offset: 0 }}
+              search={{
+                scope: binderId,
+                includeUnfilled: false,
+                placement: 'all',
+                q: '',
+                sort: 'name',
+                offset: 0,
+              }}
             >
               Wanted
             </Link>
@@ -1188,7 +1195,14 @@ export function BinderView({
                 className="wanted-binder-link"
                 to="/wanted"
                 onClick={closePhoneSheet}
-                search={{ scope: binderId, includeUnfilled: false, q: '', sort: 'name', offset: 0 }}
+                search={{
+                  scope: binderId,
+                  includeUnfilled: false,
+                  placement: 'all',
+                  q: '',
+                  sort: 'name',
+                  offset: 0,
+                }}
               >
                 Wanted
               </Link>
@@ -1390,11 +1404,7 @@ export function BinderView({
           onAddAndPlace={(card, place) =>
             void run(`Added a copy of ${card.name} and placed it.`, place)
           }
-          onUnassign={() =>
-            void run('Physical placement removed.', (revision) =>
-              binderApi.assign(versionId, selected, null, revision),
-            )
-          }
+          onUnassign={() => setPanel('remove')}
           onPageBreak={(starts) =>
             void run(starts ? 'Target starts a new page.' : 'Page break removed.', (revision) =>
               binderApi.pageBreak(versionId, selected, starts, revision),
@@ -1522,6 +1532,19 @@ export function BinderView({
       {panel === 'remove' && selectedSlot && selected && versionId ? (
         <RemovePanel
           slot={selectedSlot}
+          slotId={search.sel ?? ''}
+          target={pocketTargetDescription(selectedSlot, cards)}
+          canRemoveCopy={version?.status === 'active'}
+          onUnassign={() =>
+            void run('Card unplaced. The target and your owned copy are unchanged.', (revision) =>
+              binderApi.assign(versionId, selected, null, revision),
+            )
+          }
+          onCopyRemoved={() => {
+            closePanel();
+            if (phone) deselect();
+            toast('success', 'Card unplaced and one owned copy removed. The target is unchanged.');
+          }}
           pending={pending}
           error={writer.error}
           onLeaveGap={() =>

@@ -58,6 +58,7 @@ export function usePlaceCard(cardId: string) {
         body: cardPlaceRequestSchema.parse(input),
       }),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['wanted', 'list'] });
       void queryClient.invalidateQueries({ queryKey: queryKeys.catalogue.binderMatches(cardId) });
       void queryClient.invalidateQueries({ queryKey: queryKeys.catalogue.card(cardId) });
       void queryClient.invalidateQueries({ queryKey: ['catalogue', 'search'] });

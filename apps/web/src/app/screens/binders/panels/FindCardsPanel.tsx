@@ -1,5 +1,7 @@
 import type { FrameType } from '@pokedex/shared';
-import type { ReactElement } from 'react';
+import { useState, type ReactElement } from 'react';
+import { SegmentedControl } from '../../../ui/SegmentedControl';
+import { WantedTile } from './WantedTile';
 import type {
   BinderCandidate,
   BinderMutation,
@@ -112,82 +114,129 @@ export function FindCardsPanel({
   onPageBreak: (startsNewPage: boolean) => void;
   onClose: () => void;
 }): ReactElement {
+  const [mode, setMode] = useState<'place' | 'wanted'>('place');
+  const [wantedScope, setWantedScope] = useState<'binder' | 'general'>('binder');
   const usableSpares = (spares ?? []).filter((spare) => spare.candidate.available > 0);
   const spareIds = new Set(usableSpares.map((spare) => spare.candidate.cardId));
   const addDisabled = !editable || pending || addBlockedReason !== null;
-  const tile = (card: ResolvedCard): ReactElement => (
-    <AddAndPlaceTile
-      key={card.id}
-      card={card}
-      palette={palette}
-      disabled={addDisabled}
-      binderId={binderId}
-      slotId={slotId}
-      onAddAndPlace={onAddAndPlace}
-    />
-  );
+  const tile = (card: ResolvedCard): ReactElement =>
+    mode === 'wanted' ? (
+      <WantedTile
+        key={`${card.id}:${wantedScope}`}
+        card={card}
+        palette={palette}
+        binderId={wantedScope === 'binder' ? binderId : null}
+      />
+    ) : (
+      <AddAndPlaceTile
+        key={`${card.id}:${wantedScope}`}
+        card={card}
+        palette={palette}
+        disabled={addDisabled}
+        binderId={binderId}
+        slotId={slotId}
+        onAddAndPlace={onAddAndPlace}
+      />
+    );
 
   return (
     <Panel title={`Find cards · ${title}`} onClose={onClose} wide>
-      {error ? (
+      <div className="find-cards-mode">
+        <SegmentedControl
+          label="Card finder mode"
+          value={mode}
+          onChange={setMode}
+          disabled={pending}
+          options={[
+            { value: 'place', label: 'Place cards' },
+            { value: 'wanted', label: 'Wishlist' },
+          ]}
+        />
+        {mode === 'wanted' ? (
+          <label className="panel-field">
+            <span>Wishlist</span>
+            <select
+              aria-label="Wishlist"
+              value={wantedScope}
+              onChange={(e) => setWantedScope(e.target.value === 'general' ? 'general' : 'binder')}
+            >
+              <option value="binder">This binder</option>
+              <option value="general">General</option>
+            </select>
+          </label>
+        ) : null}
+      </div>
+      {mode === 'wanted' ? (
+        <p className="panel-help">
+          Tap cards to add or remove them from this wishlist. Your collection and this pocket stay
+          unchanged.
+        </p>
+      ) : null}
+      {error && mode === 'place' ? (
         <p role="alert" className="panel-error">
           {error}
         </p>
       ) : null}
-      {slot.assignedCardId ? (
+      {mode === 'place' && slot.assignedCardId ? (
         <div className="panel-actions">
           <p className="panel-help">A copy is placed here. Choose another to swap it.</p>
           <button type="button" disabled={!editable || pending} onClick={onUnassign}>
-            Remove physical placement
+            Remove placed card…
           </button>
         </div>
       ) : null}
 
-      <section className="panel-section" aria-labelledby="find-owned-heading">
-        <h3 id="find-owned-heading">Your spare copies</h3>
-        {sparesLoading ? (
-          <p role="status">Loading your copies…</p>
-        ) : sparesError ? (
-          <p role="alert" className="panel-error">
-            {sparesError}
-          </p>
-        ) : usableSpares.length > 0 ? (
-          <div className="card-picker-grid" aria-label="Your spare copies">
-            {usableSpares.map(({ candidate, card }) => (
-              <button
-                key={candidate.cardId}
-                type="button"
-                className="card-picker-item find-cards-item"
-                disabled={!editable || pending}
-                onClick={() => onAssign(candidate)}
-              >
-                {card ? (
-                  <CardFrame card={frameCardFrom(card)} state="owned" palette={palette} />
-                ) : null}
-                <span className="card-picker-name" title={candidate.name}>
-                  {candidate.name}
-                </span>
-                <span
-                  className="card-picker-meta"
-                  title={`${candidate.number} · ${candidate.setName} · ${candidate.available} spare`}
+      {mode === 'place' ? (
+        <section className="panel-section" aria-labelledby="find-owned-heading">
+          <h3 id="find-owned-heading">Your spare copies</h3>
+          {sparesLoading ? (
+            <p role="status">Loading your copies…</p>
+          ) : sparesError ? (
+            <p role="alert" className="panel-error">
+              {sparesError}
+            </p>
+          ) : usableSpares.length > 0 ? (
+            <div className="card-picker-grid" aria-label="Your spare copies">
+              {usableSpares.map(({ candidate, card }) => (
+                <button
+                  key={candidate.cardId}
+                  type="button"
+                  className="card-picker-item find-cards-item"
+                  disabled={!editable || pending}
+                  onClick={() => onAssign(candidate)}
                 >
-                  {candidate.number} · {candidate.setCode ?? candidate.setName} ·{' '}
-                  {candidate.available} spare
-                </span>
-                <span className="find-cards-action">Place</span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <p className="panel-help">No spare copy fits this pocket.</p>
-        )}
-      </section>
+                  {card ? (
+                    <CardFrame card={frameCardFrom(card)} state="owned" palette={palette} />
+                  ) : null}
+                  <span className="card-picker-name" title={candidate.name}>
+                    {candidate.name}
+                  </span>
+                  <span
+                    className="card-picker-meta"
+                    title={`${candidate.number} · ${candidate.setName} · ${candidate.available} spare`}
+                  >
+                    {candidate.number} · {candidate.setCode ?? candidate.setName} ·{' '}
+                    {candidate.available} spare
+                  </span>
+                  <span className="find-cards-action">Place</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="panel-help">No spare copy fits this pocket.</p>
+          )}
+        </section>
+      ) : null}
 
       <section className="panel-section" aria-labelledby="find-printings-heading">
-        <h3 id="find-printings-heading">Add a copy</h3>
-        {addBlockedReason ? <p className="panel-help">{addBlockedReason}</p> : null}
+        <h3 id="find-printings-heading">
+          {mode === 'wanted' ? 'Cards for your wishlist' : 'Add a copy'}
+        </h3>
+        {mode === 'place' && addBlockedReason ? (
+          <p className="panel-help">{addBlockedReason}</p>
+        ) : null}
         {exactCard ? (
-          spareIds.has(exactCard.id) ? (
+          mode === 'place' && spareIds.has(exactCard.id) ? (
             <p className="panel-help">You have a spare copy of this card above.</p>
           ) : (
             <div className="card-picker-grid" aria-label="Printings that fit">
@@ -202,7 +251,7 @@ export function FindCardsPanel({
             autoSearch
             searchLabel="Narrow by set, number or name"
             placeholder="Set, number or name"
-            hideIds={spareIds}
+            hideIds={mode === 'place' ? spareIds : undefined}
             renderItem={tile}
           />
         ) : (slot.entryKind === 'illustrator' ||
@@ -224,7 +273,7 @@ export function FindCardsPanel({
             autoSearch
             searchLabel="Narrow by name, set or number"
             placeholder="Name, set or number"
-            hideIds={spareIds}
+            hideIds={mode === 'place' ? spareIds : undefined}
             renderItem={tile}
           />
         ) : slot.entryKind === 'set' && slot.setId && slot.setLanguage ? (
@@ -235,7 +284,7 @@ export function FindCardsPanel({
             autoSearch
             searchLabel="Narrow by name or number"
             placeholder="Name or number"
-            hideIds={spareIds}
+            hideIds={mode === 'place' ? spareIds : undefined}
             renderItem={tile}
           />
         ) : (
@@ -243,7 +292,7 @@ export function FindCardsPanel({
         )}
       </section>
 
-      {!reservedPage ? (
+      {mode === 'place' && !reservedPage ? (
         <label className="panel-check">
           <input
             type="checkbox"

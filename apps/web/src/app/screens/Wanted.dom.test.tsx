@@ -2,7 +2,7 @@
 import { act, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
-import type { WantedEntry } from '@pokedex/shared';
+import { catalogueCardViewSchema, type WantedEntry } from '@pokedex/shared';
 import type { WantedFilters } from '../api/queries/wanted';
 import { Wanted } from './Wanted';
 import { WantedControl } from './card/WantedControl';
@@ -16,6 +16,30 @@ const entry: WantedEntry = {
   binderId: null,
   binderName: null,
   cardId: 'card',
+  card: catalogueCardViewSchema.parse({
+    id: 'card',
+    name: 'Squirtle',
+    language: 'en',
+    category: 'pokemon',
+    setId: 'base',
+    setName: 'Base Set',
+    number: '63',
+    pokedexNumber: 7,
+    frameType: 'water',
+    rarityKey: 'C',
+    setCode: 'BS',
+    imageLowUrl: null,
+    imageHighUrl: null,
+    collection: null,
+    price: {
+      amountAud: 3.5,
+      nativeAmount: 2,
+      nativeCurrency: 'USD',
+      source: 'tcgplayer',
+      sourceCapturedAt: '2026-11-18T00:00:00.000Z',
+      fxDate: '2026-11-18',
+    },
+  }),
   name: 'Squirtle',
   setName: 'Base Set',
   number: '63',
@@ -25,6 +49,7 @@ const entry: WantedEntry = {
   manual: true,
   unfilled: 0,
   ownedQuantity: 1,
+  placedCount: 1,
   createdAt: 1,
   targetKind: 'exact-card',
 };
@@ -45,6 +70,7 @@ vi.mock('../api/queries/wanted', async (original) => ({
   },
 }));
 vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => vi.fn(),
   Link: ({
     children,
     to,
@@ -113,6 +139,20 @@ for (const [device, width, height] of [
     expect(container.querySelector('a[href="/card/card"]')).not.toBeNull();
     expect(container.textContent).toContain('Base Set · 63 · EN');
     expect(container.textContent).toContain('1 owned');
+    expect(container.textContent).toContain('1 placed in your binders');
+    const placement = container.querySelectorAll('select')[1];
+    if (!placement) throw new Error('Missing placement filter');
+    act(() => {
+      placement.value = 'placed';
+      placement.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(mocks.list.mock.lastCall?.[0].placement).toBe('placed');
+    const frame = container.querySelector('.wanted-item .card-frame');
+    expect(frame?.classList.contains('card-frame-raw')).toBe(false);
+    expect(frame?.textContent).toContain('#007');
+    expect(frame?.textContent).toContain('BS');
+    expect(frame?.querySelector('.card-frame-rarity')).not.toBeNull();
+    expect(frame?.querySelector('.card-frame-price')?.textContent).toBe('~A$4');
   });
 }
 it('marks a specific printing for General or a chosen binder without placing it', () => {
