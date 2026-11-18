@@ -79,3 +79,19 @@ it('matches the directory counts for every character and both people on a TAG TE
     3,
   );
 });
+
+it('includes named cast from newer card sets and titled cards whose names omit the character', async () => {
+  const { raw, db } = setup();
+  raw.exec(`INSERT INTO catalogue_cards(id,name,language,category,set_id,set_name,number,created_at,updated_at) VALUES
+ ('cedric','Cedric Juniper','en','trainer','lt','Legendary Treasures','1',1,1),('anthea','Anthea & Concordia','en','trainer','plasma','Plasma','2',1,1),
+ ('canari','Canari','en','trainer','asc','Ascended Heroes','3',1,1),('cassiopeia','Cassiopeia','en','trainer','sfa','Shrouded Fable','4',1,1),('fervor','Fervor','en','trainer','gym2','Gym Challenge','124',1,1);
+ INSERT INTO card_sources(provider,source_id,card_id,language,source_updated_at,checksum,active,imported_at) VALUES('tcgdex','gym2-124','fervor','en',1,'d',1,1);`);
+  const { trainers } = await listTrainerDex(db, 'a');
+  for (const key of ['cedricjuniper', 'anthea', 'concordia', 'canari', 'penny', 'blaine'])
+    expect(trainers.find((t) => t.key === key)?.cardCount).toBe(1);
+  expect(
+    (await searchCards(db, 'a', { character: 'penny', limit: 100, offset: 0 })).cards.map(
+      (c) => c.id,
+    ),
+  ).toEqual(['cassiopeia']);
+});

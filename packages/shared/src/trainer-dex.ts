@@ -75,6 +75,7 @@ const regionalNames: Record<TrainerRegion, readonly string[]> = {
     'Kimono Girl',
   ],
   Hoenn: [
+    'Aarune',
     'Brendan',
     'May',
     'Professor Birch',
@@ -162,6 +163,9 @@ const regionalNames: Record<TrainerRegion, readonly string[]> = {
     'Hugh',
     'N',
     'Professor Juniper',
+    'Cedric Juniper',
+    'Anthea',
+    'Concordia',
     'Cilan',
     'Chili',
     'Cress',
@@ -193,6 +197,15 @@ const regionalNames: Record<TrainerRegion, readonly string[]> = {
     'Cyrano',
   ],
   Kalos: [
+    'Cassius',
+    'Canari',
+    'Jacinthe',
+    'Jett',
+    'Grisham',
+    'Gwynn',
+    'Naveen',
+    'Philippe',
+    'Tarragon',
     'Calem',
     'Serena',
     'Shauna',
@@ -259,6 +272,7 @@ const regionalNames: Record<TrainerRegion, readonly string[]> = {
     'Ryuki',
   ],
   Galar: [
+    'Dan',
     'Gloria',
     'Victor',
     'Hop',
@@ -290,6 +304,7 @@ const regionalNames: Record<TrainerRegion, readonly string[]> = {
     'Shielbert',
   ],
   Hisui: [
+    'Choy',
     'Rei',
     'Akari',
     'Professor Laventon',
@@ -350,12 +365,13 @@ const regionalNames: Record<TrainerRegion, readonly string[]> = {
     'Ortega',
     'Eri',
   ],
-  Kitakami: ['Carmine', 'Kieran', 'Perrin', 'Briar'],
+  Kitakami: ['Carmine', 'Kieran', 'Perrin', 'Briar', 'Caretaker'],
   Pasio: ['Scottie', 'Bettie', 'Lear', 'Rachel', 'Sawyer', 'Paulo', 'Tina', 'Professor Bellis'],
-  Other: ['Professor Willow'],
+  Other: ['Professor Willow', 'Blanche', 'Candela', 'Spark'],
 };
 const aliases: Readonly<Record<string, readonly string[]>> = {
   daisyoak: ['Daisy'],
+  penny: ['Cassiopeia'],
   professoroak: ['Prof. Oak'],
   professorelm: ['Prof. Elm'],
   professorbirch: ['Prof. Birch'],
@@ -386,10 +402,12 @@ const additionalRegions: Readonly<Record<string, readonly TrainerRegion[]>> = {
   perrin: ['Paldea'],
   briar: ['Paldea'],
 };
+// Fervor artwork: https://bulbapedia.bulbagarden.net/wiki/Fervor_(Gym_Challenge_124)
 // Generic titles do not identify the person. Resolve these printings by provider id.
 // https://bulbapedia.bulbagarden.net/wiki/Professor%27s_Research_(TCG)
 // https://bulbapedia.bulbagarden.net/wiki/Boss%27s_Orders_(TCG)
 const cardIdentities: Readonly<Record<string, readonly string[]>> = {
+  blaine: ['gym2-124'],
   professoroak: ['cel25-23', 'cel25-24', 'sv08.5-122'],
   professorelm: ['sv08.5-123'],
   professorbirch: ['svp-221'],
