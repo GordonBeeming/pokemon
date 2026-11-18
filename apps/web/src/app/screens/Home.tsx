@@ -91,6 +91,13 @@ export function Home({
       <header className="page-heading">
         <h1>Your card room.</h1>
         <div className="header-actions">
+          <Link
+            className="primary-button"
+            to="/wanted"
+            search={{ scope: 'all', includeUnfilled: false, q: '', sort: 'name', offset: 0 }}
+          >
+            Wanted list
+          </Link>
           <Link className="primary-button" to="/catalogue" search={catalogueSearch.parse({})}>
             Find a card
           </Link>

@@ -1,3 +1,5 @@
+import { wantedMutationSchema, wantedQuerySchema } from '@pokedex/shared';
+import { listWanted, wantedScopes, setWanted } from '../../lib/wanted';
 import { binderActivityQuerySchema } from '@pokedex/shared';
 import { getBinderActivity, createBinderCheckpoint } from '../../lib/binder-activity';
 import { binderDestinationsQuerySchema } from './contracts';
@@ -647,6 +649,52 @@ desktopApiRoutes.post('/desktop/binders/:id/checkpoints', async (c) => {
         c.env.DB,
         await desktopOwner(c, 'binders:write'),
         c.req.param('id'),
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+
+desktopApiRoutes.use('/desktop/wanted*', requireDesktopBearer);
+desktopApiRoutes.get('/desktop/wanted', async (c) => {
+  try {
+    const input = wantedQuerySchema.safeParse(c.req.query());
+    if (!input.success) return c.json({ ok: false, error: 'invalid_filter' }, 400);
+    return c.json({
+      ok: true,
+      list: await listWanted(c.env.DB, await desktopOwner(c, 'catalogue:read'), input.data),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+desktopApiRoutes.get('/desktop/wanted/cards/:id', async (c) => {
+  try {
+    return c.json({
+      ok: true,
+      scopes: await wantedScopes(
+        c.env.DB,
+        await desktopOwner(c, 'catalogue:read'),
+        c.req.param('id'),
+      ),
+    });
+  } catch (error) {
+    return apiFailure(c, error);
+  }
+});
+desktopApiRoutes.put('/desktop/wanted', async (c) => {
+  try {
+    const input = wantedMutationSchema.safeParse(await parsedJson(c.req.raw));
+    if (!input.success) return c.json({ ok: false, error: 'invalid_body' }, 400);
+    return c.json({
+      ok: true,
+      scopes: await setWanted(
+        c.env.DB,
+        await desktopOwner(c, 'collection:write'),
+        input.data.cardId,
+        input.data.binderId,
+        input.data.wanted,
       ),
     });
   } catch (error) {

@@ -12,6 +12,14 @@ type SharedRoute = {
 
 const mutationId = '00000000-0000-4000-8000-000000000001';
 const sharedRoutes = [
+  { method: 'GET', browser: '/wanted', desktop: '/desktop/wanted' },
+  { method: 'GET', browser: '/wanted/cards/card-1', desktop: '/desktop/wanted/cards/card-1' },
+  {
+    method: 'PUT',
+    browser: '/wanted',
+    desktop: '/desktop/wanted',
+    body: { cardId: 'card-1', binderId: null, wanted: true },
+  },
   {
     method: 'GET',
     browser: '/binders/binder-1/activity',

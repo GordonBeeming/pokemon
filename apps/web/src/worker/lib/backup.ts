@@ -3,7 +3,7 @@ import { newId, nowSeconds } from './db';
 import { ApplicationError, describeError, logError, logInfo } from './log';
 
 const LEGACY_BACKUP_VERSION = 2 as const;
-const BACKUP_VERSION = 9 as const;
+const BACKUP_VERSION = 10 as const;
 const MAX_BACKUP_BYTES = 64 * 1024 * 1024;
 const MAX_BACKUP_CHUNK_BYTES = 1_500_000;
 const MAX_BACKUP_MANIFEST_BYTES = 1_000_000;
@@ -189,6 +189,15 @@ const checkpointRow = z
   })
   .strict();
 
+const wantedRow = z
+  .object({
+    scope: z.string().min(1),
+    card_id: z.string().min(1),
+    binder_id: z.string().nullable(),
+    created_at: z.number().int().nonnegative(),
+  })
+  .strict();
+
 const backupBundleSchema = z
   .object({
     version: z.literal(LEGACY_BACKUP_VERSION),
@@ -223,6 +232,7 @@ const backupKindSchema = z.enum([
   'art_manifest',
   'user_settings',
   'collection_events',
+  'wanted',
 ]);
 type BackupKind = z.infer<typeof backupKindSchema>;
 
@@ -246,6 +256,7 @@ const backupManifestSchema = z
       z.literal(6),
       z.literal(7),
       z.literal(8),
+      z.literal(9),
       z.literal(BACKUP_VERSION),
     ]),
     ownerId: z.string().min(1),
@@ -295,6 +306,7 @@ const backupRowSchemas = {
   art_manifest: artRow,
   user_settings: userSettingRow,
   collection_events: collectionEventRow,
+  wanted: wantedRow,
 } as const satisfies Record<BackupKind, z.ZodType>;
 
 interface BackupQuery {
@@ -316,6 +328,7 @@ const backupQueries: readonly BackupQuery[] = [
      WHERE c.rowid > ?2 AND (c.owner_id IS NULL OR c.owner_id = ?1)
        AND ((c.is_custom = 1 AND c.owner_id = ?1)
        OR EXISTS (SELECT 1 FROM binder_activity e JOIN binders b ON b.id = e.binder_id WHERE b.owner_id = ?1 AND e.card_id = c.id)
+       OR EXISTS(SELECT 1 FROM wanted_cards want WHERE want.owner_id=?1 AND want.card_id=c.id)
        OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
        OR EXISTS (SELECT 1 FROM species_representatives representative
          WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
@@ -332,6 +345,7 @@ const backupQueries: readonly BackupQuery[] = [
        SELECT 1 FROM catalogue_cards c WHERE c.id = s.card_id
          AND (c.owner_id IS NULL OR c.owner_id = ?1) AND ((c.is_custom = 1 AND c.owner_id = ?1)
          OR EXISTS (SELECT 1 FROM binder_activity e JOIN binders b ON b.id = e.binder_id WHERE b.owner_id = ?1 AND e.card_id = c.id)
+       OR EXISTS(SELECT 1 FROM wanted_cards want WHERE want.owner_id=?1 AND want.card_id=c.id)
        OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
          OR EXISTS (SELECT 1 FROM species_representatives representative
            WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
@@ -411,6 +425,7 @@ const backupQueries: readonly BackupQuery[] = [
      WHERE m.rowid > ?2 AND (c.owner_id IS NULL OR c.owner_id = ?1)
        AND ((c.is_custom = 1 AND c.owner_id = ?1)
        OR EXISTS (SELECT 1 FROM binder_activity e JOIN binders b ON b.id = e.binder_id WHERE b.owner_id = ?1 AND e.card_id = c.id)
+       OR EXISTS(SELECT 1 FROM wanted_cards want WHERE want.owner_id=?1 AND want.card_id=c.id)
        OR EXISTS (SELECT 1 FROM collection_cards cc WHERE cc.owner_id = ?1 AND cc.card_id = c.id)
        OR EXISTS (SELECT 1 FROM species_representatives representative
          WHERE representative.owner_id = ?1 AND representative.card_id = c.id)
@@ -418,6 +433,11 @@ const backupQueries: readonly BackupQuery[] = [
          JOIN binder_versions v ON v.id = p.binder_version_id JOIN binders b ON b.id = v.binder_id
          WHERE b.owner_id = ?1 AND (s.card_id = c.id OR s.assigned_card_id = c.id)))
      ORDER BY m.rowid LIMIT ?3`,
+  },
+  {
+    kind: 'wanted',
+    sql: `SELECT w.rowid AS backup_cursor,w.scope,w.card_id,w.binder_id,w.created_at
+    FROM wanted_cards w WHERE w.owner_id=?1 AND w.rowid>?2 ORDER BY w.rowid LIMIT ?3`,
   },
   {
     kind: 'user_settings',
@@ -985,7 +1005,7 @@ const sharedFanArtInBackupSql = `COALESCE(json_type(j.value,'$.owner_id'), '') =
 // Any staged row that names a card another user owns: restoring it would put
 // that user's private card into this owner's collection, binders or art.
 const foreignCardReferenceSql = `SELECT 1 FROM ${jsonRows}
-  AND c.kind IN ('catalogue','sources','collection','species_representatives','slots','art_manifest','collection_events','activity')
+  AND c.kind IN ('catalogue','sources','collection','species_representatives','slots','art_manifest','collection_events','activity','wanted')
   AND EXISTS (
     SELECT 1 FROM catalogue_cards card
     WHERE card.owner_id IS NOT NULL AND card.owner_id <> ?2
@@ -1063,6 +1083,7 @@ export async function restoreBackup(
         db.prepare('DELETE FROM species_representatives WHERE owner_id = ?1').bind(ownerId),
         db.prepare('DELETE FROM binders WHERE owner_id = ?1').bind(ownerId),
         db.prepare('DELETE FROM user_settings WHERE owner_id = ?1').bind(ownerId),
+        db.prepare('DELETE FROM wanted_cards WHERE owner_id = ?1').bind(ownerId),
         db.prepare('DELETE FROM collection_events WHERE owner_id = ?1').bind(ownerId),
         db
           .prepare(
@@ -1230,6 +1251,20 @@ export async function restoreBackup(
             `INSERT INTO binder_checkpoints (id,binder_id,after_id,created_at)
           SELECT json_extract(j.value,'$.id'),json_extract(j.value,'$.binder_id'),json_extract(j.value,'$.after_id'),json_extract(j.value,'$.created_at') FROM ${jsonRows} AND c.kind='checkpoints'
           AND EXISTS (SELECT 1 FROM binders b WHERE b.id = json_extract(j.value,'$.binder_id') AND b.owner_id = ?2)`,
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM ${jsonRows} AND c.kind='wanted'
+          AND (json_extract(j.value,'$.scope') <> COALESCE(json_extract(j.value,'$.binder_id'),'general')
+            OR (json_extract(j.value,'$.binder_id') IS NOT NULL AND NOT EXISTS(SELECT 1 FROM binders b WHERE b.id=json_extract(j.value,'$.binder_id') AND b.owner_id=?2))))
+          THEN 1 ELSE json_extract('backup_invalid','$') END AS valid`,
+          )
+          .bind(restoreRunId, ownerId),
+        db
+          .prepare(
+            `INSERT INTO wanted_cards(owner_id,scope,card_id,binder_id,created_at)
+          SELECT ?2,json_extract(j.value,'$.scope'),json_extract(j.value,'$.card_id'),json_extract(j.value,'$.binder_id'),json_extract(j.value,'$.created_at') FROM ${jsonRows} AND c.kind='wanted'`,
           )
           .bind(restoreRunId, ownerId),
         db

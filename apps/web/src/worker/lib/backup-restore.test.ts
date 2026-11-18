@@ -193,6 +193,26 @@ async function seedReferencedArt(art: R2Bucket): Promise<void> {
 }
 
 describe('backup restore', () => {
+  it('round trips general and binder wants, including wanted-only catalogue cards', async () => {
+    const { database, db, art } = setup();
+    await seedReferencedArt(art);
+    database.exec(`UPDATE binder_slots SET card_id=NULL,entry_kind='empty';
+      INSERT INTO wanted_cards(owner_id,scope,card_id,binder_id,created_at) VALUES
+      ('owner','general','card-binder',NULL,1),('owner','binder-1','card-binder','binder-1',2);`);
+    await createBackup(db, art, 'owner', { backupId: 'backup_wants' });
+    database.exec('DELETE FROM wanted_cards');
+    await restoreBackup(db, art, 'owner', 'backup_wants');
+    expect(
+      database.prepare('SELECT scope,card_id,binder_id FROM wanted_cards ORDER BY scope').all(),
+    ).toEqual([
+      { scope: 'binder-1', card_id: 'card-binder', binder_id: 'binder-1' },
+      { scope: 'general', card_id: 'card-binder', binder_id: null },
+    ]);
+    expect(
+      database.prepare("SELECT name FROM catalogue_cards WHERE id='card-binder'").get(),
+    ).toEqual({ name: 'Binder card' });
+  });
+
   it('rejects activity referencing another account private card', async () => {
     const { database, db, art } = setup();
     await seedReferencedArt(art);

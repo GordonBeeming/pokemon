@@ -1,4 +1,4 @@
-import { BinderActivity } from './BinderActivity';
+import { Link } from '@tanstack/react-router';
 import {
   type BinderBookmark,
   type BinderDisplayPatchRequest,
@@ -97,7 +97,6 @@ export interface BinderViewProps {
 }
 
 type PanelKind =
-  | 'activity'
   | 'view'
   | 'find'
   | 'change'
@@ -978,9 +977,14 @@ export function BinderView({
         </div>
         {phone ? (
           <div className="binder-header-actions">
-            <button type="button" aria-haspopup="dialog" onClick={() => setPanel('activity')}>
+            <Link
+              className="wanted-binder-link"
+              to="/binders/$binderId/activity"
+              params={{ binderId }}
+              search={{ returnPage: pageIndex + 1 }}
+            >
               Activity
-            </button>
+            </Link>
             <button
               type="button"
               className="button-icon binder-tools-trigger"
@@ -1026,9 +1030,21 @@ export function BinderView({
             >
               {() => displayControls}
             </MenuButton>
-            <button type="button" aria-haspopup="dialog" onClick={() => setPanel('activity')}>
+            <Link
+              className="wanted-binder-link"
+              to="/binders/$binderId/activity"
+              params={{ binderId }}
+              search={{ returnPage: pageIndex + 1 }}
+            >
               Activity
-            </button>
+            </Link>
+            <Link
+              className="wanted-binder-link"
+              to="/wanted"
+              search={{ scope: binderId, includeUnfilled: false, q: '', sort: 'name', offset: 0 }}
+            >
+              Wanted
+            </Link>
             <button type="button" onClick={() => setPanel('manage')}>
               <Icon name="settings" />
               Manage binder
@@ -1036,14 +1052,6 @@ export function BinderView({
           </div>
         )}
       </header>
-      {panel === 'activity' ? (
-        <BinderActivity
-          key={binderId}
-          binderId={binderId}
-          revision={version?.revision ?? 0}
-          onClose={() => setPanel(null)}
-        />
-      ) : null}
       {/* On a phone, finding a card and jumping to a bookmark are how you move around a
           big binder, so they stay on screen rather than behind the Tools sheet. */}
       {phone ? (
@@ -1176,6 +1184,14 @@ export function BinderView({
             className="binder-scope"
           >
             <div className="binder-sheet">
+              <Link
+                className="wanted-binder-link"
+                to="/wanted"
+                onClick={closePhoneSheet}
+                search={{ scope: binderId, includeUnfilled: false, q: '', sort: 'name', offset: 0 }}
+              >
+                Wanted
+              </Link>
               <section className="binder-sheet-section" aria-labelledby="binder-sheet-page">
                 <h3 id="binder-sheet-page">Manage page {pageIndex + 1}</h3>
                 <PageActionList

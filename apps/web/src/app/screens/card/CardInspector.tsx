@@ -19,6 +19,7 @@ import { Icon } from '../../ui/icons';
 import { CardFrameSkeleton } from '../../ui/Skeleton';
 import { useToast } from '../../ui/Toast';
 import { BinderRow } from './BinderRow';
+import { WantedControl } from './WantedControl';
 import { WhereFromDialog } from './WhereFromDialog';
 import './card-inspector.css';
 import { ebayBuySearchUrl, ebaySoldSearchUrl } from '../../cards/ebay';
@@ -379,6 +380,8 @@ export function CardInspector({
           )}
         </p>
       </section>
+
+      <WantedControl key={cardId} cardId={cardId} binderId={contextBinderId} />
 
       <section aria-labelledby="card-inspector-binders-heading">
         <h3 id="card-inspector-binders-heading">Binders</h3>

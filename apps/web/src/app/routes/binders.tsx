@@ -1,3 +1,7 @@
+import { z } from 'zod';
+import { Link } from '@tanstack/react-router';
+import { BinderActivity } from '../screens/binders/BinderActivity';
+import { useBinders } from '../api/queries/binders';
 import { createRoute, useNavigate } from '@tanstack/react-router';
 import { useCallback } from 'react';
 import { BinderDetail } from '../screens/BinderDetail';
@@ -53,6 +57,54 @@ export const binderDetailRoute = createRoute({
         onSearch={onSearch}
         onOpenLibrary={() => void navigate({ to: '/binders' })}
       />
+    );
+  },
+});
+
+export const binderActivityRoute = createRoute({
+  getParentRoute: () => authedRoute,
+  path: '/binders/$binderId/activity',
+  validateSearch: (search) =>
+    z.object({ returnPage: z.number().int().positive().catch(1) }).parse(search),
+  component: function BinderActivityPage() {
+    const { binderId } = binderActivityRoute.useParams();
+    const { returnPage } = binderActivityRoute.useSearch();
+    const binders = useBinders();
+    const binder = binders.data?.find((b) => b.id === binderId);
+    if (binders.isPending) return <p role="status">Loading binder…</p>;
+    if (binders.isError)
+      return (
+        <section>
+          <h1>Binder activity could not load</h1>
+          <button type="button" onClick={() => void binders.refetch()}>
+            Try again
+          </button>
+        </section>
+      );
+    if (!binder)
+      return (
+        <section>
+          <h1>Binder not found</h1>
+          <Link to="/binders">Back to all binders</Link>
+        </section>
+      );
+    return (
+      <section className="binder-view binder-scope">
+        <header className="binder-header">
+          <div className="binder-heading">
+            <Link
+              to="/binders/$binderId"
+              params={{ binderId }}
+              search={binderSearch.parse({ page: returnPage, q: '' })}
+            >
+              Back to {binder?.name ?? 'binder'}
+            </Link>
+            <h1>Binder activity</h1>
+            <p className="binder-meta">{binder?.name ?? 'Placements and checkpoints'}</p>
+          </div>
+        </header>
+        <BinderActivity key={binderId} binderId={binderId} revision={0} />
+      </section>
     );
   },
 });

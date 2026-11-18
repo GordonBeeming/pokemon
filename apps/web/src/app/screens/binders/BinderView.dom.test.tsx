@@ -100,7 +100,7 @@ it('keeps activity in the toolbar and copied cards available without banners', a
     { id: cardIdSchema.parse('copied-card'), name: 'Squirtle', setName: 'Base', number: '63' },
   ]);
   await mount();
-  const activity = Array.from(container.querySelectorAll('.binder-toolbar button')).find(
+  const activity = Array.from(container.querySelectorAll('.binder-toolbar a')).find(
     (button) => button.textContent === 'Activity',
   );
   expect(activity).toBeDefined();
@@ -126,45 +126,14 @@ it('keeps activity in the toolbar and copied cards available without banners', a
   await waitFor(() => document.querySelector('[role="dialog"]') === null);
 });
 
-it('opens activity as a dialog, blocks binder page shortcuts and returns focus on close', async () => {
-  server.overrides.push((request) =>
-    request.path.endsWith('/activity')
-      ? {
-          status: 200,
-          body: {
-            ok: true,
-            activity: {
-              selectedBatch: 'beginning',
-              batches: [{ id: 'beginning', createdAt: null, count: 0 }],
-              total: 0,
-              events: [],
-            },
-          },
-        }
-      : undefined,
-  );
+it('links to the activity page with a return to the current binder page', async () => {
   await mount();
-  const activity = Array.from(
-    container.querySelectorAll<HTMLButtonElement>('.binder-toolbar button'),
-  ).find((button) => button.textContent === 'Activity');
-  if (!activity) throw new Error('Missing activity trigger');
-  await step(() => {
-    activity.focus();
-    activity.click();
-  });
-  await waitFor(() => document.querySelector('[role="dialog"]') !== null);
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Binder activity');
-  await step(() =>
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true })),
+  const link = Array.from(container.querySelectorAll<HTMLAnchorElement>('.binder-toolbar a')).find(
+    (a) => a.textContent === 'Activity',
   );
-  expect(currentSearch.page).toBe(1);
-  const close = document.querySelector<HTMLButtonElement>(
-    '[role="dialog"] button[aria-label="Close"]',
-  );
-  if (!close) throw new Error('Missing dialog close');
-  await step(() => close.click());
-  await waitFor(() => document.querySelector('[role="dialog"]') === null);
-  await waitFor(() => document.activeElement === activity);
+  expect(link?.getAttribute('href')).toContain('/binders/binder_a/activity');
+  expect(link?.getAttribute('href')).toContain('returnPage=1');
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
 });
 
 describe('BinderView Move card', () => {

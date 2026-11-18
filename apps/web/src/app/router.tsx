@@ -1,7 +1,7 @@
 import { createRouter } from '@tanstack/react-router';
 import { APP_BASEPATH } from './lib/constants';
 import { authedRoute } from './routes/authed-layout';
-import { binderDetailRoute, bindersRoute } from './routes/binders';
+import { binderActivityRoute, binderDetailRoute, bindersRoute } from './routes/binders';
 import { cardRoute } from './routes/card';
 import { catalogueRoute } from './routes/catalogue';
 import { illustratorsRoute } from './routes/illustrators';
@@ -10,6 +10,7 @@ import { indexRoute } from './routes/index';
 import { inviteRoute } from './routes/invite';
 import { pokedexRoute } from './routes/pokedex';
 import { rootRoute } from './routes/root';
+import { wantedRoute } from './routes/wanted';
 import { settingsRoute } from './routes/settings';
 import { setsRoute } from './routes/sets';
 
@@ -23,7 +24,9 @@ const authedTree = authedRoute.addChildren([
   trainersRoute,
   bindersRoute,
   binderDetailRoute,
+  binderActivityRoute,
   settingsRoute,
+  wantedRoute,
 ]);
 
 // The dev card gallery never ships in a production bundle and never sits behind the

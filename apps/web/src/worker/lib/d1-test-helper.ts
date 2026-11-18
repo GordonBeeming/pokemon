@@ -110,6 +110,7 @@ export function applyAllMigrations(database: DatabaseSync): void {
     '028_card_groups.sql',
     '029_energy_groups.sql',
     '030_binder_activity.sql',
+    '031_wanted_cards.sql',
   ])
     database.exec(readFileSync(new URL(name, directory), 'utf8'));
 }

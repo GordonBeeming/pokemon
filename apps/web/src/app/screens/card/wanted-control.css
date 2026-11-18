@@ -1,0 +1,47 @@
+.wanted-control-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.wanted-control-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+.wanted-control-actions label {
+  display: grid;
+  gap: 0.4rem;
+  flex: 1;
+  min-width: min(100%, 12rem);
+}
+.wanted-control select {
+  height: 2.75rem;
+  min-width: 0;
+  width: 100%;
+  min-height: 2.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  padding: 0.5rem;
+  background: var(--surface);
+  color: var(--ink);
+}
+.wanted-control button {
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+}
+.wanted-control button[aria-pressed='true'] {
+  background: var(--accent);
+  color: white;
+}
+.wanted-control-status {
+  font-size: 0.875rem;
+  color: var(--muted);
+  margin: 0;
+}

@@ -1341,10 +1341,31 @@ an action at the end */
 }
 @media print {
   .binder-activity {
+    display: block;
+  }
+  .binder-activity-heading button,
+  .binder-activity-filters,
+  .binder-activity-regions,
+  .binder-activity-nav {
     display: none;
   }
 }
 
 .binder-panel .paste-clear {
   margin-right: auto;
+}
+
+.wanted-binder-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  padding: 0 0.9rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.875rem;
+  white-space: nowrap;
 }
