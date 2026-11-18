@@ -1,4 +1,4 @@
-import { trainerCharacterPredicate } from './trainer-dex';
+import { trainerCharacterCardIds } from './trainer-dex';
 import { catalogueRestartPending, restoreUnappliedCatalogueRun } from './catalogue-recovery';
 import { catalogueWorkflowId } from './catalogue-workflow-id';
 import {
@@ -1490,7 +1490,11 @@ export async function searchCards(
     where.push(`upper(ltrim(${numerator}, '0')) = ltrim(?${values.length + 1}, '0')`);
     values.push(cardNumberFilter);
   }
-  if (filters.character) where.push(trainerCharacterPredicate(filters.character, values));
+  if (filters.character) {
+    const ids = await trainerCharacterCardIds(db, ownerId, filters.character);
+    where.push(`c.id IN(SELECT value FROM json_each(?${values.length + 1}))`);
+    values.push(JSON.stringify(ids));
+  }
   if (filters.trainer) {
     where.push(`c.trainer_key = ?${values.length + 1}`);
     values.push(filters.trainer);

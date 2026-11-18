@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, expect, it } from 'vitest';
 import { TRAINER_CHARACTERS, normalizedTrainerName } from '@pokedex/shared';
 import { applyAllMigrations, sqliteD1 } from './d1-test-helper';
-import { listTrainerDex } from './trainer-dex';
+import { listTrainerDex, trainerCharactersForCard } from './trainer-dex';
 import { searchCards } from './catalogue';
 const databases: DatabaseSync[] = [];
 afterEach(() => {
@@ -94,4 +94,39 @@ it('includes named cast from newer card sets and titled cards whose names omit t
       (c) => c.id,
     ),
   ).toEqual(['cassiopeia']);
+});
+
+it('resolves possessives, parentheticals and joint titles without short-name false positives', () => {
+  expect(trainerCharactersForCard('Nest Ball', [])).toEqual([]);
+  expect(trainerCharactersForCard('Maintenance', [])).toEqual([]);
+  expect(trainerCharactersForCard('Brock’s Grit', [])).toEqual(['brock']);
+  expect(trainerCharactersForCard('Professor’s Research (Professor Sada)', [])).toEqual([
+    'professorsada',
+  ]);
+  expect(trainerCharactersForCard("Red & Blue's Plan", []).sort()).toEqual(['blue', 'red']);
+  expect(trainerCharactersForCard('Bellelba & Brycen-Man', []).sort()).toEqual([
+    'brycen',
+    'sabrina',
+  ]);
+});
+it('keeps candidate reads consistent for parenthetical titles and normalized punctuation', async () => {
+  const { raw, db } = setup();
+  raw.exec(`INSERT INTO catalogue_cards(id,name,language,category,set_id,set_name,number,created_at,updated_at) VALUES
+ ('parenthetical','Training (Brock)','en','trainer','custom','Custom','3',1,1),('punctuation','.Brock','en','trainer','custom','Custom','4',1,1),('whitespace',char(160)||'Brock','en','trainer','custom','Custom','5',1,1);`);
+  const dex = await listTrainerDex(db, 'a');
+  const gallery = await searchCards(db, 'a', { character: 'brock', limit: 100, offset: 0 });
+  expect(dex.trainers.find((t) => t.key === 'brock')?.cardCount).toBe(5);
+  expect(gallery.total).toBe(5);
+});
+
+it('keeps all matches across bounded card-read pages', async () => {
+  const { raw, db } = setup();
+  raw.exec(`WITH RECURSIVE numbers(n) AS(SELECT 0 UNION ALL SELECT n+1 FROM numbers WHERE n<1099)
+ INSERT INTO catalogue_cards(id,name,language,category,set_id,set_name,number,created_at,updated_at)
+ SELECT 'many-'||n,'Brock','en','trainer','many','Many',CAST(n AS TEXT),1,1 FROM numbers;`);
+  const dex = await listTrainerDex(db, 'a');
+  expect(dex.trainers.find((t) => t.key === 'brock')?.cardCount).toBe(1102);
+  const gallery = await searchCards(db, 'a', { character: 'brock', limit: 100, offset: 0 });
+  expect(gallery.total).toBe(1102);
+  expect(gallery.cards).toHaveLength(100);
 });
