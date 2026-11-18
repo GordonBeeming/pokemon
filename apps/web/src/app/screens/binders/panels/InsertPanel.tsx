@@ -1,3 +1,4 @@
+import { InfiniteLoader } from '../../../ui/InfiniteLoader';
 import {
   type BinderEntry,
   type BinderSlotLocation,
@@ -417,7 +418,7 @@ export function InsertPanel({
               </button>
             </div>
             <div className="species-grid" aria-label="Matching Pokémon">
-              {pokemon.slice(offset, offset + POKEMON_PAGE_SIZE).map((item) => (
+              {pokemon.slice(0, offset + POKEMON_PAGE_SIZE).map((item) => (
                 <button
                   key={item.number}
                   type="button"
@@ -432,23 +433,13 @@ export function InsertPanel({
                 </button>
               ))}
             </div>
-            <nav className="panel-actions" aria-label="Search result pages">
-              <button
-                type="button"
-                disabled={offset === 0}
-                onClick={() => setOffset(Math.max(0, offset - POKEMON_PAGE_SIZE))}
-              >
-                Previous results
-              </button>
-              <span className="panel-help">{pokemon.length} matches</span>
-              <button
-                type="button"
-                disabled={offset + POKEMON_PAGE_SIZE >= pokemon.length}
-                onClick={() => setOffset(offset + POKEMON_PAGE_SIZE)}
-              >
-                Next results
-              </button>
-            </nav>
+            <InfiniteLoader
+              hasMore={offset + POKEMON_PAGE_SIZE < pokemon.length}
+              loading={false}
+              loadedCount={Math.min(offset + POKEMON_PAGE_SIZE, pokemon.length)}
+              label="Pokémon"
+              onLoadMore={() => setOffset((n) => n + POKEMON_PAGE_SIZE)}
+            />
           </>
         ) : kind === 'energy' ? (
           <>
@@ -574,7 +565,7 @@ export function InsertPanel({
               </p>
             ) : null}
             <div className="species-grid" aria-label="Matching sets">
-              {matchingSets.slice(offset, offset + SET_PAGE_SIZE).map((set) => (
+              {matchingSets.slice(0, offset + SET_PAGE_SIZE).map((set) => (
                 <button
                   key={setKey(set)}
                   type="button"
@@ -593,33 +584,13 @@ export function InsertPanel({
                 </button>
               ))}
             </div>
-            <nav className="panel-actions" aria-label="Search result pages">
-              <button
-                type="button"
-                disabled={offset === 0}
-                onClick={() => setOffset(Math.max(0, offset - SET_PAGE_SIZE))}
-              >
-                Previous results
-              </button>
-              <span className="panel-help">
-                {sets.isLoading ? 'Loading sets…' : `${matchingSets.length} sets`}
-              </span>
-              <button
-                type="button"
-                disabled={offset + SET_PAGE_SIZE >= matchingSets.length}
-                onClick={() => setOffset(offset + SET_PAGE_SIZE)}
-              >
-                Next results
-              </button>
-              <button
-                type="button"
-                className="button-text"
-                disabled={busy || selected.size === 0}
-                onClick={clearSetChoice}
-              >
-                Clear selection
-              </button>
-            </nav>
+            <InfiniteLoader
+              hasMore={offset + SET_PAGE_SIZE < matchingSets.length}
+              loading={false}
+              loadedCount={Math.min(offset + SET_PAGE_SIZE, matchingSets.length)}
+              label="sets"
+              onLoadMore={() => setOffset((n) => n + SET_PAGE_SIZE)}
+            />
           </>
         ) : (
           <>

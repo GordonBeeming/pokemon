@@ -1,5 +1,7 @@
+import { useMemo } from 'react';
+import { uniqueItems } from '../infinite-data';
 import { wantedListSchema, wantedScopesSchema, type WantedEntry } from '@pokedex/shared';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { apiFetch } from '../client';
 export interface WantedFilters {
@@ -11,17 +13,41 @@ export interface WantedFilters {
   offset: number;
 }
 export function useWantedList(filters: WantedFilters, enabled = true) {
-  return useQuery({
-    queryKey: ['wanted', 'list', filters],
+  const criteria = {
+    scope: filters.scope,
+    placement: filters.placement ?? 'all',
+    includeUnfilled: filters.includeUnfilled,
+    q: filters.q,
+    sort: filters.sort,
+  };
+  const query = useInfiniteQuery({
+    queryKey: ['wanted', 'list', criteria],
     enabled,
-    queryFn: ({ signal }) =>
+    initialPageParam: 0,
+    queryFn: ({ pageParam, signal }) =>
       apiFetch(
-        `/api/wanted?${new URLSearchParams({ scope: filters.scope, placement: filters.placement ?? 'all', includeUnfilled: String(filters.includeUnfilled), q: filters.q, sort: filters.sort, offset: String(filters.offset) })}`,
+        `/api/wanted?${new URLSearchParams({ ...criteria, includeUnfilled: String(criteria.includeUnfilled), offset: String(pageParam) })}`,
         z.object({ ok: z.literal(true), list: wantedListSchema }),
         { signal },
       ).then((d) => d.list),
+    getNextPageParam: (last, _pages, _param, params) =>
+      last.nextOffset !== null && !params.includes(last.nextOffset) ? last.nextOffset : undefined,
   });
+  const data = useMemo(() => {
+    const first = query.data?.pages[0];
+    if (!first) return undefined;
+    return {
+      ...first,
+      entries: uniqueItems(
+        query.data?.pages.flatMap((page) => page.entries) ?? [],
+        (entry) => entry.key,
+      ),
+      nextOffset: query.data?.pages.at(-1)?.nextOffset ?? null,
+    };
+  }, [query.data]);
+  return { ...query, data };
 }
+
 export function useWantedScopes(cardId: string) {
   return useQuery({
     queryKey: ['wanted', 'card', cardId],

@@ -5,6 +5,7 @@ import { apiFetch } from '../client';
 export function useTrainerDex() {
   return useQuery({
     queryKey: ['trainer-dex'],
+    gcTime: 60 * 60_000,
     queryFn: ({ signal }) =>
       apiFetch('/api/trainer-dex', trainerDexResponseSchema.extend({ ok: z.literal(true) }), {
         signal,

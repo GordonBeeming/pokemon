@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
+import { uniqueItems } from '../infinite-data';
 import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
 import { catalogueCardViewSchema, catalogueDetailViewSchema } from '@pokedex/shared';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import type { CatalogueSearch } from '../../routes/search-params';
 import { apiFetch } from '../client';
@@ -66,20 +68,34 @@ export function catalogueWireParams(
   return params;
 }
 
-function toWireParams(filters: CatalogueSearch): URLSearchParams {
-  const params = catalogueWireParams(filters);
-  params.set('limit', String(CATALOGUE_PAGE_SIZE));
-  params.set('offset', String((filters.page - 1) * CATALOGUE_PAGE_SIZE));
-  return params;
-}
-
 export function useCatalogueSearch(filters: CatalogueSearch) {
-  return useQuery({
-    queryKey: queryKeys.catalogue.search(filters, filters.page),
-    queryFn: ({ signal }) =>
-      apiFetch(`/api/catalogue/search?${toWireParams(filters)}`, searchResponseSchema, { signal }),
-    placeholderData: keepPreviousData,
+  const criteria = catalogueWireParams(filters).toString();
+  const query = useInfiniteQuery({
+    queryKey: ['catalogue', 'search', 'infinite', criteria],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) => {
+      const params = new URLSearchParams(criteria);
+      params.set('limit', String(CATALOGUE_PAGE_SIZE));
+      if (pageParam) params.set('cursor', pageParam);
+      return apiFetch(`/api/catalogue/search?${params}`, searchResponseSchema, { signal });
+    },
+    getNextPageParam: (last, _pages, _lastParam, params) =>
+      last.cursor && !params.includes(last.cursor) ? last.cursor : undefined,
   });
+  const data = useMemo(() => {
+    if (!query.data) return undefined;
+    const first = query.data.pages[0];
+    if (!first) return undefined;
+    return {
+      ...first,
+      cards: uniqueItems(
+        query.data.pages.flatMap((page) => page.cards),
+        (card) => card.id,
+      ),
+      cursor: query.data.pages.at(-1)?.cursor ?? null,
+    };
+  }, [query.data]);
+  return { ...query, data, isPlaceholderData: false };
 }
 
 export function useCardDetail(cardId: string | undefined) {

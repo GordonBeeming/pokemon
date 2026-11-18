@@ -17,6 +17,16 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 
 ---
 
+## Continuous list loading
+
+- Catalogue, National Pokédex, Trainer Dex and Wanted append results when the end of the list
+  approaches. Binder search and the card, Pokémon, set and group pickers follow the same pattern.
+- Loading another chunk keeps the existing cards visible. A failed request leaves them in place
+  and offers Retry. Changing filters starts the matching list; reopening a card preserves the
+  loaded results and scroll position.
+- The full shortages report also loads further rows while scrolling. Binder page-turn controls
+  remain available for navigating physical binder pages.
+
 ## Binder orders and Wanted
 
 - Ordered cards cover their pocket targets while awaiting arrival. They keep the target's
@@ -28,7 +38,7 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
   Orders stay attached when targets move, pages are arranged, or a binder draft is cloned.
 - Wishlist mode in a binder adds directly to that binder. Wanted cards open the same side
   inspector used by binders. Their footers show the list name and a subtle Remove control.
-- Gallery and Wanted pages show 48 cards. Wanted's placement filters include On order;
+- Galleries and Wanted load 48 cards at a time as you scroll. Wanted's placement filters include On order;
   wants remain until explicitly removed.
 
 ## Shell & navigation
@@ -145,8 +155,8 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] keep · A live "Showing X to Y of Z cards." status, a card gallery grid with a clear selected
       state, and an empty state "No cards match this search." · done when: an unmatched search shows
       that empty-state text instead of an empty grid.
-- [ ] keep · Pagination at 48 cards per page, using the same component as National Pokédex · done
-      when: paging past 48 results loads the next page without resetting the search bar.
+- [ ] keep · Infinite loading appends cards as you scroll, using the same pattern as National Pokédex · done
+      when: scrolling past the first 48 cards appends results without replacing the grid or resetting filters.
 - [ ] changed · Catalogue results follow the one fading rule: an unowned card gets the pale, dashed
       frame with its art faded, an owned one is solid; the card inspector never fades and states
       ownership in words · done when: an unowned card in the gallery shows the pale dashed frame
@@ -259,9 +269,9 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - [ ] keep · The Copy menu's "Release-date order" copies the same result set sorted oldest-first,
       independent of the on-screen sort · done when: copying release-date order for a set copies its
       earliest print first regardless of the visible sort.
-- [ ] keep · The Copy menu's "This page" copies only the 48 loaded cards, and is shown only when
-      there are more than 48 total results · done when: a 40-result search's Copy menu doesn't show
-      "This page", but a 120-result search's does.
+- [ ] keep · The Copy menu's "Loaded cards" copies the cards already revealed, and is shown while
+      more results remain · done when: a 40-result search's Copy menu doesn't show
+      "Loaded cards", but a 120-result search's does.
 - [ ] keep · Copy menu items are disabled while busy, while copying, at 0 results, above 2,000
       results, or before the first search resolves; each disabled item says why, and the cap message
       appears inside the menu only when it applies · done when: a 3,000-result search's Copy menu
@@ -408,7 +418,7 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       reserved pages · done when: reserving a page adds it to the bookmark dropdown without manually
       bookmarking anything.
 - [ ] keep · Binder space search: a debounced text search across every page, results show
-      label/page/row·column/placed state, paginated 48 at a time, and clicking a result jumps to and
+      label/page/row·column/placed state, loaded 48 at a time while scrolling, and clicking a result jumps to and
       focuses that pocket. The results list sits under the field, never wider than it or the screen,
       and closes on a pick, Escape or a tap outside; a pick closes the list before the jump · done
       when: searching a reservation label jumps straight to its page with that pocket focused, and no
@@ -721,76 +731,76 @@ readability. Citations use each inventory document's own section/subsection head
 
 ### `inventory-core.md` §2 — Per-screen capabilities
 
-| Inventory item                                                             | FEATURES.md line                                      |
-| -------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Shell: brand link + 6 nav items, `aria-current`                            | Shell & navigation: sidebar nav                       |
-| Shell: global `notice` region (sr-only live + visible alert)               | Shell & navigation: global notice region              |
-| Shell: `notice` cleared on every `navigate()`                              | Shell & navigation: global notice region              |
-| Login: "Continue with passkey" WebAuthn login                              | Sign-in & people: passkey login                       |
-| Login: "Enrol another device" form + validation                            | Sign-in & people: enrol another device                |
-| Login: "Use local development login" (host-gated)                          | Sign-in & people: local dev login                     |
-| Login: single shared error paragraph                                       | Sign-in & people: shared error area                   |
-| Login: app-level auth states (checking/anonymous/error/authenticated)      | Sign-in & people: auth states                         |
-| Login: session-loss via `AUTH_LOST_EVENT` forces sign-out                  | Sign-in & people: 401 forces sign-out                 |
-| Dashboard: "Browse cards" / "Plan the Pokédex" header links                | Home: header shortcuts                                |
-| Dashboard: metric grid (owned unique / total qty / A$ estimate)            | Home: metric grid                                     |
-| Dashboard: Active shortages toggle, expand/collapse, focus mgmt            | Home: active shortages toggle                         |
-| Dashboard: `activeShortageCount()` server-field-or-fallback                | Home: active shortages toggle                         |
-| Dashboard: Recently added shelf (≤50), click → catalogue search            | Home: recently added shelf                            |
-| Dashboard: empty state "Your shelf is ready."                              | Home: recently added shelf                            |
-| Active shortages: load on mount/identity change, abort in-flight           | Home: active shortages panel load/paginate            |
-| Active shortages: "Load more", de-dupe by kind+id                          | Home: active shortages panel load/paginate            |
-| Active shortages: snapshot-consistency guard                               | Home: active shortages panel load/paginate            |
-| Active shortages: row-level "Try again"/"Retry", `role="alert"`            | Home: retry/open binder plans/close/empty state       |
-| Active shortages: table columns + catalogue deep link                      | Home: shortages table columns                         |
-| Active shortages: `catalogueHrefForEntry()` deep link building             | Home: shortages table columns                         |
-| Active shortages: "Open binder plans" + "Close"                            | Home: retry/open binder plans/close/empty state       |
-| Active shortages: empty state "No active shortages"                        | Home: retry/open binder plans/close/empty state       |
-| Catalogue: search bar (text/segmented/submit)                              | Catalogue: search bar                                 |
-| Catalogue: filters not written to address bar (bug)                        | Catalogue: URL reflects every filter (fixed)          |
-| Catalogue: ownership/query resync from `initialParams` prop change         | Catalogue: URL reflects every filter                  |
-| Catalogue: contextual headers + "Show full catalogue"                      | Catalogue: contextual headers                         |
-| Catalogue: species indexing status line + 6h cache + retry                 | Catalogue: species indexing status line               |
-| Catalogue: "Copy displayed order"                                          | Clipboard & bulk actions: copy displayed order        |
-| Catalogue: "Copy release-date order"                                       | Clipboard & bulk actions: copy release-date order     |
-| Catalogue: "Copy this page" (>48 results only)                             | Clipboard & bulk actions: copy this page              |
-| Catalogue: copy tools disabled conditions                                  | Clipboard & bulk actions: copy disabled conditions    |
-| Catalogue: clipboard shared/localStorage/cross-tab                         | Clipboard & bulk actions: shared clipboard, cross-tab |
-| Catalogue: post-copy confirmation + "Open binders"                         | Clipboard & bulk actions: post-copy confirmation      |
-| Catalogue: "Add a card that is not in TCGdex"                              | Catalogue: add custom card                            |
-| Catalogue: "Add these results to a binder" bulk disclosure                 | Clipboard & bulk actions: bulk add to binder          |
-| Catalogue: live "Showing X to Y of Z" status, gallery, empty state         | Catalogue: live status + gallery + empty state        |
-| Catalogue: pagination (48/page)                                            | Catalogue: pagination 48/page                         |
-| Catalogue: detail lightbox (position of total, high-res art)               | Card inspector: modal detail view                     |
-| Catalogue: Prev/Next chevrons + arrow-key shortcuts, wraparound            | Card inspector: prev/next + arrow keys                |
-| Catalogue: Escape closes through save gate                                 | Card inspector: escape/outside-click                  |
-| Catalogue: Tab focus trap                                                  | Card inspector: focus trap + scroll lock              |
-| Catalogue: body scroll lock                                                | Card inspector: focus trap + scroll lock              |
-| Catalogue: quantity input (0–9999) + notes (≤2000, live count)             | Card inspector: notes 2000 char + live count          |
-| Catalogue: autosave (650ms debounce + blur + status cycle)                 | Card inspector: autosave cycle                        |
-| Catalogue: leaving-while-dirty guard                                       | Card inspector: failed autosave blocks leaving        |
-| Catalogue: switching card resets draft                                     | Card inspector: draft resets per card                 |
-| Catalogue: "Add one copy" button                                           | Card inspector: no 0 counter, "Add first copy"        |
-| Catalogue: "Use as Pokédex image"                                          | Card inspector: use as Pokédex image                  |
-| Catalogue: "Add to binder" section (choice/replace/add-at-end/conflict)    | Card inspector: binder rows as control                |
-| Catalogue: image preloading of neighbours, bounded cache                   | Catalogue: neighbour image preloading                 |
-| Set checklists: "Find a set" client filter                                 | Sets & codes: find a set filter                       |
-| Set checklists: live "Showing all N matching sets."                        | Sets & codes: find a set filter                       |
-| Set checklists: row (owned/total/language + bar), click preserves language | Sets & codes: row shows owned/total/language          |
-| Set checklists: empty state "Nothing to show yet."                         | Sets & codes: empty state                             |
-| National Pokédex: state lifted to App, survives nav away/back              | National Pokédex: state survives leave/return         |
-| National Pokédex: "Find a Pokémon" search, resets page 0                   | National Pokédex: search matches name/region/number   |
-| National Pokédex: RegionPicker combobox, live counts                       | National Pokédex: region picker with live counts      |
-| National Pokédex: SegmentedControl, resets page 0                          | National Pokédex: ownership segmented control         |
-| National Pokédex: live status + 48/page grid + representative/preview art  | National Pokédex: live status + header progress       |
-| National Pokédex: row click → openSpecies, stash focus/scroll              | National Pokédex: open species → gallery              |
-| National Pokédex: rows disabled during discovery                           | National Pokédex: rows disabled during discovery      |
-| National Pokédex: on-mount scroll/focus restoration                        | National Pokédex: state survives leave/return         |
-| National Pokédex: pagination, empty state, header progress                 | National Pokédex: empty state / header progress       |
-| Devices: "Create pairing code" button                                      | Settings: API tokens                                  |
-| Devices: pairing-code output panel + "Copy code"                           | Settings: API tokens                                  |
-| Devices: paired-device list + "Revoke"                                     | Settings: API tokens                                  |
-| Devices: empty state "No scanner is paired."                               | Settings: Devices screen dropped                      |
+| Inventory item                                                                | FEATURES.md line                                      |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Shell: brand link + 6 nav items, `aria-current`                               | Shell & navigation: sidebar nav                       |
+| Shell: global `notice` region (sr-only live + visible alert)                  | Shell & navigation: global notice region              |
+| Shell: `notice` cleared on every `navigate()`                                 | Shell & navigation: global notice region              |
+| Login: "Continue with passkey" WebAuthn login                                 | Sign-in & people: passkey login                       |
+| Login: "Enrol another device" form + validation                               | Sign-in & people: enrol another device                |
+| Login: "Use local development login" (host-gated)                             | Sign-in & people: local dev login                     |
+| Login: single shared error paragraph                                          | Sign-in & people: shared error area                   |
+| Login: app-level auth states (checking/anonymous/error/authenticated)         | Sign-in & people: auth states                         |
+| Login: session-loss via `AUTH_LOST_EVENT` forces sign-out                     | Sign-in & people: 401 forces sign-out                 |
+| Dashboard: "Browse cards" / "Plan the Pokédex" header links                   | Home: header shortcuts                                |
+| Dashboard: metric grid (owned unique / total qty / A$ estimate)               | Home: metric grid                                     |
+| Dashboard: Active shortages toggle, expand/collapse, focus mgmt               | Home: active shortages toggle                         |
+| Dashboard: `activeShortageCount()` server-field-or-fallback                   | Home: active shortages toggle                         |
+| Dashboard: Recently added shelf (≤50), click → catalogue search               | Home: recently added shelf                            |
+| Dashboard: empty state "Your shelf is ready."                                 | Home: recently added shelf                            |
+| Active shortages: load on mount/identity change, abort in-flight              | Home: active shortages panel load/paginate            |
+| Active shortages: "Load more", de-dupe by kind+id                             | Home: active shortages panel load/paginate            |
+| Active shortages: snapshot-consistency guard                                  | Home: active shortages panel load/paginate            |
+| Active shortages: row-level "Try again"/"Retry", `role="alert"`               | Home: retry/open binder plans/close/empty state       |
+| Active shortages: table columns + catalogue deep link                         | Home: shortages table columns                         |
+| Active shortages: `catalogueHrefForEntry()` deep link building                | Home: shortages table columns                         |
+| Active shortages: "Open binder plans" + "Close"                               | Home: retry/open binder plans/close/empty state       |
+| Active shortages: empty state "No active shortages"                           | Home: retry/open binder plans/close/empty state       |
+| Catalogue: search bar (text/segmented/submit)                                 | Catalogue: search bar                                 |
+| Catalogue: filters not written to address bar (bug)                           | Catalogue: URL reflects every filter (fixed)          |
+| Catalogue: ownership/query resync from `initialParams` prop change            | Catalogue: URL reflects every filter                  |
+| Catalogue: contextual headers + "Show full catalogue"                         | Catalogue: contextual headers                         |
+| Catalogue: species indexing status line + 6h cache + retry                    | Catalogue: species indexing status line               |
+| Catalogue: "Copy displayed order"                                             | Clipboard & bulk actions: copy displayed order        |
+| Catalogue: "Copy release-date order"                                          | Clipboard & bulk actions: copy release-date order     |
+| Catalogue: copy currently loaded cards                                        | Clipboard & bulk actions: copy loaded cards           |
+| Catalogue: copy tools disabled conditions                                     | Clipboard & bulk actions: copy disabled conditions    |
+| Catalogue: clipboard shared/localStorage/cross-tab                            | Clipboard & bulk actions: shared clipboard, cross-tab |
+| Catalogue: post-copy confirmation + "Open binders"                            | Clipboard & bulk actions: post-copy confirmation      |
+| Catalogue: "Add a card that is not in TCGdex"                                 | Catalogue: add custom card                            |
+| Catalogue: "Add these results to a binder" bulk disclosure                    | Clipboard & bulk actions: bulk add to binder          |
+| Catalogue: live "Showing X to Y of Z" status, gallery, empty state            | Catalogue: live status + gallery + empty state        |
+| Catalogue: infinite loading                                                   | Catalogue: infinite loading                           |
+| Catalogue: detail lightbox (position of total, high-res art)                  | Card inspector: modal detail view                     |
+| Catalogue: Prev/Next chevrons + arrow-key shortcuts, wraparound               | Card inspector: prev/next + arrow keys                |
+| Catalogue: Escape closes through save gate                                    | Card inspector: escape/outside-click                  |
+| Catalogue: Tab focus trap                                                     | Card inspector: focus trap + scroll lock              |
+| Catalogue: body scroll lock                                                   | Card inspector: focus trap + scroll lock              |
+| Catalogue: quantity input (0–9999) + notes (≤2000, live count)                | Card inspector: notes 2000 char + live count          |
+| Catalogue: autosave (650ms debounce + blur + status cycle)                    | Card inspector: autosave cycle                        |
+| Catalogue: leaving-while-dirty guard                                          | Card inspector: failed autosave blocks leaving        |
+| Catalogue: switching card resets draft                                        | Card inspector: draft resets per card                 |
+| Catalogue: "Add one copy" button                                              | Card inspector: no 0 counter, "Add first copy"        |
+| Catalogue: "Use as Pokédex image"                                             | Card inspector: use as Pokédex image                  |
+| Catalogue: "Add to binder" section (choice/replace/add-at-end/conflict)       | Card inspector: binder rows as control                |
+| Catalogue: image preloading of neighbours, bounded cache                      | Catalogue: neighbour image preloading                 |
+| Set checklists: "Find a set" client filter                                    | Sets & codes: find a set filter                       |
+| Set checklists: live "Showing all N matching sets."                           | Sets & codes: find a set filter                       |
+| Set checklists: row (owned/total/language + bar), click preserves language    | Sets & codes: row shows owned/total/language          |
+| Set checklists: empty state "Nothing to show yet."                            | Sets & codes: empty state                             |
+| National Pokédex: state lifted to App, survives nav away/back                 | National Pokédex: state survives leave/return         |
+| National Pokédex: "Find a Pokémon" search, resets page 0                      | National Pokédex: search matches name/region/number   |
+| National Pokédex: RegionPicker combobox, live counts                          | National Pokédex: region picker with live counts      |
+| National Pokédex: SegmentedControl, resets page 0                             | National Pokédex: ownership segmented control         |
+| National Pokédex: live status + progressive grid + representative/preview art | National Pokédex: live status + header progress       |
+| National Pokédex: row click → openSpecies, stash focus/scroll                 | National Pokédex: open species → gallery              |
+| National Pokédex: rows disabled during discovery                              | National Pokédex: rows disabled during discovery      |
+| National Pokédex: on-mount scroll/focus restoration                           | National Pokédex: state survives leave/return         |
+| National Pokédex: pagination, empty state, header progress                    | National Pokédex: empty state / header progress       |
+| Devices: "Create pairing code" button                                         | Settings: API tokens                                  |
+| Devices: pairing-code output panel + "Copy code"                              | Settings: API tokens                                  |
+| Devices: paired-device list + "Revoke"                                        | Settings: API tokens                                  |
+| Devices: empty state "No scanner is paired."                                  | Settings: Devices screen dropped                      |
 
 ### `inventory-core.md` §3 — Auth flows and settings/admin surfaces
 

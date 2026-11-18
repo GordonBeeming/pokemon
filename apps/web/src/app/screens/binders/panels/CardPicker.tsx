@@ -1,5 +1,8 @@
+import { useInfiniteQuery } from '@tanstack/react-query';
+import { InfiniteLoader } from '../../../ui/InfiniteLoader';
+import { uniqueItems } from '../../../api/infinite-data';
 import type { FrameType } from '@pokedex/shared';
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { searchCards, type ResolvedCard } from '../../../api/queries/binders';
 import { CardFrame } from '../../../cards/CardFrame';
 import { binderErrorMessage, frameCardFrom } from '../model';
@@ -79,34 +82,41 @@ export function CardPicker({
 }): ReactElement {
   const [draft, setDraft] = useState(query.q);
   const [active, setActive] = useState<PickerQuery | null>(autoSearch ? query : null);
-  const [offset, setOffset] = useState(0);
-  const [results, setResults] = useState<{ cards: ResolvedCard[]; total: number } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const criteria = active ? JSON.stringify([active.q, active.filters ?? {}]) : null;
+  const request = useInfiniteQuery({
+    queryKey: ['catalogue', 'search', 'picker', criteria],
+    initialPageParam: 0,
+    enabled: active !== null,
+    queryFn: ({ pageParam, signal }) => {
+      if (!active) throw new Error('Choose a search first.');
+      return searchCards(toParams(active, pageParam), signal);
+    },
+    getNextPageParam: (last, _pages, param) =>
+      last.cards.length > 0 && param + last.cards.length < last.total
+        ? param + last.cards.length
+        : undefined,
+  });
+  const results = useMemo(() => {
+    const first = request.data?.pages[0];
+    return first
+      ? {
+          ...first,
+          cards: uniqueItems(
+            request.data?.pages.flatMap((page) => page.cards) ?? [],
+            (card) => card.id,
+          ),
+        }
+      : null;
+  }, [request.data]);
+  const loading = active !== null && request.isPending;
+  const error = request.isError && !results ? binderErrorMessage(request.error) : null;
   const onTotalRef = useRef(onTotal);
   onTotalRef.current = onTotal;
-
+  const total = request.data?.pages[0]?.total;
   useEffect(() => {
-    if (!active) return;
-    const controller = new AbortController();
-    setLoading(true);
-    setError(null);
-    searchCards(toParams(active, offset), controller.signal)
-      .then((page) => {
-        if (controller.signal.aborted) return;
-        setResults({ cards: page.cards, total: page.total });
-        onTotalRef.current?.(page.total, active);
-      })
-      .catch((cause: unknown) => {
-        if (!controller.signal.aborted) setError(binderErrorMessage(cause));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, [active, offset]);
+    if (active && total !== undefined) onTotalRef.current?.(total, active);
+  }, [active, total]);
 
-  const total = results?.total ?? 0;
   const shown = results?.cards.filter((card) => !hideIds?.has(card.id)) ?? [];
   return (
     <div className="card-picker">
@@ -115,7 +125,6 @@ export function CardPicker({
         role="search"
         onSubmit={(event) => {
           event.preventDefault();
-          setOffset(0);
           setActive({ ...query, q: draft });
         }}
       >
@@ -173,27 +182,13 @@ export function CardPicker({
           )}
         </div>
       ) : null}
-      {results && total > PICKER_PAGE_SIZE ? (
-        <nav className="panel-actions" aria-label="Search result pages">
-          <button
-            type="button"
-            disabled={loading || offset === 0}
-            onClick={() => setOffset(Math.max(0, offset - PICKER_PAGE_SIZE))}
-          >
-            Previous results
-          </button>
-          <span className="panel-help">
-            {offset + 1}–{Math.min(offset + PICKER_PAGE_SIZE, total)} of {total}
-          </span>
-          <button
-            type="button"
-            disabled={loading || offset + PICKER_PAGE_SIZE >= total}
-            onClick={() => setOffset(offset + PICKER_PAGE_SIZE)}
-          >
-            Next results
-          </button>
-        </nav>
-      ) : null}
+      <InfiniteLoader
+        hasMore={request.hasNextPage ?? false}
+        loading={request.isFetchingNextPage}
+        loadedCount={results?.cards.length ?? 0}
+        error={request.isFetchNextPageError ? 'More cards could not load.' : null}
+        onLoadMore={() => void request.fetchNextPage({ cancelRefetch: false })}
+      />
     </div>
   );
 }

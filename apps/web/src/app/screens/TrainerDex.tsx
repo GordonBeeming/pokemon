@@ -1,4 +1,3 @@
-import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
 import { TRAINER_REGIONS } from '@pokedex/shared';
 import { Link } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
@@ -7,9 +6,9 @@ import { CardFrame } from '../cards/CardFrame';
 import { catalogueSearch, pokedexSearch, trainersSearch } from '../routes/search-params';
 import type { TrainerDexSearch } from '../routes/trainer-dex';
 import { SelectField } from '../ui/SelectField';
-import { Pagination } from './catalogue/Pagination';
+import { InfiniteLoader } from '../ui/InfiniteLoader';
+import { useInfiniteWindow } from '../ui/useInfiniteWindow';
 import './trainer-dex.css';
-const PAGE_SIZE = GALLERY_PAGE_SIZE;
 export function TrainerDex({
   search,
   onSearch,
@@ -25,9 +24,11 @@ export function TrainerDex({
       (search.region === 'all' || t.regions.includes(search.region)) &&
       (!needle || `${t.name} ${t.regions.join(' ')}`.toLocaleLowerCase('en-AU').includes(needle)),
   );
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const page = Math.min(search.page, totalPages);
-  const entries = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const windowed = useInfiniteWindow(
+    filtered,
+    JSON.stringify(['trainer-dex', search.q, search.region, search.available]),
+  );
+  const entries = windowed.items;
   function change(patch: Partial<TrainerDexSearch>) {
     onSearch({ ...search, ...patch, page: patch.page ?? 1 });
   }
@@ -132,12 +133,12 @@ export function TrainerDex({
               <p>Try another region or name, or show trainers without cards.</p>
             </div>
           )}
-          <Pagination
-            page={page}
-            totalPages={totalPages}
-            pending={false}
-            label="Trainer pages"
-            onPage={(page) => change({ page })}
+          <InfiniteLoader
+            hasMore={windowed.hasMore}
+            loading={false}
+            loadedCount={entries.length}
+            label="trainers"
+            onLoadMore={windowed.loadMore}
           />
         </>
       )}

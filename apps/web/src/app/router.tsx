@@ -41,6 +41,7 @@ export const router = createRouter({
   routeTree,
   basepath: APP_BASEPATH,
   defaultPreload: 'intent',
+  scrollRestoration: true,
 });
 
 declare module '@tanstack/react-router' {

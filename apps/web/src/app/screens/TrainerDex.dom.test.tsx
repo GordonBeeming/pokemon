@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, useState, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -114,7 +115,13 @@ for (const [device, width, height] of [
   it(`filters trainers and opens their English card variants on ${device}`, () => {
     Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
     Object.defineProperty(window, 'innerHeight', { value: height, configurable: true });
-    act(() => root.render(<Page />));
+    act(() =>
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <Page />
+        </QueryClientProvider>,
+      ),
+    );
     expect(container.querySelectorAll('.trainer-dex-grid li')).toHaveLength(3);
     const region = container.querySelector('select');
     if (!region) throw new Error('Missing region filter');

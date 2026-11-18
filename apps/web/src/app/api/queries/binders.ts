@@ -1,3 +1,5 @@
+import { useMemo } from 'react';
+import { uniqueItems } from '../infinite-data';
 import {
   type BinderDisplayPatchRequest,
   binderAssignmentCandidateSchema,
@@ -23,7 +25,7 @@ import {
   type BinderPasteRequest,
   type BinderSlotLocation,
 } from '@pokedex/shared';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
 import { z } from 'zod';
 import { apiFetch } from '../client';
 import { queryKeys } from '../keys';
@@ -265,21 +267,37 @@ export function useOwnedUnplacedPreview(versionId: string, revision: number | un
   });
 }
 
-export function useBinderSpaceSearch(versionId: string, query: string, offset: number) {
+export function useBinderSpaceSearch(versionId: string, query: string) {
   const trimmed = query.trim();
-  return useQuery({
-    queryKey: queryKeys.binders.spaceSearch(versionId, trimmed, offset),
-    queryFn: ({ signal }) =>
+  const result = useInfiniteQuery({
+    queryKey: ['binders', 'version', versionId, 'search', trimmed, 'infinite'],
+    initialPageParam: 0,
+    enabled: trimmed.length > 0,
+    queryFn: ({ pageParam, signal }) =>
       apiFetch(
         versionPath(
           versionId,
-          `/search?${new URLSearchParams({ q: trimmed, offset: String(offset) })}`,
+          `/search?${new URLSearchParams({ q: trimmed, offset: String(pageParam) })}`,
         ),
         spaceSearchEnvelopeSchema,
         { signal },
       ),
-    enabled: trimmed.length > 0,
+    getNextPageParam: (last, _pages, _param, params) =>
+      last.nextOffset !== null && !params.includes(last.nextOffset) ? last.nextOffset : undefined,
   });
+  const data = useMemo(() => {
+    const first = result.data?.pages[0];
+    if (!first) return undefined;
+    return {
+      ...first,
+      matches: uniqueItems(
+        result.data?.pages.flatMap((page) => page.matches) ?? [],
+        (match) => `${match.page}:${match.row}:${match.column}`,
+      ),
+      nextOffset: result.data?.pages.at(-1)?.nextOffset ?? null,
+    };
+  }, [result.data]);
+  return { ...result, data };
 }
 
 export function useAssignmentCandidates(

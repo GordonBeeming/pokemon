@@ -1,3 +1,4 @@
+import { InfiniteLoader } from '../../../ui/InfiniteLoader';
 import {
   energyGroupName,
   formatDexNumber,
@@ -137,7 +138,7 @@ export function PageFillPanel({
               aria-label={kind === 'set' ? 'Matching sets' : 'Matching Pokémon'}
             >
               {kind === 'set'
-                ? matchingSets.slice(offset, offset + PAGE_SIZE).flatMap((set) => {
+                ? matchingSets.slice(0, offset + PAGE_SIZE).flatMap((set) => {
                     const language = languageSchema.safeParse(set.language);
                     if (!language.success) return [];
                     const key = `${set.language}:${set.setId}`;
@@ -164,7 +165,7 @@ export function PageFillPanel({
                       </button>,
                     ];
                   })
-                : pokemon.slice(offset, offset + PAGE_SIZE).map((item) => (
+                : pokemon.slice(0, offset + PAGE_SIZE).map((item) => (
                     <button
                       key={item.number}
                       type="button"
@@ -185,25 +186,13 @@ export function PageFillPanel({
                     </button>
                   ))}
             </div>
-            <nav className="panel-actions" aria-label="Search result pages">
-              <button
-                type="button"
-                disabled={offset === 0}
-                onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-              >
-                Previous results
-              </button>
-              <span className="panel-help">
-                {kind === 'set' && sets.isLoading ? 'Loading sets…' : `${total} matches`}
-              </span>
-              <button
-                type="button"
-                disabled={offset + PAGE_SIZE >= total}
-                onClick={() => setOffset(offset + PAGE_SIZE)}
-              >
-                Next results
-              </button>
-            </nav>
+            <InfiniteLoader
+              hasMore={offset + PAGE_SIZE < total}
+              loading={false}
+              loadedCount={Math.min(offset + PAGE_SIZE, total)}
+              label="targets"
+              onLoadMore={() => setOffset((n) => n + PAGE_SIZE)}
+            />
           </>
         )}
       </div>

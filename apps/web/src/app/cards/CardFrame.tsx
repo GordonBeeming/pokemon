@@ -135,6 +135,8 @@ export function CardFrame({
     <span className="card-frame-art-box">
       <img
         className="card-frame-art"
+        loading="lazy"
+        decoding="async"
         src={imageUrl}
         alt=""
         data-fit={fitAlong}

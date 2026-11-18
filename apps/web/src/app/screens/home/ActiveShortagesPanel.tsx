@@ -1,3 +1,4 @@
+import { InfiniteLoader } from '../../ui/InfiniteLoader';
 import { Link } from '@tanstack/react-router';
 import { useEffect, useRef, type ReactElement, type RefObject } from 'react';
 import { useActiveShortages, type ActiveShortageEntry } from '../../api/queries/dashboard';
@@ -120,25 +121,14 @@ export function ActiveShortagesPanel({
             targets
             {shortages.totalMissing !== null ? ` (${shortages.totalMissing} copies needed)` : ''}.
           </p>
-          {shortages.nextOffset !== null ? (
-            <div>
-              <button
-                type="button"
-                disabled={shortages.loadingMore}
-                onClick={() => void shortages.loadMore()}
-              >
-                {shortages.loadingMore ? 'Loading more…' : 'Load more shortages'}
-              </button>
-              {shortages.loadMoreError ? (
-                <span role="alert">
-                  {shortages.loadMoreError}{' '}
-                  <button type="button" onClick={() => void shortages.loadMore()}>
-                    Retry
-                  </button>
-                </span>
-              ) : null}
-            </div>
-          ) : null}
+          <InfiniteLoader
+            hasMore={shortages.nextOffset !== null}
+            loading={shortages.loadingMore}
+            loadedCount={shortages.entries.length}
+            label="shortages"
+            error={shortages.loadMoreError}
+            onLoadMore={() => void shortages.loadMore()}
+          />
         </>
       ) : null}
     </section>

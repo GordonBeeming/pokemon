@@ -1,3 +1,4 @@
+import { InfiniteLoader } from '../../../ui/InfiniteLoader';
 import { ENERGY_GROUPS, energyGroupName, type EnergyGroup } from '@pokedex/shared';
 import { useState, type ReactElement } from 'react';
 import { useIllustrators } from '../../../api/queries/illustrators';
@@ -78,7 +79,7 @@ export function GroupPicker({
         </p>
       ) : null}
       <div className="species-grid" aria-label={`Matching ${noun}`}>
-        {groups.slice(offset, offset + PAGE_SIZE).map((group) => (
+        {groups.slice(0, offset + PAGE_SIZE).map((group) => (
           <button
             key={group.key}
             type="button"
@@ -96,25 +97,16 @@ export function GroupPicker({
           </button>
         ))}
       </div>
-      <nav className="panel-actions" aria-label="Search result pages">
-        <button
-          type="button"
-          disabled={offset === 0}
-          onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-        >
-          Previous results
-        </button>
-        <span className="panel-help">
-          {source.isLoading ? `Loading ${noun}…` : `${groups.length} ${noun}`}
-        </span>
-        <button
-          type="button"
-          disabled={offset + PAGE_SIZE >= groups.length}
-          onClick={() => setOffset(offset + PAGE_SIZE)}
-        >
-          Next results
-        </button>
-      </nav>
+      <p className="panel-help">
+        {source.isLoading ? `Loading ${noun}…` : `${groups.length} ${noun}`}
+      </p>
+      <InfiniteLoader
+        hasMore={offset + PAGE_SIZE < groups.length}
+        loading={source.isLoading}
+        loadedCount={Math.min(offset + PAGE_SIZE, groups.length)}
+        label={noun}
+        onLoadMore={() => setOffset((n) => n + PAGE_SIZE)}
+      />
     </>
   );
 }

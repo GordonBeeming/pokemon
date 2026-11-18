@@ -40,19 +40,19 @@ function applyCollectionState(
   cardId: string,
   state: CollectionState,
 ): void {
-  queryClient.setQueriesData(
+  type Page = { cards: Array<{ id: string; collection: CollectionState | null }> };
+  const patch = (page: Page): Page => ({
+    ...page,
+    cards: page.cards.map((card) =>
+      card.id === cardId && (card.collection?.revision ?? 0) <= state.revision
+        ? { ...card, collection: state }
+        : card,
+    ),
+  });
+  queryClient.setQueriesData<Page | { pages: Page[]; pageParams: unknown[] }>(
     { queryKey: ['catalogue', 'search'] },
-    (data: { cards: Array<{ id: string; collection: CollectionState | null }> } | undefined) => {
-      if (!data) return data;
-      return {
-        ...data,
-        cards: data.cards.map((card) =>
-          card.id === cardId && (card.collection?.revision ?? 0) <= state.revision
-            ? { ...card, collection: state }
-            : card,
-        ),
-      };
-    },
+    (data) =>
+      !data ? data : 'pages' in data ? { ...data, pages: data.pages.map(patch) } : patch(data),
   );
   // Binder pages and binder search draw from resolved cards; keep their owned state
   // in step too.

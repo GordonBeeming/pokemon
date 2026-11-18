@@ -1,4 +1,4 @@
-import { GALLERY_PAGE_SIZE, type WantedEntry } from '@pokedex/shared';
+import { type WantedEntry } from '@pokedex/shared';
 import { useEffect, useState, type ReactElement } from 'react';
 import { Link } from '@tanstack/react-router';
 import { anyFrameCard, frameCardFrom } from './binders/model';
@@ -6,6 +6,7 @@ import { catalogueSearch } from '../routes/search-params';
 import { useBinders } from '../api/queries/binders';
 import { useWantedList, useSetWanted, type WantedFilters } from '../api/queries/wanted';
 import { CardFrame } from '../cards/CardFrame';
+import { InfiniteLoader } from '../ui/InfiniteLoader';
 import { SidePanel } from '../ui/SidePanel';
 import { useToast } from '../ui/Toast';
 import { CardInspector } from './card/CardInspector';
@@ -35,6 +36,8 @@ export function Wanted({
   const needsBinders = search.scope !== 'all' && search.scope !== 'general';
   const list = useWantedList(normalized, !needsBinders || binders.data !== undefined);
   const mutation = useSetWanted();
+  const entries = list.data?.entries ?? [];
+  const total = list.data?.total ?? 0;
   function change(patch: Partial<WantedFilters>) {
     onSearch({
       ...normalized,
@@ -152,7 +155,7 @@ export function Wanted({
         </p>
       ) : list.isPending ? (
         <p role="status">Loading wanted cards…</p>
-      ) : list.isError ? (
+      ) : list.isError && !list.data ? (
         <p role="alert">
           The shopping list could not load.{' '}
           <button type="button" onClick={() => void list.refetch()}>
@@ -162,10 +165,10 @@ export function Wanted({
       ) : (
         <>
           <p role="status">
-            {list.data.total} {list.data.total === 1 ? 'item' : 'items'}
+            {total} {total === 1 ? 'item' : 'items'}
             {normalized.includeUnfilled ? ' · including unfilled targets' : ''}
           </p>
-          {list.data.entries.length === 0 ? (
+          {entries.length === 0 ? (
             <div className="wanted-empty">
               <h2>No matching wants</h2>
               <p>
@@ -178,7 +181,7 @@ export function Wanted({
             </div>
           ) : (
             <ul className="wanted-grid">
-              {list.data.entries.map((entry) => (
+              {entries.map((entry) => (
                 <li key={entry.key} className="wanted-item">
                   <div className="wanted-art">
                     <CardFrame
@@ -244,25 +247,14 @@ export function Wanted({
               ))}
             </ul>
           )}
-          <nav className="wanted-pagination" aria-label="Shopping list pages">
-            <button
-              type="button"
-              disabled={search.offset === 0}
-              onClick={() => change({ offset: Math.max(0, search.offset - GALLERY_PAGE_SIZE) })}
-            >
-              Previous
-            </button>
-            <span>Page {Math.floor(search.offset / GALLERY_PAGE_SIZE) + 1}</span>
-            <button
-              type="button"
-              disabled={list.data.nextOffset === null}
-              onClick={() =>
-                list.data.nextOffset !== null && change({ offset: list.data.nextOffset })
-              }
-            >
-              Next
-            </button>
-          </nav>
+          <InfiniteLoader
+            paused={inspected !== null}
+            hasMore={list.hasNextPage ?? false}
+            loading={list.isFetchingNextPage ?? false}
+            loadedCount={entries.length}
+            error={list.isFetchNextPageError ? 'More wanted cards could not load.' : null}
+            onLoadMore={() => void list.fetchNextPage({ cancelRefetch: false })}
+          />
         </>
       )}
       {inspected?.cardId ? (

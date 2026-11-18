@@ -1,6 +1,6 @@
-import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
+import { InfiniteLoader } from '../../ui/InfiniteLoader';
 import type { BinderSearchMatch, FrameType } from '@pokedex/shared';
-import { useState, type ReactElement } from 'react';
+import { type ReactElement } from 'react';
 import {
   type ResolvedCard,
   useBinderSpaceSearch,
@@ -12,7 +12,6 @@ import { EmptyState } from '../../ui/EmptyState';
 import { CardFrameSkeleton } from '../../ui/Skeleton';
 import { anyFrameCard, binderErrorMessage, frameCardFrom } from './model';
 
-const PAGE_SIZE = GALLERY_PAGE_SIZE;
 /** Spare printings fetched per Pokémon on top of the ones other tiles may already use.
  * The catalogue lists owned printings first for a Pokémon, so the lookup reaches real art
  * to fade once the owned ones are spent. */
@@ -140,10 +139,8 @@ export function BinderSearchResults({
   palette: Record<FrameType, string>;
   onJump: (match: BinderSearchMatch) => void;
 }): ReactElement {
-  const [offset, setOffset] = useState(0);
-  const results = useBinderSpaceSearch(versionId, query, offset);
+  const results = useBinderSpaceSearch(versionId, query);
   const matches = results.data?.matches ?? [];
-  const nextOffset = results.data?.nextOffset ?? null;
   const cardIds = matches.flatMap((match) =>
     [match.assignedCardId, match.orderedCardId, match.targetCardId].filter((id): id is string =>
       Boolean(id),
@@ -202,7 +199,7 @@ export function BinderSearchResults({
     : loading
       ? 'Searching binder…'
       : matches.length
-        ? `${matches.length} matching ${matches.length === 1 ? 'pocket' : 'pockets'}${offset > 0 || nextOffset !== null ? `, ${offset + 1} to ${offset + matches.length}` : ''}.`
+        ? `${matches.length} matching ${matches.length === 1 ? 'pocket' : 'pockets'} loaded.`
         : '';
 
   return (
@@ -279,26 +276,14 @@ export function BinderSearchResults({
           })}
         </ul>
       )}
-      {offset > 0 || nextOffset !== null ? (
-        <div className="binder-results-paging">
-          <button
-            type="button"
-            disabled={offset === 0}
-            onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
-          >
-            Previous matches
-          </button>
-          <button
-            type="button"
-            disabled={nextOffset === null}
-            onClick={() => {
-              if (nextOffset !== null) setOffset(nextOffset);
-            }}
-          >
-            More matches
-          </button>
-        </div>
-      ) : null}
+      <InfiniteLoader
+        hasMore={results.hasNextPage ?? false}
+        loading={results.isFetchingNextPage ?? false}
+        loadedCount={matches.length}
+        label="matches"
+        error={results.isFetchNextPageError ? 'More matches could not load.' : null}
+        onLoadMore={() => void results.fetchNextPage({ cancelRefetch: false })}
+      />
     </section>
   );
 }

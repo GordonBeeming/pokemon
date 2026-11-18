@@ -45,6 +45,7 @@ export function useNationalPokedex() {
         (body) => body.entries,
       ),
     staleTime: 60_000,
+    gcTime: 60 * 60_000,
   });
 }
 

@@ -1,11 +1,8 @@
-import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
 import type { CatalogueCardView } from '@pokedex/shared';
 import type { ReactElement } from 'react';
 import { CardFrame } from '../../cards/CardFrame';
 import { CardFrameSkeleton } from '../../ui/Skeleton';
 import { EmptyState } from '../../ui/EmptyState';
-
-const PAGE_SIZE = GALLERY_PAGE_SIZE;
 
 function toFrameCard(card: CatalogueCardView) {
   return {
@@ -24,20 +21,18 @@ function toFrameCard(card: CatalogueCardView) {
 export function CatalogueGallery({
   cards,
   total,
-  page,
   loading,
   selectedCardId,
   onOpen,
 }: {
   cards: CatalogueCardView[];
   total: number;
-  page: number;
   loading: boolean;
   selectedCardId: string | undefined;
   onOpen: (cardId: string) => void;
 }): ReactElement {
-  const first = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
-  const last = Math.min(total, (page - 1) * PAGE_SIZE + cards.length);
+  const first = total === 0 ? 0 : 1;
+  const last = Math.min(total, cards.length);
 
   return (
     <section className="catalogue-gallery" aria-label="Catalogue results">

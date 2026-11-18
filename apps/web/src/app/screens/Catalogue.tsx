@@ -1,4 +1,4 @@
-import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
+import { uniqueItems } from '../api/infinite-data';
 import {
   artistKey,
   TRAINER_CHARACTERS,
@@ -35,7 +35,7 @@ import { BulkAddToBinder } from './catalogue/BulkAddToBinder';
 import { CatalogueGallery } from './catalogue/CatalogueGallery';
 import { CopyMenu } from './catalogue/CopyMenu';
 import { FiltersPanel, FRAME_TYPE_LABELS } from './catalogue/FiltersPanel';
-import { Pagination } from './catalogue/Pagination';
+import { InfiniteLoader } from '../ui/InfiniteLoader';
 import { useIsDesktop } from './catalogue/useIsDesktop';
 import { CardInspector } from './card/CardInspector';
 import './catalogue/catalogue.css';
@@ -46,8 +46,6 @@ const BLANK_SEARCH = catalogueSearch.parse({});
 const BLANK_POKEDEX_SEARCH = pokedexSearch.parse({});
 const BLANK_ILLUSTRATORS_SEARCH = illustratorsSearch.parse({});
 const BLANK_TRAINERS_SEARCH = trainersSearch.parse({});
-
-const PAGE_SIZE = GALLERY_PAGE_SIZE;
 
 export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement {
   const navigate = useNavigate({ from: '/catalogue' });
@@ -96,10 +94,8 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
 
   const cards = query.data?.cards ?? [];
   const total = query.data?.total ?? 0;
-  const busy = query.isLoading || query.isFetching;
-  // keepPreviousData holds the last page's cards while the next page loads; the grid
-  // must not show them under the new page's "Showing X to Y" line, so it skeletons
-  // until the cards for this exact URL arrive (the total still drives pagination).
+  const busy = query.isLoading || (query.isFetching && !query.isFetchingNextPage);
+  // A new filter has its own cache entry; appended chunks keep the existing cards visible.
   const galleryLoading = query.isLoading || query.isPlaceholderData;
   // An illustrator's gallery: arrived from their tile or a card's artist link, with
   // nothing else narrowing it, so it gets their name as the title and their star.
@@ -125,11 +121,6 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
     artistGallery ||
     trainerGallery;
   const contextSetName = search.set.length === 1 ? cards[0]?.setName : undefined;
-
-  function moveToPage(nextPage: number): void {
-    updateSearch({ page: nextPage }, false);
-    requestAnimationFrame(() => galleryRef.current?.scrollIntoView({ block: 'start' }));
-  }
 
   function openCard(cardId: string): void {
     updateSearch({ card: cardId }, false);
@@ -172,13 +163,36 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
     }
   }, [cards, selectedIndex]);
 
+  const cardNavigationAlive = useRef(true);
+  useEffect(() => {
+    cardNavigationAlive.current = true;
+    return () => {
+      cardNavigationAlive.current = false;
+    };
+  }, []);
+  const activeCard = useRef(search.card);
+  activeCard.current = search.card;
   function moveCard(delta: 1 | -1): void {
-    if (cards.length === 0) return;
+    if (cards.length === 0 || selectedIndex < 0 || query.isFetchingNextPage) return;
     if (dirtyInspector) {
       toast(
         'error',
         'Notes are still saving. Wait a moment, or fix the save error, then try again.',
       );
+      return;
+    }
+    if (delta === 1 && selectedIndex === cards.length - 1 && query.hasNextPage) {
+      const requestedCard = search.card;
+      void query.fetchNextPage({ cancelRefetch: false }).then((result) => {
+        if (!cardNavigationAlive.current || activeCard.current !== requestedCard) return;
+        const expanded = uniqueItems(
+          result.data?.pages.flatMap((page) => page.cards) ?? [],
+          (card) => card.id,
+        );
+        const index = expanded.findIndex((card) => card.id === requestedCard);
+        const next = index >= 0 ? expanded[index + 1] : undefined;
+        if (next) openCard(next.id);
+      });
       return;
     }
     const nextIndex = (Math.max(0, selectedIndex) + delta + cards.length) % cards.length;
@@ -541,22 +555,31 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
         </div>
       ) : null}
 
-      <div ref={galleryRef}>
-        <CatalogueGallery
-          cards={cards}
-          total={total}
-          page={search.page}
-          loading={galleryLoading}
-          selectedCardId={search.card}
-          onOpen={openCard}
-        />
-      </div>
-      <Pagination
-        page={search.page}
-        totalPages={Math.max(1, Math.ceil(total / PAGE_SIZE))}
-        pending={busy}
-        label="Catalogue pages"
-        onPage={moveToPage}
+      {query.isError && !query.data ? (
+        <p role="alert">
+          Cards could not load.{' '}
+          <button type="button" disabled={query.isFetching} onClick={() => void query.refetch()}>
+            Try again
+          </button>
+        </p>
+      ) : (
+        <div ref={galleryRef}>
+          <CatalogueGallery
+            cards={cards}
+            total={total}
+            loading={galleryLoading}
+            selectedCardId={search.card}
+            onOpen={openCard}
+          />
+        </div>
+      )}
+      <InfiniteLoader
+        paused={Boolean(search.card)}
+        hasMore={query.hasNextPage ?? false}
+        loading={query.isFetchingNextPage ?? false}
+        loadedCount={cards.length}
+        error={query.isFetchNextPageError ? 'More cards could not load.' : null}
+        onLoadMore={() => void query.fetchNextPage({ cancelRefetch: false })}
       />
 
       {isDesktop ? (
@@ -589,7 +612,7 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
                 type="button"
                 aria-label="Previous card"
                 onClick={() => moveCard(-1)}
-                disabled={cards.length < 2}
+                disabled={cards.length < 2 || selectedIndex < 0 || query.isFetchingNextPage}
               >
                 <Icon name="chevron-left" />
               </button>
@@ -597,7 +620,7 @@ export function Catalogue({ search }: { search: CatalogueSearch }): ReactElement
                 type="button"
                 aria-label="Next card"
                 onClick={() => moveCard(1)}
-                disabled={cards.length < 2}
+                disabled={cards.length < 2 || selectedIndex < 0 || query.isFetchingNextPage}
               >
                 <Icon name="chevron-right" />
               </button>

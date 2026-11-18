@@ -13,7 +13,7 @@ export const COPY_CAP_MESSAGE = `Narrow the results to ${CATALOGUE_BULK_CAP.toLo
 /**
  * FEATURES.md's Clipboard & bulk actions section, behind one "Copy" trigger: copy
  * the currently displayed order, copy release-date order regardless of the visible
- * sort, or (above 50 results) copy just this page. The whole-result items are
+ * sort, or copy only the currently loaded cards. The whole-result items are
  * disabled at 0/2,000+ results or before the first search resolves, and each
  * disabled item says why; the cap message only appears when it applies.
  */
@@ -128,15 +128,17 @@ function CopyItems({
         closeOnSelect={false}
         onSelect={() => copyAll('release-date')}
       />
-      {total > 50 ? (
+      {total > cards.length ? (
         <MenuItem
-          label="This page"
+          label="Loaded cards"
           hint={
-            busy
-              ? 'Waiting for the search to finish.'
-              : `Only the ${cards.length.toLocaleString('en-AU')} cards shown on this page.`
+            cards.length > CATALOGUE_BULK_CAP
+              ? COPY_CAP_MESSAGE
+              : busy
+                ? 'Waiting for the search to finish.'
+                : `Only the ${cards.length.toLocaleString('en-AU')} cards loaded so far.`
           }
-          disabled={busy || copying || cards.length === 0}
+          disabled={busy || copying || cards.length === 0 || cards.length > CATALOGUE_BULK_CAP}
           closeOnSelect={false}
           onSelect={() =>
             void action.run(

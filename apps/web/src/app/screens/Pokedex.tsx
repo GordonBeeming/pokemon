@@ -1,4 +1,3 @@
-import { GALLERY_PAGE_SIZE } from '@pokedex/shared';
 import {
   formatDexNumber,
   frameTypeFor,
@@ -23,11 +22,9 @@ import {
 import { EmptyState } from '../ui/EmptyState';
 import { SegmentedControl } from '../ui/SegmentedControl';
 import { SelectField } from '../ui/SelectField';
-import { Pagination } from './catalogue/Pagination';
+import { InfiniteLoader } from '../ui/InfiniteLoader';
+import { useInfiniteWindow } from '../ui/useInfiniteWindow';
 import './pokedex/pokedex.css';
-
-const PAGE_SIZE = GALLERY_PAGE_SIZE;
-const SCROLL_KEY = 'pokedex:scroll-y';
 
 function matches(
   entry: NationalPokedexEntry,
@@ -59,16 +56,16 @@ export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
     [coverage.data],
   );
 
-  // Scroll position survives leaving and returning — restored once, on the first
-  // paint after the coverage data (and therefore the grid) is actually present.
+  // Restore keyboard focus once the species grid is present; the router restores scroll.
   useEffect(() => {
     if (coverage.isLoading) return;
-    const saved = Number(sessionStorage.getItem(SCROLL_KEY) ?? '0');
-    if (saved > 0) window.scrollTo({ top: saved });
-    if (search.dex !== undefined)
+    const focusedNumber = search.dex;
+    if (focusedNumber !== undefined)
       requestAnimationFrame(() => {
         document
-          .querySelector<HTMLButtonElement>(`[data-pokedex-number="${search.dex}"]`)
+          .querySelector<HTMLButtonElement>(
+            `.pokedex-grid button[aria-label*="Pokédex ${formatDexNumber(focusedNumber)}"]`,
+          )
           ?.focus({ preventScroll: true });
       });
     // Runs once the data that makes the grid tall enough to scroll into exists —
@@ -76,19 +73,6 @@ export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
     // value should only drive focus on this initial restoration, never again
     // while the visitor is actively paging or filtering.
   }, [coverage.isLoading]);
-
-  useEffect(() => {
-    const onScroll = (): void => {
-      try {
-        sessionStorage.setItem(SCROLL_KEY, String(window.scrollY));
-      } catch {
-        // Storage can be unavailable in private/locked-down contexts; losing scroll
-        // restoration on return is a minor cost, not worth failing the screen for.
-      }
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, []);
 
   function updateSearch(patch: Partial<PokedexSearch>, resetPage = true): void {
     void navigate({
@@ -131,9 +115,11 @@ export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
   );
 
   const ownedSpecies = (coverage.data ?? []).filter((entry) => entry.ownedCards > 0).length;
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const safePage = Math.min(search.page, totalPages);
-  const visible = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const windowed = useInfiniteWindow(
+    filtered,
+    JSON.stringify(['pokedex', search.q, search.filter, search.region]),
+  );
+  const visible = windowed.items;
 
   function openSpecies(entry: NationalPokedexEntry): void {
     if (pendingNumber !== null) return;
@@ -147,7 +133,12 @@ export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
     // Replaces (not pushes) this screen's own history entry so a single Back from
     // Catalogue restores the focused tile, rather than bouncing through an
     // intermediate entry — the focused tile survives leaving and returning.
-    void navigate({ to: '/pokedex', search: { ...search, dex: entry.number }, replace: true });
+    void navigate({
+      to: '/pokedex',
+      search: { ...search, dex: entry.number },
+      replace: true,
+      resetScroll: false,
+    });
     void navigate({ to: '/catalogue', search: catalogueSearch.parse({ dex: entry.number }) });
   }
 
@@ -258,15 +249,12 @@ export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
         </div>
       )}
 
-      <Pagination
-        page={safePage}
-        totalPages={totalPages}
-        pending={coverage.isLoading}
-        label="National Pokédex pages"
-        onPage={(page) => {
-          updateSearch({ page }, false);
-          requestAnimationFrame(() => list.current?.scrollIntoView({ block: 'start' }));
-        }}
+      <InfiniteLoader
+        hasMore={windowed.hasMore}
+        loading={false}
+        loadedCount={visible.length}
+        label="Pokémon"
+        onLoadMore={windowed.loadMore}
       />
     </div>
   );
