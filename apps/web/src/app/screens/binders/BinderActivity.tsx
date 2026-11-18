@@ -3,11 +3,12 @@ import type { BinderActivityResult } from '@pokedex/shared';
 import { api } from '../../api/queries/binder-activity';
 import { CardFrame } from '../../cards/CardFrame';
 import { Icon } from '../../ui/icons';
-import { binderErrorMessage as userMessage } from './model';
+import { binderErrorMessage as userMessage, frameCardFrom } from './model';
 
 export function activityTime(seconds: number): string {
   return `${new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Brisbane', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(seconds * 1000))} AEST`;
 }
+
 function batchTime(seconds: number): string {
   return `${new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Brisbane', day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date(seconds * 1000))} AEST`;
 }
@@ -15,9 +16,11 @@ function batchTime(seconds: number): string {
 export function BinderActivity({
   binderId,
   revision,
+  onOpenCard,
 }: {
   binderId: string;
   revision: number;
+  onOpenCard?: (cardId: string) => void;
 }): ReactElement {
   const [batch, setBatch] = useState('');
   const [query, setQuery] = useState('');
@@ -304,19 +307,22 @@ export function BinderActivity({
               {data.events.map((event) => (
                 <li key={event.id}>
                   <CardFrame
-                    card={{
-                      id: event.cardId,
-                      name: event.name,
-                      imageUrl: event.imageLowUrl,
-                      number: event.number,
-                      setCode: null,
-                      rarityKey: null,
-                      pokedexNumber: event.pokedexNumber,
-                      frameType: null,
-                    }}
-                    frame={false}
-                    state="placed"
-                    forceSolid
+                    card={
+                      event.card
+                        ? frameCardFrom(event.card)
+                        : {
+                            id: event.cardId,
+                            name: event.name,
+                            imageUrl: event.imageLowUrl,
+                            number: event.number,
+                            setCode: null,
+                            rarityKey: null,
+                            pokedexNumber: event.pokedexNumber,
+                            frameType: null,
+                          }
+                    }
+                    state={(event.card?.collection?.quantity ?? 0) > 0 ? 'owned' : 'unowned'}
+                    onView={event.card && onOpenCard ? () => onOpenCard(event.cardId) : undefined}
                   />
                   <div className="activity-card-heading">
                     <span className={`activity-kind activity-kind-${event.kind}`}>
@@ -324,18 +330,12 @@ export function BinderActivity({
                     </span>
                   </div>
                   <strong>{event.name}</strong>
-                  <span>
-                    {event.setName} · {event.number} · {event.language.toUpperCase()}
-                  </span>
                   {event.sectionName ? (
                     <span className="activity-card-section">{event.sectionName}</span>
                   ) : null}
                   <span>
                     Page {event.page + 1} · row {event.row + 1} · pocket {event.column + 1}
                   </span>
-                  <small title={activityTime(event.createdAt)}>
-                    V{event.versionNumber} · {batchTime(event.createdAt)}
-                  </small>
                 </li>
               ))}
             </ol>

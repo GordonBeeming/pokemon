@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { catalogueCardViewSchema } from './index';
 
 export const binderActivityQuerySchema = z.object({
   batch: z.string().max(128).optional(),
@@ -40,6 +41,10 @@ export const binderActivityResultSchema = z.object({
       row: z.number().int(),
       column: z.number().int(),
       cardId: z.string(),
+      card: z
+        .lazy(() => catalogueCardViewSchema)
+        .nullable()
+        .default(null),
       name: z.string(),
       setName: z.string(),
       number: z.string(),

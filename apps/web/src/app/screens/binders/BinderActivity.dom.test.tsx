@@ -2,8 +2,9 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
-import type { BinderActivityResult } from '@pokedex/shared';
+import { cardIdSchema, type BinderActivityResult } from '@pokedex/shared';
 import { BinderActivity } from './BinderActivity';
+import { PriceVisibilityContextForTests } from '../../cards/PriceVisibility';
 const mocks = vi.hoisted(() => ({
   read: vi.fn<
     (id: string, query: URLSearchParams, signal?: AbortSignal) => Promise<BinderActivityResult>
@@ -40,6 +41,30 @@ const result: BinderActivityResult = {
       row: 0,
       column: 1,
       cardId: 'squirtle',
+      card: {
+        id: cardIdSchema.parse('squirtle'),
+        name: 'Squirtle',
+        category: 'pokemon',
+        language: 'en',
+        setId: 'base',
+        setName: 'Base',
+        setCode: 'BS',
+        number: '7',
+        pokedexNumber: 7,
+        frameType: 'water',
+        rarityKey: 'C',
+        imageLowUrl: null,
+        imageHighUrl: null,
+        collection: null,
+        price: {
+          amountAud: 3.5,
+          nativeAmount: 2,
+          nativeCurrency: 'USD',
+          source: 'tcgplayer',
+          sourceCapturedAt: '2026-11-18T00:00:00.000Z',
+          fxDate: '2026-11-18',
+        },
+      },
       name: 'Squirtle',
       setName: 'Base',
       number: '7',
@@ -167,4 +192,47 @@ it('keeps a selected section visible when a different batch has no matches for i
     .find((l) => l.textContent === 'Unbookmarked')
     ?.querySelector('input');
   expect(retained?.checked).toBe(true);
+});
+
+it.each([
+  [1440, 1000],
+  [390, 844],
+  [844, 390],
+  [768, 1024],
+  [1024, 768],
+])('uses standard interactive card chrome with pocket details at %ix%i', async (width, height) => {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+  const onOpenCard = vi.fn();
+  act(() => root.render(<BinderActivity binderId="b" revision={1} onOpenCard={onOpenCard} />));
+  await settle();
+  const tile = container.querySelector('.binder-activity-grid li');
+  const frame = tile?.querySelector<HTMLButtonElement>('button.card-frame');
+  expect(frame).not.toBeNull();
+  expect(frame?.classList.contains('card-frame-raw')).toBe(false);
+  expect(frame?.textContent).toContain('#007');
+  expect(frame?.textContent).toContain('Kanto');
+  expect(frame?.textContent).toContain('BS');
+  expect(frame?.querySelector('.card-frame-rarity')).not.toBeNull();
+  expect(frame?.querySelector('.card-frame-price')?.textContent).toBe('~A$4');
+  expect(frame?.getAttribute('aria-label')).toContain('not owned');
+  expect(tile?.textContent).toContain('Page 3 · row 1 · pocket 2');
+  expect(tile?.textContent).toContain('Added');
+  expect(tile?.textContent).not.toContain('AEST');
+  expect(tile?.textContent).not.toContain('V1');
+  act(() => frame?.click());
+  expect(onOpenCard).toHaveBeenCalledWith('squirtle');
+});
+
+it('respects the standard hidden-price setting', async () => {
+  act(() =>
+    root.render(
+      <PriceVisibilityContextForTests value={false}>
+        <BinderActivity binderId="b" revision={1} />
+      </PriceVisibilityContextForTests>,
+    ),
+  );
+  await settle();
+  expect(container.querySelector('.card-frame-code')).not.toBeNull();
+  expect(container.querySelector('.card-frame-price')).toBeNull();
 });

@@ -399,3 +399,53 @@ it('filters a long bookmarked history with bounded result pages', async () => {
   expect(result.events).toHaveLength(500);
   expect(result.sections).toHaveLength(100);
 });
+
+it('returns the same standard card metadata and ownership as catalogue resolution', async () => {
+  const { database, db, binder, read } = await setup();
+  database.exec(`UPDATE catalogue_cards SET types='["Water"]',rarity='Common' WHERE id='squirtle';
+    INSERT INTO catalogue_sets(set_id,language,set_name,updated_at,abbreviation,abbreviation_source) VALUES('base','en','Base',1,'BS','tcgdex');
+    INSERT INTO card_current_prices(card_id,source,native_amount_micros,native_currency,source_captured_at,fx_date,amount_aud_micros,updated_at) VALUES('squirtle','tcgplayer',2000000,'USD',1,'2026-11-18',3500000,1);`);
+  await setBinderSlot(db, 'owner', binder.version.id, 0, 0, 0, 'squirtle');
+  await setBinderEntryAssignment(
+    db,
+    'owner',
+    binder.version.id,
+    { page: 0, row: 0, column: 0 },
+    'squirtle',
+    2,
+  );
+  const activity = await read();
+  expect(activity.events[0]).toMatchObject({
+    page: 0,
+    row: 0,
+    column: 0,
+    card: {
+      id: 'squirtle',
+      frameType: 'water',
+      setCode: 'BS',
+      rarityKey: 'C',
+      pokedexNumber: 7,
+      collection: { quantity: 5 },
+      price: { amountAud: 3.5 },
+    },
+  });
+});
+
+it('resolves more than 200 distinct activity cards without dropping history', async () => {
+  const { database, binder, read } = await setup();
+  const card = database.prepare(
+    `INSERT INTO catalogue_cards(id,name,language,category,set_id,set_name,number,created_at,updated_at) VALUES(?,?,'en','trainer','base','Base',?,1,1)`,
+  );
+  const event = database.prepare(
+    `INSERT INTO binder_activity(binder_id,version_id,version_number,kind,card_id,page,row_index,column_index,created_at) VALUES(?,?,1,'added',?,0,0,0,1)`,
+  );
+  for (let i = 0; i < 205; i++) {
+    card.run(`trainer-${i}`, `Trainer ${i}`, String(i));
+    event.run(binder.version.binderId, binder.version.id, `trainer-${i}`);
+  }
+  const result = await read();
+  expect(result.events).toHaveLength(205);
+  expect(
+    result.events.every((e) => e.card?.id === e.cardId && e.card.frameType === 'trainer'),
+  ).toBe(true);
+});

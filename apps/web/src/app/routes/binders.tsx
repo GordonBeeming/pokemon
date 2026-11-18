@@ -69,6 +69,7 @@ export const binderActivityRoute = createRoute({
   component: function BinderActivityPage() {
     const { binderId } = binderActivityRoute.useParams();
     const { returnPage } = binderActivityRoute.useSearch();
+    const navigate = useNavigate();
     const binders = useBinders();
     const binder = binders.data?.find((b) => b.id === binderId);
     if (binders.isPending) return <p role="status">Loading binder…</p>;
@@ -103,7 +104,12 @@ export const binderActivityRoute = createRoute({
             <p className="binder-meta">{binder?.name ?? 'Placements and checkpoints'}</p>
           </div>
         </header>
-        <BinderActivity key={binderId} binderId={binderId} revision={0} />
+        <BinderActivity
+          key={binderId}
+          binderId={binderId}
+          revision={0}
+          onOpenCard={(cardId) => void navigate({ to: '/card/$cardId', params: { cardId } })}
+        />
       </section>
     );
   },

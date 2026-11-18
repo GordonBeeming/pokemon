@@ -45,9 +45,9 @@ binder page and its tools. Tokens come from theme/tokens.css. */
   font-size: 0.875rem;
   color: var(--muted);
 } /* Shared buttons for these screens */
-.binder-scope button,
-.binders-library button,
-.binder-panel button {
+.binder-scope button:not(:where(.card-frame)),
+.binders-library button:not(:where(.card-frame)),
+.binder-panel button:not(:where(.card-frame)) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1429,18 +1429,11 @@ an action at the end */
   gap: 0.4rem;
   min-width: 0;
   overflow-wrap: anywhere;
-  padding: 0.75rem;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
+  padding: 0;
   font-size: 0.875rem;
 }
 .binder-activity-grid li > strong {
   font-size: 1rem;
-}
-.binder-activity-grid small {
-  color: var(--muted);
-  font-size: 0.75rem;
 }
 .activity-kind {
   display: inline-flex;
@@ -1494,7 +1487,7 @@ an action at the end */
     gap: 0.75rem;
   }
   .binder-activity-grid li {
-    padding: 0.5rem;
+    padding: 0;
     font-size: 0.8125rem;
   }
   .activity-batch-bar > label {

@@ -1,7 +1,12 @@
-import { binderActivityResultSchema, type BinderActivityQuery } from '@pokedex/shared';
+import {
+  binderActivityResultSchema,
+  type BinderActivityQuery,
+  type CatalogueCardView,
+} from '@pokedex/shared';
 import { newId, nowSeconds } from './db';
 import { BinderDomainError } from './binders';
 import { ApplicationError } from './log';
+import { resolveCatalogueCards } from './catalogue';
 
 async function requireBinder(db: D1Database, ownerId: string, binderId: string) {
   if (
@@ -195,6 +200,18 @@ export async function getBinderActivity(
       hasArt: number;
       sectionName: string | null;
     }>();
+  const cardIds = [...new Set(events.results.map((event) => event.cardId))];
+  const cards = new Map<string, CatalogueCardView>();
+  // Catalogue resolution is bounded to 200 IDs; activity can contain 500 events.
+  for (let start = 0; start < cardIds.length; start += 200) {
+    for (const card of await resolveCatalogueCards(
+      db,
+      ownerId,
+      cardIds.slice(start, start + 200),
+      true,
+    ))
+      cards.set(card.id, card);
+  }
   return binderActivityResultSchema.parse({
     selectedBatch,
     pendingChanges: boundaries[0]?.newer ?? 0,
@@ -206,6 +223,7 @@ export async function getBinderActivity(
     total: total?.total ?? 0,
     events: events.results.map(({ hasArt, ...e }) => ({
       ...e,
+      card: cards.get(e.cardId) ?? null,
       region: null,
       imageLowUrl: hasArt ? `/api/art/${encodeURIComponent(e.cardId)}/low` : null,
     })),
