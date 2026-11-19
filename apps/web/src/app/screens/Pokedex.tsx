@@ -6,7 +6,7 @@ import {
   POKEMON_DISCOVERY_CATEGORIES,
 } from '@pokedex/shared';
 import { Link, useNavigate } from '@tanstack/react-router';
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import {
   recentlyDiscoveredSpecies,
   useDiscoverSpecies,
@@ -204,7 +204,7 @@ export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
         <EmptyState icon="pokedex" title="No Pokémon match these filters." />
       ) : (
         <div className="pokedex-grid" ref={list}>
-          {visible.map((entry) => {
+          {visible.map((entry, index) => {
             const state = coverageByNumber.get(entry.number);
             const owned = (state?.ownedCards ?? 0) > 0;
             const representative = state?.representative;
@@ -214,36 +214,41 @@ export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
               ? frameTypeFor({ category: 'pokemon', types: state.types, name: entry.name })
               : null;
             return (
-              <CardFrame
-                key={entry.number}
-                card={
-                  representative
-                    ? {
-                        id: representative.cardId,
-                        name: entry.name,
-                        frameType,
-                        setCode: representative.setCode ?? null,
-                        number: representative.number,
-                        rarityKey: representative.rarityKey ?? null,
-                        pokedexNumber: entry.number,
-                        imageUrl: representative.imageLowUrl,
-                      }
-                    : {
-                        id: `species-${entry.number}`,
-                        name: entry.name,
-                        frameType,
-                        setCode: null,
-                        number: null,
-                        rarityKey: null,
-                        pokedexNumber: entry.number,
-                        imageUrl: null,
-                      }
-                }
-                variant={representative ? 'card' : 'any'}
-                state={owned ? 'owned' : 'unowned'}
-                onView={() => openSpecies(entry)}
-                className={pendingNumber === entry.number ? 'pokedex-tile-pending' : undefined}
-              />
+              <Fragment key={entry.number}>
+                {index === 0 ||
+                visible[index - 1]?.discoveryCategory !== entry.discoveryCategory ? (
+                  <h2 className="pokedex-region-divider">{entry.discoveryCategory}</h2>
+                ) : null}
+                <CardFrame
+                  card={
+                    representative
+                      ? {
+                          id: representative.cardId,
+                          name: entry.name,
+                          frameType,
+                          setCode: representative.setCode ?? null,
+                          number: representative.number,
+                          rarityKey: representative.rarityKey ?? null,
+                          pokedexNumber: entry.number,
+                          imageUrl: representative.imageLowUrl,
+                        }
+                      : {
+                          id: `species-${entry.number}`,
+                          name: entry.name,
+                          frameType,
+                          setCode: null,
+                          number: null,
+                          rarityKey: null,
+                          pokedexNumber: entry.number,
+                          imageUrl: null,
+                        }
+                  }
+                  variant={representative ? 'card' : 'any'}
+                  state={owned ? 'owned' : 'unowned'}
+                  onView={() => openSpecies(entry)}
+                  className={pendingNumber === entry.number ? 'pokedex-tile-pending' : undefined}
+                />
+              </Fragment>
             );
           })}
         </div>

@@ -62,3 +62,24 @@
     align-items: flex-start;
   }
 }
+
+.pokedex-region-divider {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.pokedex-region-divider:first-child {
+  margin-top: 0;
+}
+.pokedex-region-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line-strong);
+}

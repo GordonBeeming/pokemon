@@ -24,6 +24,8 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 - Loading another chunk keeps the existing cards visible. A failed request leaves them in place
   and offers Retry. Changing filters starts the matching list; reopening a card preserves the
   loaded results and scroll position.
+- National Pokédex regions start on their own rows with small headings and dividers.
+  Filtering omits regions without matching species.
 - The full shortages report also loads further rows while scrolling. Binder page-turn controls
   remain available for navigating physical binder pages.
 
