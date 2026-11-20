@@ -44,7 +44,7 @@ export function pocketActionItems({
   if (hasCard) items.push({ key: 'view', label: 'View card', icon: 'eye', onSelect: on.view });
   if (editable && target && slot.orderedCardId && on.received)
     items.push({ key: 'received', label: 'Mark received', icon: 'plus', onSelect: on.received });
-  if (editable && target && !slot.orderedCardId && on.ordered)
+  if (editable && target && slot.assignedCardId && !slot.orderedCardId && on.ordered)
     items.push({ key: 'ordered', label: 'Mark ordered', icon: 'sync', onSelect: on.ordered });
   if (editable && target)
     items.push({ key: 'find', label: 'Find cards', icon: 'magnifier', onSelect: on.find });

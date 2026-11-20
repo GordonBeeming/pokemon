@@ -225,3 +225,18 @@ it('offers received for an ordered target and ordered for a received target', ()
   expect(received.some((a) => a.key === 'ordered')).toBe(true);
   expect(received.some((a) => a.key === 'received')).toBe(false);
 });
+
+it.each([
+  { entryKind: 'pokemon' as const, pokemonNumber: 7 },
+  { entryKind: 'exact-card' as const, cardId: 'card' },
+])('does not offer Mark ordered for an unfilled $entryKind target', (target) => {
+  const items = pocketActionItems({
+    slot: slot(target),
+    editable: true,
+    hasCard: target.entryKind === 'exact-card',
+    hasClipboard: false,
+    on: { ...handlers(), ordered: vi.fn(), received: vi.fn() },
+  });
+  expect(items.some((item) => item.key === 'ordered')).toBe(false);
+  expect(items.some((item) => item.key === 'find')).toBe(true);
+});

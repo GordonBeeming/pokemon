@@ -846,10 +846,10 @@ an action at the end */
    actions drop to icons. The label stays in the button (visually hidden) as its
    accessible name, and the title shows it on hover. */
 @media (max-width: 1279px) {
-  /* The icon row keeps its full width; the card summary beside it wraps instead. */
+  /* Keep every action reachable when the sidebar leaves a narrow binder view. */
   .pocket-actions > .action-bar {
-    flex: 0 0 auto;
-    flex-wrap: nowrap;
+    flex: 1 1 auto;
+    flex-wrap: wrap;
   }
   .pocket-actions-text {
     flex: 1 1 auto;
