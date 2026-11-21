@@ -73,7 +73,7 @@ Create one card with `POST /api/catalogue/custom`, `content-type: application/js
 
 Use a distinct set ID for a different unofficial series. `055-card series` describes the printed denominator; it is not a verified official set title. `WCS TYDS` transcribes the printed credit and does not verify the artist's identity. Leave unknown metadata unset rather than guessing it.
 
-Save each returned `id` before uploading. If a request times out, search again before retrying creation. The current `createCustomCard` implementation accepts `pokedexNumber` through its request schema but does not persist it; do not claim that these entries have a National Pokédex number mapping.
+Save each returned `id` before uploading. If a request times out, search again before retrying creation. Custom Pokémon cards save a supplied `pokedexNumber`, or infer it from the species/name when omitted. Migration `034_custom_card_pokedex.sql` repairs older custom cards where their saved species or card name before a parenthetical label exactly matches an unambiguous imported Pokémon name, allowing them to fill species targets in binders.
 
 ## Authorise artwork uploads
 

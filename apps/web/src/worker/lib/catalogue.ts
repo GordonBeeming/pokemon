@@ -1886,6 +1886,14 @@ export async function createCustomCard(
   ownerId: string,
   input: Omit<ImportedCard, 'sourceId' | 'checksum' | 'sourceUpdatedAt'>,
 ): Promise<string> {
+  if (
+    input.pokedexNumber !== undefined &&
+    input.pokedexNumber !== null &&
+    (!Number.isInteger(input.pokedexNumber) ||
+      input.pokedexNumber < 1 ||
+      input.pokedexNumber > NATIONAL_POKEDEX_SIZE)
+  )
+    throw new ApplicationError('invalid_pokedex_number', 400);
   const id = newId('custom');
   const now = nowSeconds();
   await db.batch([
@@ -1899,8 +1907,8 @@ export async function createCustomCard(
         `INSERT INTO catalogue_cards
           (id, name, language, category, set_id, set_name, number, number_sort, supertype,
            subtype, species, rarity, artist, is_custom, owner_id, created_at, updated_at,
-           artist_key, trainer_key, energy_key)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?15, ?15, ?16, ?17, ?18)`,
+           artist_key, trainer_key, energy_key, pokedex_number)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, ?14, ?15, ?15, ?16, ?17, ?18, ?19)`,
       )
       .bind(
         id,
@@ -1921,6 +1929,11 @@ export async function createCustomCard(
         cardGroupKeys(input).artistKey,
         cardGroupKeys(input).trainerKey,
         cardGroupKeys(input).energyKey,
+        input.category === 'pokemon'
+          ? (input.pokedexNumber ??
+              pokedexNumberFromCardName(input.species ?? '') ??
+              pokedexNumberFromCardName(input.name))
+          : null,
       ),
     db
       .prepare(

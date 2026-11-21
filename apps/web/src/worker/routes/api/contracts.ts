@@ -21,6 +21,7 @@ import {
   collectionSetRequestSchema,
   languageSchema,
   mutationRequestSchema,
+  NATIONAL_POKEDEX_SIZE,
   desktopScopeSchema,
   type DesktopScope,
 } from '@pokedex/shared';
@@ -151,6 +152,9 @@ export const syncBody = z
   .strict();
 export const customCardBody = syncBody.shape.cards.element
   .omit({ sourceId: true, checksum: true, sourceUpdatedAt: true })
+  .extend({
+    pokedexNumber: z.number().int().min(1).max(NATIONAL_POKEDEX_SIZE).nullable().optional(),
+  })
   .strict();
 export const syncPageBody = z.object({ cards: syncBody.shape.cards }).strict();
 export const syncRunBody = z.object({ language: languageSchema }).strict();
