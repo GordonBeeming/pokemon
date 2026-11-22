@@ -13,6 +13,8 @@ import {
   type BinderInsertDestinations,
   type BinderLayout,
   binderLayoutSchema,
+  binderRotationSchema,
+  type BinderRotation,
   type BinderMutationResult,
   binderMutationResultSchema,
   type BinderPage,
@@ -64,6 +66,7 @@ export interface ReflowEntry {
   orderedCardId?: string | null;
   orderedAddCopy?: number;
   orderedAt?: number | null;
+  rotation?: BinderRotation;
   originalIndex?: number;
 }
 
@@ -168,6 +171,7 @@ interface SlotRow {
   ordered_card_id?: string | null;
   ordered_add_copy?: number;
   ordered_at?: number | null;
+  rotation?: BinderRotation;
   starts_new_page?: number;
   set_id?: string | null;
   set_language?: string | null;
@@ -254,6 +258,8 @@ export interface OrderingRow {
 export type ArrangementMode = 'set-number' | 'release-date' | 'pokedex-number' | 'language';
 
 export type BinderErrorCode =
+  | 'binder_rotation_invalid'
+  | 'binder_rotation_unavailable'
   | 'binder_order_copy_unavailable'
   | 'binder_order_active_only'
   | 'binder_order_not_found'
@@ -461,7 +467,7 @@ async function readPages(
     .prepare(
       `SELECT slot.binder_page_id, slot.row_index, slot.column_index, slot.card_id,
         ${slotKindSql('slot')} AS entry_kind, slot.label, slot.pokemon_number,
-        slot.assigned_card_id, slot.ordered_card_id, slot.ordered_add_copy, slot.ordered_at, slot.starts_new_page, slot.set_id, slot.set_language,
+        slot.assigned_card_id, slot.ordered_card_id, slot.ordered_add_copy, slot.ordered_at, slot.rotation, slot.starts_new_page, slot.set_id, slot.set_language,
         target_set.set_name AS set_name,
         COALESCE(target_set.abbreviation, upper(slot.set_id)) AS set_code,
         slot.group_kind, slot.group_key, ${groupSampleSql('slot')} AS group_sample,
@@ -498,6 +504,7 @@ async function readPages(
         pokemonNumber: slot.pokemon_number ?? null,
         assignedCardId: slot.assigned_card_id ?? null,
         orderedCardId: slot.ordered_card_id ?? null,
+        ...(slot.rotation ? { rotation: slot.rotation } : {}),
         startsNewPage: slot.starts_new_page === 1,
         ...(slot.entry_kind === 'set'
           ? {
@@ -1264,7 +1271,7 @@ export async function getBinderAssignmentCandidates(
   const target = await db
     .prepare(
       `SELECT slot.binder_page_id, slot.row_index, slot.column_index, slot.card_id,
-        ${slotKindSql('slot')} AS entry_kind, slot.label, slot.pokemon_number, slot.assigned_card_id, slot.ordered_card_id, slot.ordered_add_copy, slot.ordered_at,
+        ${slotKindSql('slot')} AS entry_kind, slot.label, slot.pokemon_number, slot.assigned_card_id, slot.ordered_card_id, slot.ordered_add_copy, slot.ordered_at, slot.rotation,
         slot.starts_new_page, slot.is_manual_gap, slot.set_id, slot.set_language,
         slot.group_kind, slot.group_key, slot.energy_group,
         page.position AS page_position, page.kind AS page_kind
@@ -1549,6 +1556,7 @@ export async function arrangeBinderVersion(
             orderedCardId: slot.ordered_card_id ?? null,
             orderedAddCopy: slot.ordered_add_copy ?? 1,
             orderedAt: slot.ordered_at ?? null,
+            rotation: slot.rotation ?? 0,
             originalIndex,
           }
         : null;
@@ -1756,6 +1764,7 @@ export async function setBinderSlot(
       db
         .prepare(
           `UPDATE binder_slots SET card_id = ?1,
+          rotation = CASE WHEN ?1 IS NOT NULL AND COALESCE(assigned_card_id,ordered_card_id,card_id) IS ?1 THEN rotation ELSE 0 END,
           is_manual_gap = CASE WHEN ?1 IS NULL THEN 1 ELSE 0 END,
           entry_kind = CASE WHEN ?1 IS NULL THEN 'empty' ELSE 'exact-card' END,
           label = NULL, pokemon_number = NULL, set_id = NULL, set_language = NULL, group_kind = NULL, group_key = NULL, energy_group = NULL,
@@ -1850,7 +1859,7 @@ export async function setBinderSlots(
              AND row_index = binder_slots.row_index
              AND column_index = binder_slots.column_index
          ), entry_kind = 'exact-card', label = NULL, pokemon_number = NULL, set_id = NULL, set_language = NULL, group_kind = NULL, group_key = NULL, energy_group = NULL,
-           assigned_card_id = NULL, ordered_card_id=NULL,ordered_at=NULL, starts_new_page = 0, is_manual_gap = 0
+           assigned_card_id = NULL, ordered_card_id=NULL,ordered_at=NULL, rotation=0, starts_new_page = 0, is_manual_gap = 0
          WHERE EXISTS (
            SELECT 1 FROM assignments
            WHERE page_id = binder_slots.binder_page_id
@@ -1903,6 +1912,7 @@ export async function swapBinderSlots(
             orderedCardId: slot.ordered_card_id ?? null,
             orderedAddCopy: slot.ordered_add_copy ?? 1,
             orderedAt: slot.ordered_at ?? null,
+            rotation: slot.rotation ?? 0,
             originalIndex: 0,
           }
         : null;
@@ -1935,6 +1945,7 @@ export async function swapBinderSlots(
           orderedCardId: slot.ordered_card_id ?? null,
           orderedAddCopy: slot.ordered_add_copy ?? 1,
           orderedAt: slot.ordered_at ?? null,
+          rotation: slot.rotation ?? 0,
           originalIndex,
         }
       : null;
@@ -2041,7 +2052,7 @@ export async function addCardsToBinderVersion(
              AND row_index = binder_slots.row_index
              AND column_index = binder_slots.column_index
          ), entry_kind = 'exact-card', label = NULL, pokemon_number = NULL, set_id = NULL, set_language = NULL, group_kind = NULL, group_key = NULL, energy_group = NULL,
-           assigned_card_id = NULL, ordered_card_id=NULL,ordered_at=NULL, starts_new_page = 0, is_manual_gap = 0
+           assigned_card_id = NULL, ordered_card_id=NULL,ordered_at=NULL, rotation=0, starts_new_page = 0, is_manual_gap = 0
          WHERE EXISTS (
            SELECT 1 FROM assignments
            WHERE page_id = binder_slots.binder_page_id
@@ -2113,10 +2124,10 @@ export async function cloneBinderVersion(
           FROM json_each(?1)
          )
          INSERT INTO binder_slots (binder_page_id, row_index, column_index, card_id,
-           entry_kind, label, pokemon_number, assigned_card_id, ordered_card_id, ordered_add_copy, ordered_at, starts_new_page, is_manual_gap,
+           entry_kind, label, pokemon_number, assigned_card_id, ordered_card_id, ordered_add_copy, ordered_at, rotation, starts_new_page, is_manual_gap,
            set_id, set_language, group_kind, group_key, energy_group)
          SELECT mapping.new_id, slots.row_index, slots.column_index, slots.card_id,
-           slots.entry_kind, slots.label, slots.pokemon_number, slots.assigned_card_id, slots.ordered_card_id, slots.ordered_add_copy, slots.ordered_at,
+           slots.entry_kind, slots.label, slots.pokemon_number, slots.assigned_card_id, slots.ordered_card_id, slots.ordered_add_copy, slots.ordered_at, slots.rotation,
            slots.starts_new_page, slots.is_manual_gap, slots.set_id, slots.set_language,
            slots.group_kind, slots.group_key, slots.energy_group
          FROM mapping JOIN binder_slots slots ON slots.binder_page_id = mapping.source_id`,
@@ -2297,7 +2308,7 @@ async function materializedSlots(db: D1Database, versionId: string): Promise<Mat
   const result = await db
     .prepare(
       `SELECT slot.binder_page_id, slot.row_index, slot.column_index, slot.card_id,
-        ${slotKindSql('slot')} AS entry_kind, slot.label, slot.pokemon_number, slot.assigned_card_id, slot.ordered_card_id, slot.ordered_add_copy, slot.ordered_at,
+        ${slotKindSql('slot')} AS entry_kind, slot.label, slot.pokemon_number, slot.assigned_card_id, slot.ordered_card_id, slot.ordered_add_copy, slot.ordered_at, slot.rotation,
         slot.starts_new_page, slot.is_manual_gap, slot.set_id, slot.set_language,
         slot.group_kind, slot.group_key, slot.energy_group,
         page.position AS page_position, page.kind AS page_kind
@@ -2367,6 +2378,7 @@ function physicalEntries(slots: readonly MaterializedSlot[]): Array<ReflowEntry 
           orderedCardId: slot.ordered_card_id ?? null,
           orderedAddCopy: slot.ordered_add_copy ?? 1,
           orderedAt: slot.ordered_at ?? null,
+          rotation: slot.rotation ?? 0,
           originalIndex,
         }
       : null;
@@ -2590,6 +2602,7 @@ function planSectionLayout(
       ordered_card_id: encoded.orderedCardId,
       ordered_add_copy: encoded.orderedAddCopy,
       ordered_at: encoded.orderedAt,
+      rotation: encoded.rotation,
       starts_new_page: encoded.startsNewPage ? 1 : 0,
       is_manual_gap: encoded.isManualGap,
     });
@@ -2656,6 +2669,7 @@ function encodedSlot(
     orderedCardId: item?.orderedCardId ?? null,
     orderedAddCopy: item?.orderedAddCopy ?? 1,
     orderedAt: item?.orderedAt ?? null,
+    rotation: item?.rotation ?? 0,
   };
 }
 
@@ -2714,7 +2728,7 @@ function rewriteSlotsStatements(
           CAST(json_extract(value, '$.startsNewPage') AS INTEGER) AS starts_new_page,
           CAST(json_extract(value, '$.isManualGap') AS INTEGER) AS is_manual_gap
           ,json_extract(value, '$.assignedCardId') AS assigned_card_id
-          ,json_extract(value, '$.orderedCardId') AS ordered_card_id,COALESCE(json_extract(value, '$.orderedAddCopy'),1) AS ordered_add_copy,json_extract(value, '$.orderedAt') AS ordered_at
+          ,json_extract(value, '$.orderedCardId') AS ordered_card_id,COALESCE(json_extract(value, '$.orderedAddCopy'),1) AS ordered_add_copy,json_extract(value, '$.orderedAt') AS ordered_at,COALESCE(json_extract(value, '$.rotation'),0) AS rotation
         FROM json_each(?1)
        )
        UPDATE binder_slots AS target SET entry_kind = replacement.entry_kind,
@@ -2724,7 +2738,7 @@ function rewriteSlotsStatements(
          group_kind = replacement.group_kind, group_key = replacement.group_key,
          energy_group = replacement.energy_group,
          assigned_card_id = replacement.assigned_card_id,
-         ordered_card_id = replacement.ordered_card_id,ordered_add_copy=replacement.ordered_add_copy,ordered_at=replacement.ordered_at,
+         ordered_card_id = replacement.ordered_card_id,ordered_add_copy=replacement.ordered_add_copy,ordered_at=replacement.ordered_at,rotation=replacement.rotation,
          starts_new_page = replacement.starts_new_page, is_manual_gap = replacement.is_manual_gap
        FROM replacement
        WHERE replacement.page_id = target.binder_page_id
@@ -4164,4 +4178,46 @@ export async function insertBlankBinderPages(
     ...revisionStatements(db, version, nowSeconds()),
   ]);
   return mutationResult(db, ownerId, versionId, [beforePosition]);
+}
+
+/** Presentation only: no owned quantities, targets or activity events change. */
+export async function setBinderSlotRotation(
+  db: D1Database,
+  ownerId: string,
+  versionId: string,
+  at: BinderSlotLocation,
+  rotation: number,
+  requestedRevision: number,
+): Promise<BinderMutationResult> {
+  const parsed = binderRotationSchema.safeParse(rotation);
+  if (!parsed.success) domainError('binder_rotation_invalid');
+  const version = await readVersion(db, ownerId, versionId);
+  requireEditable(version);
+  expectedRevision(version, requestedRevision);
+  validateLocation(version, at);
+  const page = await pageAt(db, versionId, at.page);
+  const slot = await db
+    .prepare(
+      'SELECT card_id,assigned_card_id,ordered_card_id,rotation FROM binder_slots WHERE binder_page_id=?1 AND row_index=?2 AND column_index=?3',
+    )
+    .bind(page.id, at.row, at.column)
+    .first<{
+      card_id: string | null;
+      assigned_card_id: string | null;
+      ordered_card_id: string | null;
+      rotation: number;
+    }>();
+  if (!slot) domainError('binder_slot_not_found');
+  if (!slot.card_id && !slot.assigned_card_id && !slot.ordered_card_id)
+    domainError('binder_rotation_unavailable');
+  if (slot.rotation !== parsed.data)
+    await runVersionBatch(db, ownerId, versionId, version.revision, false, [
+      db
+        .prepare(
+          'UPDATE binder_slots SET rotation=?1 WHERE binder_page_id=?2 AND row_index=?3 AND column_index=?4',
+        )
+        .bind(parsed.data, page.id, at.row, at.column),
+      ...revisionStatements(db, version, nowSeconds()),
+    ]);
+  return { ...(await mutationResult(db, ownerId, versionId, [at.page])), anchor: at };
 }

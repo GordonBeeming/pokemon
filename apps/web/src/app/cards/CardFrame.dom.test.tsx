@@ -184,3 +184,40 @@ it('labels incoming orders without claiming they are owned', async () => {
   expect(frameEl()?.getAttribute('aria-label')).not.toContain('owned');
   expect(frameEl()?.style.borderStyle).toBe('solid');
 });
+
+it('fits a rotated landscape scan on swapped axes while keeping metadata upright', async () => {
+  await step(() => root.render(<CardFrame card={pikachu} state="placed" rotation={0} />));
+  const img = container.querySelector('img');
+  if (!img) throw new Error('Missing art');
+  Object.defineProperties(img, {
+    naturalWidth: { value: 1600, configurable: true },
+    naturalHeight: { value: 1100, configurable: true },
+  });
+  await step(() => img.dispatchEvent(new Event('load')));
+  expect(img.dataset.fit).toBe('width');
+  await step(() => root.render(<CardFrame card={pikachu} state="placed" rotation={90} />));
+  expect(img.dataset.rotation).toBe('90');
+  expect(img.dataset.fit).toBe('height');
+  expect(container.querySelector('.card-frame-code')?.textContent).toContain('MEW');
+  await step(() => root.render(<CardFrame card={pikachu} state="placed" rotation={270} />));
+  expect(img.dataset.rotation).toBe('270');
+  expect(img.dataset.fit).toBe('height');
+  await step(() => root.render(<CardFrame card={pikachu} state="placed" rotation={0} />));
+  expect(img.dataset.rotation).toBeUndefined();
+  expect(img.dataset.fit).toBe('width');
+});
+
+it('also fits quarter-turned portrait art without changing the picture shape', async () => {
+  await step(() => root.render(<CardFrame card={pikachu} state="owned" rotation={90} />));
+  const img = container.querySelector('img');
+  if (!img) throw new Error('Missing art');
+  Object.defineProperties(img, {
+    naturalWidth: { value: 245, configurable: true },
+    naturalHeight: { value: 337, configurable: true },
+  });
+  await step(() => img.dispatchEvent(new Event('load')));
+  expect(img.dataset.fit).toBe('width');
+  await step(() => root.render(<CardFrame card={pikachu} state="owned" rotation={180} />));
+  expect(img.dataset.fit).toBe('width');
+  expect(img.dataset.rotation).toBe('180');
+});

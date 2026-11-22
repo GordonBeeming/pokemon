@@ -377,6 +377,8 @@ const ERROR_MESSAGES: Record<string, string> = {
     'The owned copy for this order is no longer available. Add a copy or unplace it elsewhere, then mark received.',
   binder_assignment_quantity_exceeded:
     'You have no free copy of this card: none owned, or every copy is already placed. Use Find cards to add a copy and place it.',
+  binder_rotation_invalid: 'Choose a rotation of 0°, 90°, 180° or 270°.',
+  binder_rotation_unavailable: 'Choose a card printing before rotating its display.',
   binder_assignment_incompatible: 'That copy does not fit this target.',
   binder_set_not_found: 'That set is no longer in the catalogue. Choose another set.',
   binder_page_no_empty_pockets: 'This page has no empty pockets left to reserve.',

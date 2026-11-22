@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { act, useState, type ReactElement } from 'react';
-import { cardIdSchema } from '@pokedex/shared';
+import { cardIdSchema, binderRotationRequestSchema } from '@pokedex/shared';
 import {
   copyCardsToClipboard,
   clearCardClipboard,
@@ -360,4 +360,38 @@ describe('BinderView drafts', () => {
     expect(currentSearch.v).toBe('binder_a_v2');
     expect(server.count('DELETE', '/binder_a_v2')).toBe(1);
   });
+});
+
+it('rotates through the binder write path without piling up visual success toasts', async () => {
+  const binder = server.binders[0];
+  const slot = binder?.pages[0]?.[0];
+  if (!binder || !slot) throw new Error('Missing binder fixture');
+  slot.assignedCardId = 'placed-card';
+  server.overrides.push((request) => {
+    if (request.method !== 'PUT' || !request.path.endsWith('/rotation')) return undefined;
+    const body = binderRotationRequestSchema.parse(request.body);
+    slot.rotation = body.rotation;
+    binder.revision++;
+    return server.handle({
+      method: 'GET',
+      path: `/api/binders/versions/${binder.versionId}?page=0&limit=1`,
+      body: undefined,
+    });
+  });
+  await mount();
+  await step(() => pocket('0:0:0').click());
+  const rotate = () => {
+    const button = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent === 'Rotate display',
+    );
+    if (!button) throw new Error('Missing Rotate');
+    return button;
+  };
+  await step(() => rotate().click());
+  await waitFor(() => slot.rotation === 90 && !rotate().disabled);
+  await step(() => rotate().click());
+  await waitFor(() => slot.rotation === 180 && !rotate().disabled);
+  const writes = server.requests.filter((r) => r.method === 'PUT' && r.path.endsWith('/rotation'));
+  expect(writes.map((r) => binderRotationRequestSchema.parse(r.body).rotation)).toEqual([90, 180]);
+  expect(document.querySelector('.toast-viewport')?.textContent).not.toContain('Display rotated');
 });

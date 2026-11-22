@@ -1,0 +1,2 @@
+ALTER TABLE binder_slots ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0
+  CHECK (rotation IN (0, 90, 180, 270));

@@ -995,24 +995,25 @@ describe('backups keep custom cards with their owner', () => {
 it('round-trips an outstanding order and its inventory accounting flag', async () => {
   const { database, db, art } = setup();
   database.exec(
-    "UPDATE binder_slots SET ordered_card_id='card-binder',ordered_add_copy=0,ordered_at=12345 WHERE binder_page_id='page-1'",
+    "UPDATE binder_slots SET ordered_card_id='card-binder',ordered_add_copy=0,ordered_at=12345,rotation=270 WHERE binder_page_id='page-1'",
   );
   database.exec('DELETE FROM art_manifest');
   const backup = await createBackup(db, art, 'owner', { backupId: 'backup_ordered' });
   database.exec(
-    "UPDATE binder_slots SET ordered_card_id=NULL,ordered_at=NULL WHERE binder_page_id='page-1'",
+    "UPDATE binder_slots SET ordered_card_id=NULL,ordered_at=NULL,rotation=0 WHERE binder_page_id='page-1'",
   );
   await restoreBackup(db, art, 'owner', backup.id);
   expect(
     database
       .prepare(
-        "SELECT ordered_card_id,ordered_add_copy,ordered_at,assigned_card_id FROM binder_slots WHERE binder_page_id='page-1'",
+        "SELECT ordered_card_id,ordered_add_copy,ordered_at,assigned_card_id,rotation FROM binder_slots WHERE binder_page_id='page-1'",
       )
       .get(),
   ).toEqual({
     ordered_card_id: 'card-binder',
     ordered_add_copy: 0,
     ordered_at: 12345,
+    rotation: 270,
     assigned_card_id: null,
   });
 });

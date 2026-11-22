@@ -1,4 +1,4 @@
-import { binderAssignRequestSchema } from '@pokedex/shared';
+import { binderAssignRequestSchema, type BinderRotation } from '@pokedex/shared';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   createMemoryHistory,
@@ -30,6 +30,7 @@ export interface FakeSlot {
   entryKind: 'empty' | 'pokemon' | 'set';
   pokemonNumber: number | null;
   assignedCardId?: string | null;
+  rotation?: BinderRotation;
   setId?: string;
   setLanguage?: string;
   setName?: string;
@@ -93,6 +94,7 @@ function page(binder: FakeBinder, index: number) {
       label: null,
       pokemonNumber: slot.pokemonNumber,
       assignedCardId: slot.assignedCardId ?? null,
+      rotation: slot.rotation,
       setId: slot.setId,
       setLanguage: slot.setLanguage,
       setName: slot.setName,

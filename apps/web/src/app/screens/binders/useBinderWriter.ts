@@ -12,6 +12,8 @@ type PageWindow = BinderPageWindow;
 export interface BinderWrite {
   /** Shown as the success toast and route announcement. */
   label: string;
+  /** Visually obvious repeated adjustments can skip transient confirmation popups. */
+  showToast?: boolean;
   /** Receives the newest revision this screen has seen; never re-invoked automatically. */
   run: (revision: number) => Promise<BinderMutation>;
   /** Pocket to keep selected afterwards when the server returns no anchor. */
@@ -122,7 +124,7 @@ export function useBinderWriter({
           setCapacityNeed(null);
           settledRef.current(result, result.anchor ?? request.focusAt ?? null);
         }
-        toast('success', request.label);
+        if (request.showToast !== false) toast('success', request.label);
         return true;
       } catch (cause) {
         const message = binderErrorMessage(cause);

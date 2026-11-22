@@ -189,3 +189,34 @@
   font-weight: 700;
   pointer-events: none;
 }
+
+/* Swap the image's fitting axes for quarter-turns; the pocket and its labels stay put. */
+.card-frame-art-box > .card-frame-art:is([data-rotation='90'], [data-rotation='270']) {
+  inset: auto;
+  top: 50%;
+  left: 50%;
+  width: calc(100% * 337 / 245);
+  height: calc(100% * 245 / 337);
+  max-width: none;
+  max-height: none;
+  margin: 0;
+}
+.card-frame-art-box > .card-frame-art[data-rotation='90'] {
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+.card-frame-art-box > .card-frame-art[data-rotation='270'] {
+  transform: translate(-50%, -50%) rotate(270deg);
+}
+.card-frame-art-box > .card-frame-art[data-rotation='180'] {
+  transform: rotate(180deg);
+}
+.card-frame-art-box
+  > .card-frame-art:is([data-rotation='90'], [data-rotation='270'])[data-fit='width'] {
+  width: auto;
+  height: calc(100% * 245 / 337);
+}
+.card-frame-art-box
+  > .card-frame-art:is([data-rotation='90'], [data-rotation='270'])[data-fit='height'] {
+  width: calc(100% * 337 / 245);
+  height: auto;
+}

@@ -2,6 +2,7 @@ import {
   formatDexNumber,
   pokemonDisplayName,
   type FrameType,
+  type BinderRotation,
   RARITY_LABELS,
   regionForDex,
 } from '@pokedex/shared';
@@ -15,6 +16,7 @@ import { Sheet } from '../../ui/Sheet';
 import { isTarget, pocketState } from './model';
 
 export type PocketActionKey =
+  | 'rotate'
   | 'ordered'
   | 'received'
   | 'view'
@@ -41,13 +43,15 @@ export function pocketActionItems({
   editable: boolean;
   hasCard: boolean;
   hasClipboard: boolean;
-  on: Record<Exclude<PocketActionKey, 'ordered' | 'received'>, () => void> &
-    Partial<Record<'ordered' | 'received', () => void>>;
+  on: Record<Exclude<PocketActionKey, 'ordered' | 'received' | 'rotate'>, () => void> &
+    Partial<Record<'ordered' | 'received' | 'rotate', () => void>>;
 }): ActionBarItem[] {
   const state = pocketState(slot);
   const target = isTarget(slot);
   const items: ActionBarItem[] = [];
   if (hasCard) items.push({ key: 'view', label: 'View card', icon: 'eye', onSelect: on.view });
+  if (editable && hasCard && on.rotate)
+    items.push({ key: 'rotate', label: 'Rotate display', icon: 'sync', onSelect: on.rotate });
   if (editable && target && slot.orderedCardId && on.received)
     items.push({ key: 'received', label: 'Mark received', icon: 'plus', onSelect: on.received });
   if (editable && target && slot.assignedCardId && !slot.orderedCardId && on.ordered)
@@ -92,6 +96,7 @@ export interface PocketSummary {
   /** The card (or the ANY frame for an any-printing target) the phone sheet shows. */
   frame?: { card: CardFrameCard; variant: 'card' | 'any'; state: CardFrameState } | null;
   palette?: Record<FrameType, string>;
+  rotation?: BinderRotation;
 }
 
 /** The phone sheet's header: the card itself and everything a small pocket can't
@@ -112,6 +117,7 @@ function PocketSheetHeader({ summary }: { summary: PocketSummary }): ReactElemen
             state={frame.state}
             variant={frame.variant}
             palette={summary.palette}
+            rotation={summary.rotation}
           />
         </span>
       ) : null}

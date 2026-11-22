@@ -442,8 +442,9 @@ export function BinderView({
       label: string,
       request: (revision: number) => Promise<BinderMutation>,
       focusAt?: BinderSlotLocation | null,
+      showToast = true,
     ) => {
-      const ok = await write({ label, run: request, focusAt: focusAt ?? selected });
+      const ok = await write({ label, run: request, focusAt: focusAt ?? selected, showToast });
       if (ok) {
         setPanel(null);
         announce(label);
@@ -830,6 +831,15 @@ export function BinderView({
           hasCard: selectedCardId !== null && selectedCardId !== undefined,
           hasClipboard: clipboard !== null,
           on: {
+            rotate: () => {
+              const rotation = ((selectedSlot.rotation ?? 0) + 90) % 360;
+              void run(
+                `Display rotated to ${rotation}°.`,
+                (revision) => binderApi.rotate(versionId, selected, rotation, revision),
+                selected,
+                false,
+              );
+            },
             ordered:
               version?.status === 'active'
                 ? () => {
@@ -1359,6 +1369,7 @@ export function BinderView({
           phone={phone}
           summary={{
             imageUrl: selectedCard?.imageLowUrl ?? null,
+            rotation: selectedSlot.rotation,
             faded: !selectedSlot.assignedCardId && !selectedSlot.orderedCardId,
             title: selectedTitle,
             where,
@@ -1382,7 +1393,7 @@ export function BinderView({
                 : null,
             palette,
           }}
-          items={actionItems}
+          items={actionItems.map((item) => ({ ...item, disabled: pending || item.disabled }))}
           onClose={deselect}
         />
       ) : !selectedSlot && !moveSource && !searching ? (

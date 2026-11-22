@@ -26,7 +26,10 @@ afterEach(async () => {
   container.remove();
 });
 
-const handlers = (): Record<Exclude<PocketActionKey, 'ordered' | 'received'>, () => void> => ({
+const handlers = (): Record<
+  Exclude<PocketActionKey, 'ordered' | 'received' | 'rotate'>,
+  () => void
+> => ({
   view: vi.fn(),
   find: vi.fn(),
   move: vi.fn(),
@@ -239,4 +242,22 @@ it.each([
   });
   expect(items.some((item) => item.key === 'ordered')).toBe(false);
   expect(items.some((item) => item.key === 'find')).toBe(true);
+});
+
+it('offers display rotation only for editable pockets with a printing', () => {
+  const rotate = vi.fn();
+  for (const [editable, hasCard, expected] of [
+    [true, true, true],
+    [false, true, false],
+    [true, false, false],
+  ] as const) {
+    const items = pocketActionItems({
+      slot: exactTarget,
+      editable,
+      hasCard,
+      hasClipboard: false,
+      on: { ...handlers(), rotate },
+    });
+    expect(items.some((i) => i.key === 'rotate')).toBe(expected);
+  }
 });

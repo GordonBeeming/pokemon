@@ -77,6 +77,7 @@ function PocketContent({
     return (
       <CardFrame
         card={frameCardFrom(placed)}
+        rotation={slot.rotation}
         state={slot.orderedCardId ? 'ordered' : 'placed'}
         frame={showFrame}
         palette={palette}
@@ -88,6 +89,7 @@ function PocketContent({
       return (
         <CardFrame
           card={frameCardFrom(target)}
+          rotation={slot.rotation}
           state="unowned"
           frame={showFrame}
           palette={palette}

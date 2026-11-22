@@ -439,6 +439,8 @@ function mutate(versionId: string, suffix: string, method: string, body: unknown
 }
 
 export const binderApi = {
+  rotate: (versionId: string, at: BinderSlotLocation, rotation: number, expectedRevision: number) =>
+    mutate(versionId, '/rotation', 'PUT', { at, rotation, expectedRevision }),
   orderStatus: (
     versionId: string,
     at: BinderSlotLocation,

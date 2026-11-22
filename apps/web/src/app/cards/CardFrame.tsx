@@ -1,5 +1,6 @@
 import {
   DEFAULT_FRAME_PALETTE,
+  type BinderRotation,
   formatDexNumber,
   pokemonDisplayName,
   type FrameType,
@@ -68,6 +69,8 @@ export interface CardFrameProps {
   /** A fully-resolved palette (DEFAULT_FRAME_PALETTE merged with the owner's overrides). */
   palette?: Record<FrameType, string>;
   className?: string;
+  /** Clockwise art rotation inside a binder pocket; metadata remains upright. */
+  rotation?: BinderRotation;
 }
 
 export function CardFrame({
@@ -82,6 +85,7 @@ export function CardFrame({
   dimArt,
   palette = DEFAULT_FRAME_PALETTE,
   className = '',
+  rotation = 0,
 }: CardFrameProps): ReactElement {
   const solid = card.frameType ? palette[card.frameType] : NEUTRAL_FRAME_COLOR;
   const light = mix(solid, '#ffffff', 0.88);
@@ -101,8 +105,14 @@ export function CardFrame({
   // lays out the same, and the picture is sized to its own shape inside it (never
   // cropped or squished) so the rounded corners land on the card, not on the
   // letterbox around it.
-  const [fit, setFit] = useState<{ url: string; along: 'width' | 'height' } | null>(null);
-  const fitAlong = fit && fit.url === imageUrl ? fit.along : undefined;
+  const [fit, setFit] = useState<{ url: string; width: number; height: number } | null>(null);
+  const swapped = rotation === 90 || rotation === 270;
+  const fitAlong =
+    fit && fit.url === imageUrl
+      ? (swapped ? fit.height / fit.width : fit.width / fit.height) >= ART_RATIO
+        ? 'width'
+        : 'height'
+      : undefined;
 
   const isSolid = forceSolid || state !== 'unowned';
   const artOpacity = (dimArt ?? !isSolid) ? 0.45 : 1;
@@ -141,12 +151,14 @@ export function CardFrame({
         src={imageUrl}
         alt=""
         data-fit={fitAlong}
+        data-rotation={rotation || undefined}
         onLoad={(event) => {
           const { naturalWidth, naturalHeight } = event.currentTarget;
           if (naturalWidth > 0 && naturalHeight > 0)
             setFit({
               url: imageUrl,
-              along: naturalWidth / naturalHeight >= ART_RATIO ? 'width' : 'height',
+              width: naturalWidth,
+              height: naturalHeight,
             });
         }}
         onError={() => setFailedUrl(imageUrl)}

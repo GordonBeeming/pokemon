@@ -17,6 +17,13 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 
 ---
 
+## Binder artwork rotation
+
+- Select a card printing and use Rotate display to turn its artwork clockwise in 90° steps.
+  Pocket dimensions and card metadata stay upright. Rotation is saved per target, travels through
+  moves, reflow and version cloning, and survives backup/restore. Replacing or clearing a target
+  resets its orientation; selecting the same printing keeps it.
+
 ## Navigation and Pokémon identity
 
 - Mobile More exposes every desktop navigation destination and Log out. Bottom shortcuts remain

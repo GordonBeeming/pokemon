@@ -114,6 +114,7 @@ export function applyAllMigrations(database: DatabaseSync): void {
     '032_trainer_directory_lookup.sql',
     '033_binder_orders.sql',
     '034_custom_card_pokedex.sql',
+    '035_binder_slot_rotation.sql',
   ])
     database.exec(readFileSync(new URL(name, directory), 'utf8'));
 }

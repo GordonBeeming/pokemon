@@ -7,6 +7,8 @@ import type { AuthVars } from '../../lib/types';
 import { apiFailure, asApplicationError, parsedJson } from './errors';
 
 const binderStatuses = {
+  binder_rotation_invalid: 400,
+  binder_rotation_unavailable: 409,
   binder_order_copy_unavailable: 409,
   binder_order_active_only: 409,
   binder_order_not_found: 409,

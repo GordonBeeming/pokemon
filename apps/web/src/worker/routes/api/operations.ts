@@ -49,6 +49,7 @@ import {
   moveBinderEntryByOffset,
   setBinderEntryAssignment,
   setBinderOrderStatus,
+  setBinderSlotRotation,
   setBinderEntryPageBreak,
   reserveBinderPage,
   resizeBinderCapacity,
@@ -274,6 +275,12 @@ export function ownerOperations(env: CloudflareEnv, ownerId: string) {
       offset: number,
       expectedRevision: number,
     ) => moveBinderEntryByOffset(env.DB, ownerId, versionId, from, offset, expectedRevision),
+    setBinderSlotRotation: (
+      versionId: string,
+      at: BinderSlotLocation,
+      rotation: number,
+      expectedRevision: number,
+    ) => setBinderSlotRotation(env.DB, ownerId, versionId, at, rotation, expectedRevision),
     setBinderOrderStatus: (
       versionId: string,
       at: BinderSlotLocation,

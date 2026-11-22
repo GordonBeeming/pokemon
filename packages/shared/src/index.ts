@@ -207,6 +207,14 @@ export type CollectionMutationResult = z.infer<typeof collectionMutationResultSc
 
 export const energyGroupSchema = z.enum(['all', 'special', ...BASIC_ENERGY_TYPES]);
 
+export const binderRotationSchema = z.union([
+  z.literal(0),
+  z.literal(90),
+  z.literal(180),
+  z.literal(270),
+]);
+export type BinderRotation = z.infer<typeof binderRotationSchema>;
+
 export const binderSlotSchema = z
   .object({
     pageId: z.string().trim().min(1).max(128),
@@ -238,6 +246,7 @@ export const binderSlotSchema = z
     groupName: z.string().trim().min(1).max(200).nullable().optional(),
     assignedCardId: cardIdSchema.nullable().optional(),
     orderedCardId: cardIdSchema.nullable().optional(),
+    rotation: binderRotationSchema.optional(),
     startsNewPage: z.boolean().optional(),
   })
   .strict();
@@ -947,6 +956,14 @@ export const binderOrderRequestSchema = z
     at: binderSlotLocationSchema,
     cardId: cardIdSchema,
     status: z.enum(['ordered', 'received', 'cancelled']),
+    expectedRevision: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const binderRotationRequestSchema = z
+  .object({
+    at: binderSlotLocationSchema,
+    rotation: binderRotationSchema,
     expectedRevision: z.number().int().nonnegative(),
   })
   .strict();
