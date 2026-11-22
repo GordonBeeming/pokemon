@@ -1,6 +1,7 @@
 import { InfiniteLoader } from '../../../ui/InfiniteLoader';
 import {
   type BinderEntry,
+  type TrainerDexEntry,
   type BinderSlotLocation,
   cardIdSchema,
   energyGroupName,
@@ -18,9 +19,10 @@ import { SegmentedControl } from '../../../ui/SegmentedControl';
 import { binderErrorMessage, INSERT_SELECTION_CAP } from '../model';
 import { CardPicker, collectAllCards, type PickerQuery } from './CardPicker';
 import { EnergyPicker, GroupPicker, type GroupChoice } from './GroupPicker';
+import { TrainerDexPicker } from './TrainerDexPicker';
 import { Panel } from './Panel';
 
-type Kind = 'pokemon' | 'set' | 'illustrator' | 'trainer' | 'energy' | 'exact-card';
+type Kind = 'pokemon' | 'set' | 'illustrator' | 'trainer' | 'energy' | 'exact-card' | 'trainer-dex';
 /** A set is inserted as pockets that take any of its cards, or as one target per card. */
 type SetMode = 'any' | 'every';
 const MAX_ANY_POCKETS = 400;
@@ -110,6 +112,7 @@ export function InsertPanel({
   onClose: () => void;
 }): ReactElement {
   const destinations = useInsertDestinations(versionId);
+  const [chosenTrainer, setChosenTrainer] = useState<TrainerDexEntry | null>(null);
   const [kind, setKind] = useState<Kind>('pokemon');
   const [query, setQuery] = useState('');
   const [offset, setOffset] = useState(0);
@@ -361,6 +364,8 @@ export function InsertPanel({
           onChange={(value) => {
             selectAllRequest.current?.abort();
             setKind(value);
+            setWorking(false);
+            setChosenTrainer(null);
             setQuery('');
             setOffset(0);
             setSelected(new Map());
@@ -375,7 +380,8 @@ export function InsertPanel({
             { value: 'pokemon', label: 'Pokémon' },
             { value: 'set', label: 'Set' },
             { value: 'illustrator', label: 'Illustrator' },
-            { value: 'trainer', label: 'Trainer' },
+            { value: 'trainer', label: 'Trainer Pokémon' },
+            { value: 'trainer-dex', label: 'Trainer Dex' },
             { value: 'energy', label: 'Energy' },
             { value: 'exact-card', label: 'Exact cards' },
           ]}
@@ -441,6 +447,8 @@ export function InsertPanel({
               onLoadMore={() => setOffset((n) => n + POKEMON_PAGE_SIZE)}
             />
           </>
+        ) : kind === 'trainer-dex' && !chosenTrainer ? (
+          <TrainerDexPicker pending={busy} onSelect={setChosenTrainer} />
         ) : kind === 'energy' ? (
           <>
             <SegmentedControl<SetMode>
@@ -594,6 +602,25 @@ export function InsertPanel({
           </>
         ) : (
           <>
+            {kind === 'trainer-dex' && chosenTrainer ? (
+              <div className="panel-inline">
+                <h4>{chosenTrainer.name} · Trainer cards</h4>
+                <button
+                  type="button"
+                  className="button-text"
+                  disabled={busy}
+                  autoFocus
+                  onClick={() => {
+                    setChosenTrainer(null);
+                    setSelected(new Map());
+                    setExactTotal(null);
+                    setMessage('');
+                  }}
+                >
+                  Choose another trainer
+                </button>
+              </div>
+            ) : null}
             <div className="panel-actions">
               <button
                 type="button"
@@ -612,7 +639,18 @@ export function InsertPanel({
               </button>
             </div>
             <CardPicker
-              query={{ q: '' }}
+              key={chosenTrainer?.key ?? 'all-cards'}
+              query={{
+                q: '',
+                ...(kind === 'trainer-dex' && chosenTrainer
+                  ? { filters: { character: chosenTrainer.key, language: 'en' } }
+                  : {}),
+              }}
+              autoSearch={kind === 'trainer-dex'}
+              searchLabel={kind === 'trainer-dex' ? 'Search trainer card variants' : undefined}
+              placeholder={
+                kind === 'trainer-dex' ? 'Set, card number, rarity, or artist' : undefined
+              }
               palette={palette}
               pending={busy}
               selectedIds={new Set(selected.keys())}

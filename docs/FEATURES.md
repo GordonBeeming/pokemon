@@ -498,10 +498,13 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
       gives nine set targets and the neighbouring pages are unchanged.
 - [ ] new · Illustrator and trainer targets: a pocket that takes any card by one illustrator, or any
       of one trainer's Pokémon ("Lillie's Comfey"; "Rocket's" counts as Team Rocket; "Dark …"
-      Pokémon are their own trainer, "Dark"). Insert targets offers Illustrator and Trainer with a
+      Pokémon are their own trainer, "Dark"). Insert targets offers Illustrator and Trainer Pokémon with a
       pocket count; the pocket shows the name with an "Any" pill, stays put on Arrange, is found by
       name in "Find in this binder", and Find cards lists that group's cards. A card outside the
       group is refused · done when: a Lillie page takes Lillie's Comfey and refuses Rocket's Zapdos.
+- [ ] new · Insert targets has a separate Trainer Dex option. Filter people by region or name,
+      then select individual English Trainer card variants or all matches. These become exact-card
+      targets, separate from the Trainer Pokémon option for cards such as Brock’s Onix.
 - [ ] new · Energy targets: a pocket that takes any energy card, any special energy, or any energy
       of one basic type (Grass … Colorless). Insert targets offers Energy as any card of it (with a
       pocket count) or every card in release order (oldest set first, then card number);
