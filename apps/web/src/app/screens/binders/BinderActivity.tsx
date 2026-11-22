@@ -28,7 +28,7 @@ export function BinderActivity({
   const [batch, setBatch] = useState('');
   const [query, setQuery] = useState('');
   const [kind, setKind] = useState('all');
-  const [sort, setSort] = useState('newest');
+  const [sort, setSort] = useState('binder');
   const [sections, setSections] = useState<string[]>([]);
   const [data, setData] = useState<BinderActivityResult | null>(null);
   const [loading, setLoading] = useState(false);

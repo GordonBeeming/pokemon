@@ -111,6 +111,7 @@ async function open() {
 }
 it('supports multiple bookmark sections, sorts and checkpoint navigation', async () => {
   await open();
+  expect(mocks.read.mock.lastCall?.[1].get('sort')).toBe('binder');
   expect(container.textContent).toContain('Squirtle');
   expect(container.textContent).toContain('Kanto Art');
   const checks = container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
@@ -128,11 +129,11 @@ it('supports multiple bookmark sections, sorts and checkpoint navigation', async
   );
   if (!sort) throw new Error('Missing sort');
   act(() => {
-    sort.value = 'binder';
+    sort.value = 'newest';
     sort.dispatchEvent(new Event('change', { bubbles: true }));
   });
   await settle();
-  expect(mocks.read.mock.lastCall?.[1].get('sort')).toBe('binder');
+  expect(mocks.read.mock.lastCall?.[1].get('sort')).toBe('newest');
   act(() => button('Older batch').click());
   await settle();
   expect(mocks.read.mock.lastCall?.[1].get('batch')).toBe('beginning');

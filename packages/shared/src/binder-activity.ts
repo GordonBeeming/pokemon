@@ -5,7 +5,7 @@ export const binderActivityQuerySchema = z.object({
   batch: z.string().max(128).optional(),
   q: z.string().trim().max(200).default(''),
   kind: z.enum(['all', 'added', 'removed', 'ordered', 'received', 'cancelled']).default('all'),
-  sort: z.enum(['newest', 'oldest', 'binder', 'pokedex']).default('newest'),
+  sort: z.enum(['newest', 'oldest', 'binder', 'pokedex']).default('binder'),
   sections: z
     .string()
     .max(100000)

@@ -120,17 +120,22 @@ it('filters by bookmark boundaries regardless of a card region, with chronologic
   await setBinderSlot(db, 'owner', binder.version.id, 1, 0, 0, 'chikorita', 1, {
     action: 'existing',
   });
-  await setBinderSlot(db, 'owner', binder.version.id, 0, 0, 1, 'squirtle', 2, {
+  await setBinderSlot(db, 'owner', binder.version.id, 0, 0, 0, 'treecko', 2, {
     action: 'existing',
   });
-  await setBinderSlot(db, 'owner', binder.version.id, 0, 0, 0, 'treecko', 3, {
+  await setBinderSlot(db, 'owner', binder.version.id, 0, 0, 1, 'squirtle', 3, {
     action: 'existing',
   });
   expect((await read()).events.map((e) => e.cardId)).toEqual(['treecko', 'squirtle', 'chikorita']);
-  expect((await read({ sort: 'oldest' })).events.map((e) => e.cardId)).toEqual([
-    'chikorita',
+  expect((await read({ sort: 'newest' })).events.map((e) => e.cardId)).toEqual([
     'squirtle',
     'treecko',
+    'chikorita',
+  ]);
+  expect((await read({ sort: 'oldest' })).events.map((e) => e.cardId)).toEqual([
+    'chikorita',
+    'treecko',
+    'squirtle',
   ]);
   expect((await read({ sort: 'binder' })).events.map((e) => e.cardId)).toEqual([
     'treecko',
@@ -320,7 +325,7 @@ it('uses exact pocket boundaries and page bookmarks for trainer and energy cards
     (await read({ sections: JSON.stringify(['Cover, trainers', 'Energy']) })).events.map(
       (e) => e.cardId,
     ),
-  ).toEqual(['energy', 'trainer']);
+  ).toEqual(['trainer', 'energy']);
   expect((await read()).events.find((e) => e.cardId === 'squirtle')?.sectionName).toBeNull();
   expect((await read()).sections.map((s) => s.name)).toEqual([
     'Foils',
