@@ -1068,13 +1068,31 @@ export function regionForDex(dex: number): Region | null {
   return entry && entry.number === dex ? entry.discoveryCategory : null;
 }
 
-function foldPokemonName(text: string): string {
-  return text.toLocaleLowerCase('en').replaceAll('’', "'");
+/** Keep Nidoran's gender significant, including typed-out names and source spacing. */
+export function normalizePokemonSearchText(text: string): string {
+  return text
+    .toLocaleLowerCase('en')
+    .replaceAll('’', "'")
+    .replace(
+      /\bnidoran\s*(?:\(\s*(female|male)\s*\)|(female|male)\b)/gu,
+      (_match, parenthesized: string | undefined, word: string | undefined) =>
+        `nidoran${(parenthesized ?? word) === 'female' ? '♀' : '♂'}`,
+    )
+    .replace(/\bnidoran\s*([♀♂])\uFE0F?(?:\s*\((?:female|male)\))?/gu, 'nidoran$1');
+}
+
+/** Add words to the tiny gender symbols without changing stored printing names. */
+export function pokemonDisplayName(name: string): string {
+  return name.replace(
+    /\b(nidoran)\s*([♀♂])\uFE0F?(?:\s*\((?:female|male)\))?/giu,
+    (_match, species: string, gender: string) =>
+      `${species}${gender} (${gender === '♀' ? 'Female' : 'Male'})`,
+  );
 }
 
 // Longest names first, so "Porygon-Z" claims its letters before "Porygon" can.
 const NAMES_LONGEST_FIRST = [...NATIONAL_POKEDEX]
-  .map((entry) => ({ number: entry.number, name: foldPokemonName(entry.name) }))
+  .map((entry) => ({ number: entry.number, name: normalizePokemonSearchText(entry.name) }))
   .sort((a, b) => b.name.length - a.name.length);
 
 const WORD_CHARACTER = /[\p{L}\p{N}]/u;
@@ -1086,7 +1104,7 @@ const WORD_CHARACTER = /[\p{L}\p{N}]/u;
  * Pokémon gets the lowest number, the same rule used when the source lists several.
  */
 export function pokedexNumberFromCardName(cardName: string): number | null {
-  let remaining = foldPokemonName(cardName);
+  let remaining = normalizePokemonSearchText(cardName);
   let lowest: number | null = null;
   for (const { number, name } of NAMES_LONGEST_FIRST) {
     let from = 0;

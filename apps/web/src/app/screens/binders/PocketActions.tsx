@@ -1,4 +1,10 @@
-import { formatDexNumber, type FrameType, RARITY_LABELS, regionForDex } from '@pokedex/shared';
+import {
+  formatDexNumber,
+  pokemonDisplayName,
+  type FrameType,
+  RARITY_LABELS,
+  regionForDex,
+} from '@pokedex/shared';
 import type { ReactElement } from 'react';
 import type { BinderSlotView } from '../../api/queries/binders';
 import { CardFrame, type CardFrameCard, type CardFrameState } from '../../cards/CardFrame';
@@ -110,7 +116,9 @@ function PocketSheetHeader({ summary }: { summary: PocketSummary }): ReactElemen
         </span>
       ) : null}
       <div className="pocket-sheet-info">
-        <strong className="pocket-sheet-name">{card?.name ?? summary.title}</strong>
+        <strong className="pocket-sheet-name">
+          {pokemonDisplayName(card?.name ?? summary.title)}
+        </strong>
         {card?.pokedexNumber ? (
           <span>
             {formatDexNumber(card.pokedexNumber)}

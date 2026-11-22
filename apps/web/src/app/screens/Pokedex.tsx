@@ -1,5 +1,6 @@
 import {
   formatDexNumber,
+  normalizePokemonSearchText,
   frameTypeFor,
   NATIONAL_POKEDEX,
   type NationalPokedexEntry,
@@ -80,7 +81,7 @@ export function Pokedex({ search }: { search: PokedexSearch }): ReactElement {
     });
   }
 
-  const needle = search.q.trim().toLocaleLowerCase('en-AU');
+  const needle = normalizePokemonSearchText(search.q.trim());
   const regionOptions = useMemo(() => {
     const matchesBase = (entry: NationalPokedexEntry): boolean => {
       const state = coverageByNumber.get(entry.number);

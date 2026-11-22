@@ -1,6 +1,7 @@
 import {
   DEFAULT_FRAME_PALETTE,
   formatDexNumber,
+  pokemonDisplayName,
   type FrameType,
   RARITY_LABELS,
   type RarityKey,
@@ -114,7 +115,7 @@ export function CardFrame({
   const codeNum = variant === 'any' ? '' : [card.setCode, card.number].filter(Boolean).join(' · ');
 
   const ariaLabel = [
-    card.name,
+    pokemonDisplayName(card.name),
     variant === 'any' ? 'any printing' : codeNum || null,
     card.pokedexNumber ? `Pokédex ${formatDexNumber(card.pokedexNumber)}` : null,
     rarityName,
@@ -163,7 +164,7 @@ export function CardFrame({
         opacity: variant === 'any' ? 1 : artOpacity,
       }}
     >
-      <span>{card.name}</span>
+      <span>{pokemonDisplayName(card.name)}</span>
       {variant === 'any' ? <span className="card-frame-any-pill">Any</span> : null}
     </div>
   );

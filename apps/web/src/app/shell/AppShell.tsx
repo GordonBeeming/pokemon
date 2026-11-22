@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { PriceVisibilityProvider } from '../cards/PriceVisibility';
-import { Link, Outlet, useNavigate } from '@tanstack/react-router';
+import { Outlet, useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, type ReactElement } from 'react';
 import { queryKeys } from '../api/keys';
 import { useSession } from '../api/queries/session';
@@ -8,7 +8,7 @@ import { ApiError, AUTH_LOST_EVENT, RETURN_TO_STORAGE_KEY } from '../api/client'
 import { onLoggedOutElsewhere, reloadSignedOut } from '../api/session-exit';
 import { Icon } from '../ui/icons';
 import { LogoutButton } from './LogoutButton';
-import { NAV_ITEMS } from './nav-items';
+import { MobileNavigation, NavigationLinks } from './MobileNavigation';
 import { SignIn } from './SignIn';
 import './shell.css';
 
@@ -20,26 +20,6 @@ function consumeReturnTo(): string | null {
   } catch {
     return null;
   }
-}
-
-function Nav({ variant }: { variant: 'rail' | 'tabbar' }): ReactElement {
-  const items = variant === 'tabbar' ? NAV_ITEMS.filter((item) => !item.railOnly) : NAV_ITEMS;
-  return (
-    <>
-      {items.map((item) => (
-        <Link
-          key={item.to}
-          to={item.to}
-          className="nav-item"
-          activeProps={{ className: 'nav-item nav-item-active', 'aria-current': 'page' }}
-          activeOptions={{ exact: item.to === '/' }}
-        >
-          <Icon name={item.icon} />
-          <span>{item.label}</span>
-        </Link>
-      ))}
-    </>
-  );
 }
 
 export function AppShell(): ReactElement {
@@ -111,7 +91,7 @@ export function AppShell(): ReactElement {
           <span className="app-brand-mark">P</span>
           <span>Pokédex</span>
         </div>
-        <Nav variant="rail" />
+        <NavigationLinks />
         <div className="rail-footer">
           <LogoutButton className="nav-item rail-logout" icon={<Icon name="logout" />} />
         </div>
@@ -121,9 +101,7 @@ export function AppShell(): ReactElement {
           <Outlet />
         </PriceVisibilityProvider>
       </main>
-      <nav aria-label="Primary" className="app-tabbar">
-        <Nav variant="tabbar" />
-      </nav>
+      <MobileNavigation />
     </div>
   );
 }

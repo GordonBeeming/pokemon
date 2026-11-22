@@ -11,6 +11,7 @@ import {
   artistKey,
   energyOf,
   pokedexNumberFromCardName,
+  normalizePokemonSearchText,
   trainerOf,
   RARITY_KEY_RAW_VALUES,
   rarityKeyFor,
@@ -1450,9 +1451,10 @@ export async function searchCards(
   // collection_cards join below, so this filter is free.
   const where = ['c.is_active = 1', '(c.owner_id IS NULL OR c.owner_id = ?1)'];
   const values: unknown[] = [ownerId];
-  const numberQuery = filters.query?.trim().match(/^#?(\d+)$/u)?.[1];
+  const normalizedQuery = normalizePokemonSearchText(filters.query ?? '');
+  const numberQuery = normalizedQuery.trim().match(/^#?(\d+)$/u)?.[1];
   const cardNumber = numberQuery === undefined ? null : numberQuery.replace(/^0+/u, '');
-  const fts = cardNumber === null && filters.query ? escapedFtsQuery(filters.query) : null;
+  const fts = cardNumber === null && normalizedQuery ? escapedFtsQuery(normalizedQuery) : null;
   if (cardNumber !== null) {
     // Printed numbers can include a set total; only the numerator identifies the card.
     const numerator = "trim(substr(c.number, 1, instr(c.number || '/', '/') - 1))";
@@ -1462,6 +1464,17 @@ export async function searchCards(
   } else if (fts) {
     where.push('c.id IN (SELECT card_id FROM catalogue_search WHERE catalogue_search MATCH ?2)');
     values.push(fts);
+  }
+  // FTS drops the gender symbols. Keep an explicit Nidoran gender as a separate
+  // constraint rather than letting male and female searches become identical.
+  const female = normalizedQuery.includes('nidoran♀');
+  const male = normalizedQuery.includes('nidoran♂');
+  if (female !== male) {
+    const dex = female ? 29 : 32;
+    const parameter = values.length + 1;
+    where.push(`(c.category='pokemon' AND (c.pokedex_number=?${parameter}
+      OR (c.pokedex_number IS NULL AND instr(replace(lower(c.name),' ',''),?${parameter + 1})>0)))`);
+    values.push(dex, female ? 'nidoran♀' : 'nidoran♂');
   }
   if (filters.language) {
     where.push(`c.language = ?${values.length + 1}`);

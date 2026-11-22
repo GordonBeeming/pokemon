@@ -2,6 +2,7 @@ import {
   type BinderLayout,
   type BinderSlotLocation,
   formatDexNumber,
+  pokemonDisplayName,
   FRAME_TYPES,
   type FrameType,
   NATIONAL_POKEDEX,
@@ -114,14 +115,17 @@ export function pocketTitle(slot: BinderSlotView, cards: CardLookup): string {
   if (slot.assignedCardId || slot.orderedCardId) {
     const placed = cards.get(slot.assignedCardId ?? slot.orderedCardId ?? '');
     const dex = placed?.pokedexNumber ?? slot.pokemonNumber;
-    if (placed) return dex ? `${formatDexNumber(dex)} ${placed.name}` : placed.name;
+    if (placed)
+      return dex
+        ? `${formatDexNumber(dex)} ${pokemonDisplayName(placed.name)}`
+        : pokemonDisplayName(placed.name);
   }
   if (slot.entryKind === 'reserved')
     return slot.label ? `Reserved: ${slot.label}` : 'Reserved sleeve';
   if (slot.entryKind === 'pokemon' && slot.pokemonNumber) {
     const pokemon = NATIONAL_POKEDEX[slot.pokemonNumber - 1];
     return pokemon
-      ? `${formatDexNumber(pokemon.number)} ${pokemon.name}`
+      ? `${formatDexNumber(pokemon.number)} ${pokemonDisplayName(pokemon.name)}`
       : `Pokémon #${slot.pokemonNumber}`;
   }
   if (slot.entryKind === 'set') return `Any card · ${setTargetName(slot)}`;
@@ -129,7 +133,9 @@ export function pocketTitle(slot: BinderSlotView, cards: CardLookup): string {
   if (slot.entryKind === 'exact-card' && slot.cardId) {
     const card = cards.get(slot.cardId);
     if (!card) return 'Exact card target';
-    return card.pokedexNumber ? `${formatDexNumber(card.pokedexNumber)} ${card.name}` : card.name;
+    return card.pokedexNumber
+      ? `${formatDexNumber(card.pokedexNumber)} ${pokemonDisplayName(card.name)}`
+      : pokemonDisplayName(card.name);
   }
   return 'Empty pocket';
 }
@@ -159,10 +165,10 @@ export function pocketTargetDescription(slot: BinderSlotView, cards: CardLookup)
 
 export function placedStatus(slot: BinderSlotView, cards: CardLookup): string {
   if (slot.orderedCardId)
-    return `Ordered: ${cards.get(slot.orderedCardId)?.name ?? 'incoming card'}`;
+    return `Ordered: ${pokemonDisplayName(cards.get(slot.orderedCardId)?.name ?? 'incoming card')}`;
   if (slot.assignedCardId) {
     const placed = cards.get(slot.assignedCardId);
-    return `Placed: ${placed ? placed.name : 'owned copy'}`;
+    return `Placed: ${placed ? pokemonDisplayName(placed.name) : 'owned copy'}`;
   }
   if (isTarget(slot)) return 'Nothing placed';
   if (slot.entryKind === 'reserved') return 'Reserved';
@@ -235,7 +241,7 @@ export function anyFrameCard(pokemonNumber: number): CardFrameCard {
   const pokemon = NATIONAL_POKEDEX[pokemonNumber - 1];
   return {
     id: `any:${pokemonNumber}`,
-    name: pokemon?.name ?? `Pokémon #${pokemonNumber}`,
+    name: pokemonDisplayName(pokemon?.name ?? `Pokémon #${pokemonNumber}`),
     frameType: null,
     setCode: null,
     number: null,

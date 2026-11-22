@@ -1,4 +1,4 @@
-import type { FrameType } from '@pokedex/shared';
+import { pokemonDisplayName, type FrameType } from '@pokedex/shared';
 import { useState, type ReactElement } from 'react';
 import { SegmentedControl } from '../../../ui/SegmentedControl';
 import { WantedTile } from './WantedTile';
@@ -53,8 +53,8 @@ function AddAndPlaceTile({
       }
     >
       <CardFrame card={frameCardFrom(card)} state="owned" forceSolid palette={palette} />
-      <span className="card-picker-name" title={card.name}>
-        {card.name}
+      <span className="card-picker-name" title={pokemonDisplayName(card.name)}>
+        {pokemonDisplayName(card.name)}
       </span>
       <span className="card-picker-meta" title={`${card.number} · ${card.setName}`}>
         {card.number} · {card.setName}
@@ -134,7 +134,7 @@ export function FindCardsPanel({
         onClick={() => onOrder?.(card)}
       >
         <CardFrame card={frameCardFrom(card)} state="owned" forceSolid palette={palette} />
-        <span className="card-picker-name">{card.name}</span>
+        <span className="card-picker-name">{pokemonDisplayName(card.name)}</span>
         <span className="find-cards-action">Mark ordered</span>
       </button>
     ) : (
@@ -215,8 +215,8 @@ export function FindCardsPanel({
                   {card ? (
                     <CardFrame card={frameCardFrom(card)} state="owned" palette={palette} />
                   ) : null}
-                  <span className="card-picker-name" title={candidate.name}>
-                    {candidate.name}
+                  <span className="card-picker-name" title={pokemonDisplayName(candidate.name)}>
+                    {pokemonDisplayName(candidate.name)}
                   </span>
                   <span
                     className="card-picker-meta"

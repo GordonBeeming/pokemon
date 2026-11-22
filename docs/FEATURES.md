@@ -17,6 +17,13 @@ in the run folder, plus the canvas board (`Home`, `Pokedex`, `Sets`, `CardDetail
 
 ---
 
+## Navigation and Pokémon identity
+
+- Mobile More exposes every desktop navigation destination and Log out. Bottom shortcuts remain
+  available, and More indicates when a page outside those shortcuts is active.
+- Nidoran searches preserve female/male identity, including ♀ / ♂ and typed gender words.
+  Binder selection labels spell out Female or Male alongside the symbol.
+
 ## Continuous list loading
 
 - Catalogue, National Pokédex, Trainer Dex and Wanted append results when the end of the list

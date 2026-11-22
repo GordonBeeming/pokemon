@@ -6,6 +6,8 @@ import {
   cardIdSchema,
   energyGroupName,
   formatDexNumber,
+  normalizePokemonSearchText,
+  pokemonDisplayName,
   type EnergyGroup,
   languageSchema,
   type FrameType,
@@ -57,13 +59,13 @@ function exactEntry(cardId: ResolvedCard['id']): BinderEntry {
 }
 
 export function filterPokemon(query: string) {
-  const trimmed = query.trim();
+  const trimmed = normalizePokemonSearchText(query.trim());
   const numberQuery = /^#?0*(\d+)$/u.exec(trimmed);
   const lowered = trimmed.toLocaleLowerCase('en-AU');
   return NATIONAL_POKEDEX.filter((item) =>
     numberQuery
       ? item.number === Number(numberQuery[1])
-      : `${item.number} ${item.name} ${item.discoveryCategory}`
+      : `${item.number} ${pokemonDisplayName(item.name)} ${item.discoveryCategory}`
           .toLocaleLowerCase('en-AU')
           .includes(lowered),
   );
@@ -434,7 +436,7 @@ export function InsertPanel({
                   onClick={() => toggle(String(item.number), pokemonEntry(item.number))}
                 >
                   <span className="species-option-number">{formatDexNumber(item.number)}</span>
-                  <span>{item.name}</span>
+                  <span>{pokemonDisplayName(item.name)}</span>
                   <small>{item.discoveryCategory}</small>
                 </button>
               ))}

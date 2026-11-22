@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { pokedexNumberFromCardName } from './national-pokedex';
+import {
+  pokedexNumberFromCardName,
+  pokemonDisplayName,
+  normalizePokemonSearchText,
+} from './national-pokedex';
 
 describe('pokedexNumberFromCardName', () => {
   it.each([
@@ -19,6 +23,11 @@ describe('pokedexNumberFromCardName', () => {
     ['Ho-Oh', 250],
     ['Jangmo-o', 782],
     ['Nidoran♀', 29],
+    ['Nidoran ♂', 32],
+    ['Nidoran ♀', 29],
+    ['Giovanni’s Nidoran ♂', 32],
+    ['Nidoran male', 32],
+    ['Nidoran (Female)', 29],
     ['Porygon-Z', 474],
     ['Porygon2', 233],
     ['Porygon', 137],
@@ -38,4 +47,13 @@ describe('pokedexNumberFromCardName', () => {
     expect(pokedexNumberFromCardName('Misty')).toBeNull();
     expect(pokedexNumberFromCardName('Professor Oak')).toBeNull();
   });
+});
+
+it('keeps Nidoran gender labels explicit and idempotent', () => {
+  expect(pokemonDisplayName('Nidoran ♂')).toBe('Nidoran♂ (Male)');
+  expect(pokemonDisplayName('Nidoran♀')).toBe('Nidoran♀ (Female)');
+  expect(pokemonDisplayName('Nidoran♀ (Female)')).toBe('Nidoran♀ (Female)');
+  expect(normalizePokemonSearchText('Nidoran♂ (Male)')).toBe('nidoran♂');
+  expect(pokemonDisplayName('Pikachu')).toBe('Pikachu');
+  expect(pokemonDisplayName('Nidoran♀\uFE0F (Female)')).toBe('Nidoran♀ (Female)');
 });

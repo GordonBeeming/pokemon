@@ -37,6 +37,7 @@ import {
   languageSchema,
   formatDexNumber,
   NATIONAL_POKEDEX,
+  normalizePokemonSearchText,
   energyGroupName,
   energyGroupSchema,
   trainerOf,
@@ -975,7 +976,7 @@ export async function searchBinderSpaces(
 ): Promise<BinderSearchResult> {
   const { q, offset } = binderSearchQuerySchema.parse(input);
   const version = await readVersion(db, ownerId, versionId);
-  const query = q.toLocaleLowerCase('en-AU');
+  const query = normalizePokemonSearchText(q);
   // SQLite lower() only folds ASCII. Bind the Unicode case variants needed by this query
   // as JSON so accented names and labels work without interpolating input into SQL.
   const folds = [...new Set(query)].flatMap((character) => {
@@ -988,7 +989,7 @@ export async function searchBinderSpaces(
     folds.reduce(
       (sql, _pair, index) =>
         `replace(${sql},json_extract(?8,'$[${index}][0]'),json_extract(?8,'$[${index}][1]'))`,
-      `lower(${expression})`,
+      `replace(replace(replace(lower(${expression}), '’', char(39)), 'nidoran ♀', 'nidoran♀'), 'nidoran ♂', 'nidoran♂')`,
     );
   const pokemonNumber = /^#?\d+$/u.test(query) ? Number(query.replace('#', '')) : null;
   const pokemon = NATIONAL_POKEDEX.filter((entry) =>
